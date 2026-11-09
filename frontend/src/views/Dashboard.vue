@@ -1,0 +1,97 @@
+<template>
+  <div>
+    <a-row :gutter="16">
+      <a-col :span="6"><a-card size="small"><a-statistic title="CPU" :value="snap.cpu ?? 0" :precision="1" suffix="%" /></a-card></a-col>
+      <a-col :span="6"><a-card size="small"><a-statistic title="内存" :value="snap.memPct ?? 0" :precision="1" suffix="%" /><div class="sub">{{ fmtBytes(snap.memUsed) }} / {{ fmtBytes(snap.memTotal) }}</div></a-card></a-col>
+      <a-col :span="6"><a-card size="small"><a-statistic title="网络速率" :value="fmtBytes(snap.netRateOut ?? 0) + ' ↑ / ' + fmtBytes(snap.netRateIn ?? 0) + ' ↓'" /></a-card></a-col>
+      <a-col :span="6"><a-card size="small"><a-statistic title="运行时间" :value="uptimeText" /></a-card></a-col>
+    </a-row>
+
+    <a-row :gutter="16" style="margin-top: 16px">
+      <a-col :span="14">
+        <a-card title="站点状态" size="small">
+          <template #extra><a-tag :color="nginxRunning ? 'green' : 'red'">Nginx {{ nginxRunning ? '运行中' : '未运行' }}</a-tag></template>
+          <a-table :data-source="sites" :columns="siteCols" size="small" :pagination="false" row-key="domain">
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'status'">
+                <a-tag :color="record.check?.status === 'online' ? 'green' : record.check?.status === 'offline' ? 'red' : 'orange'">
+                  {{ record.check?.status || '检测中' }}
+                </a-tag>
+              </template>
+              <template v-else-if="column.key === 'latency'">
+                {{ record.check?.latencyMs != null ? record.check.latencyMs + ' ms' : '-' }}
+              </template>
+              <template v-else-if="column.key === 'cert'">
+                {{ record.check?.certDaysLeft ? '剩 ' + record.check.certDaysLeft + ' 天' : '-' }}
+              </template>
+              <template v-else-if="column.key === 'maint'">
+                <a-tag v-if="record.maintenance" color="orange">维护中</a-tag>
+                <a-tag v-else :color="record.enabled === false ? 'default' : 'blue'">{{ record.enabled === false ? '已停用' : '运行' }}</a-tag>
+              </template>
+            </template>
+          </a-table>
+        </a-card>
+      </a-col>
+      <a-col :span="10">
+        <a-card title="系统信息" size="small" style="margin-bottom: 16px">
+          <p><b>主机名：</b>{{ snap.hostname || '-' }}</p>
+          <p><b>系统：</b>{{ snap.os || '-' }}</p>
+          <p><b>负载：</b>{{ snap.load1?.toFixed(2) }} / {{ snap.load5?.toFixed(2) }} / {{ snap.load15?.toFixed(2) }}</p>
+          <p><b>面板版本：</b>{{ version }}</p>
+        </a-card>
+        <a-card title="快捷入口" size="small">
+          <a-space direction="vertical">
+            <router-link to="/compose">从 docker-compose 目录导入网站 →</router-link>
+            <router-link to="/certs">申请/管理证书（自动续期）→</router-link>
+            <router-link to="/map">查看请求地图流向 →</router-link>
+          </a-space>
+        </a-card>
+      </a-col>
+    </a-row>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { get, wsTopic, fmtBytes } from '../api'
+
+const snap = ref<any>({})
+const sites = ref<any[]>([])
+const nginxRunning = ref(false)
+const version = ref('')
+let stopWs: (() => void) | null = null
+let timer: any = null
+
+const uptimeText = computed(() => {
+  const s = snap.value?.uptime || 0
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60)
+  return `${d}天 ${h}时 ${m}分`
+})
+
+const siteCols = [
+  { title: '域名', dataIndex: 'domain', key: 'domain' },
+  { title: '状态', key: 'status', width: 90 },
+  { title: '延迟', key: 'latency', width: 90 },
+  { title: '证书', key: 'cert', width: 100 },
+  { title: '面板状态', key: 'maint', width: 100 },
+]
+
+const loadAll = async () => {
+  try {
+    sites.value = await get('/api/sites')
+    nginxRunning.value = (await get<any>('/api/nginx/status')).running
+    version.value = (await get<any>('/api/update/current')).version
+  } catch { /* ignore */ }
+}
+
+onMounted(async () => {
+  await loadAll()
+  stopWs = wsTopic('metrics', (m) => { snap.value = m })
+  timer = setInterval(loadAll, 15000)
+})
+onUnmounted(() => { stopWs?.(); clearInterval(timer) })
+</script>
+
+<style scoped>
+.sub { color: #999; font-size: 12px; }
+</style>

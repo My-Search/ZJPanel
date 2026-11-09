@@ -1,0 +1,38 @@
+# ZJPanel 单容器部署（nginx + 面板 + docker CLI 同容器，host 网络模式）
+#
+# 首次部署：
+#   mkdir -p /opt/zjpanel && cd /opt/zjpanel
+#   下载本文件与 update.sh 放到此目录，然后 docker compose up -d
+#
+# 应用目录映射：默认 /opt:/opt（宿主机 /opt ↔ 容器 /opt，容器内路径=宿主机路径）
+#   在面板「应用 → 导入 docker-compose 应用」中选择 /opt 下的应用目录导入即可。
+#   如需导入其他宿主机目录（如 /srv/apps），在 volumes 中加一行 "- /srv/apps:/srv/apps"
+#   后执行 ./update.sh 重建容器。
+services:
+  zjpanel:
+    image: ghcr.io/my-search/zjpanel:latest
+    container_name: zjpanel
+    restart: unless-stopped
+    network_mode: host # Linux：nginx 直接监听宿主机 80/443，面板 9000；反代 compose 服务用 127.0.0.1:端口
+    environment:
+      - ZJPANEL_DATA=/data
+      - ZJPANEL_PORT=9000
+      - ZJPANEL_NGINX_PREFIX=/etc/nginx
+      - ZJPANEL_NGINX_LOGS=/var/log/nginx
+      - ZJPANEL_NGINX_HTML=/usr/share/nginx/html
+      - ZJPANEL_COMPOSE_ROOT=/opt # 应用扫描根目录（对应 /opt:/opt 挂载）
+      - ZJPANEL_CHALLENGE_PORT=9100
+      # 面板「检查更新」读取的版本清单（GitHub Release）
+      - ZJPANEL_UPDATE_URL=https://api.github.com/repos/My-Search/ZJPanel/releases/latest
+      # 一键更新：面板经一次性 docker:cli 容器在 /work 内执行 compose pull && up -d
+      - ZJPANEL_DEPLOY_DIR=/work
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - /opt:/opt # 应用目录（默认映射；导入向导从这里选择应用）
+      - ./data:/data # 面板数据：SQLite/证书/插件/geoip/维护页模板
+      - ./nginx/conf:/etc/nginx # nginx 配置（站点 conf 直接落盘，持久化）
+      - ./nginx/logs:/var/log/nginx
+      - ./nginx/html:/usr/share/nginx/html # 默认页/静态站点目录
+      - /var/run/docker.sock:/var/run/docker.sock # 容器管理
+      - .:/work # 本部署目录（一键更新读取 /work/docker-compose.yml）
+    # host 网络模式下 ports 无效，仅作文档提示：80/443(nginx)、9000(面板)

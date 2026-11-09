@@ -1,0 +1,23 @@
+# Go
+backend/zjpanel
+backend/zjpanel.exe
+backend/dev-data/
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+
+# embed 占位之外的产物（构建生成，保留占位 index.html 供无前端构建时编译）
+backend/internal/http/dist/assets/
+backend/internal/http/dist/map/
+backend/internal/http/dist/favicon.svg
+backend/internal/http/dist/icons.svg
+
+# 本地会话/参考代码（三方源码体积大且有各自许可证，不入库）
+.zcode/
+三方源码参考/
+deploy/examples-notify-webhook.tar.gz
+
+# 运行时
+*.log
+.DS_Store
