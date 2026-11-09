@@ -19,9 +19,9 @@ COPY backend/go.mod backend/go.sum ./
 ENV GOPROXY=https://goproxy.cn,https://proxy.golang.org,direct
 RUN go mod download
 COPY backend/ ./
-# 用前端产物覆盖占位 dist
-RUN rm -rf internal/http/dist && mkdir -p internal/http/dist && \
-    cp -r /fe/dist/* internal/http/dist/
+# 用前端产物覆盖占位 dist（跨阶段必须用 COPY --from，RUN 内看不到 fe 阶段文件）
+RUN rm -rf internal/http/dist
+COPY --from=fe /fe/dist ./internal/http/dist
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w -X zjpanel/backend/internal/buildinfo.Version=${VERSION}" -o /out/zjpanel ./cmd/zjpanel
 
