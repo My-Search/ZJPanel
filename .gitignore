@@ -21,3 +21,4 @@ deploy/examples-notify-webhook.tar.gz
 # 运行时
 *.log
 .DS_Store
+backend/zjpanel.exe~
