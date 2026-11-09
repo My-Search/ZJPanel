@@ -213,7 +213,8 @@ func (s *Service) GenerateMaintenanceConf(domain string, ssl bool) string {
 `, listenLine, domain, s.challengeBlock(), extra, s.cfg.Port, domain, domain)
 	}
 	if !ssl {
-		return "server {\n" + serverBlock("80;\n    listen [::]:80", "") + "}\n"
+		// serverBlock 已包含完整闭合的 server{}，不能再补 "}
+		return serverBlock("80;\n    listen [::]:80", "")
 	}
 	cert, key := s.SSLCertPath(domain), s.SSLKeyPath(domain)
 	sslExtra := fmt.Sprintf(`    ssl_certificate     %s;
