@@ -54,7 +54,7 @@ func LoadConfig() *Config {
 		NginxHTMLDir:  env("ZJPANEL_NGINX_HTML", "/usr/share/nginx/html"),
 		NginxBin:      env("ZJPANEL_NGINX_BIN", "nginx"),
 		ComposeRoot:   env("ZJPANEL_COMPOSE_ROOT", "/compose"),
-		UpdateURL:     env("ZJPANEL_UPDATE_URL", "https://api.github.com/repos/zjpanel/zjpanel/releases/latest"),
+		UpdateURL:     env("ZJPANEL_UPDATE_URL", "https://api.github.com/repos/My-Search/ZJPanel/releases/latest"),
 		ChallengePort: envInt("ZJPANEL_CHALLENGE_PORT", 9100),
 	}
 	if _, err := os.Stat("/proc/version"); err != nil && os.Getenv("ZJPANEL_DATA") == "" {
