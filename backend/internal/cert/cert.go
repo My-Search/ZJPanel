@@ -413,6 +413,7 @@ func (s *Service) RunTask(taskID uint, force bool) (uint, error) {
 	res, err := client.Certificate.Obtain(context.Background(), certificate.ObtainRequest{
 		Domains: task.DomainList(),
 		Bundle:  true,
+		KeyType: certcrypto.RSA2048,
 	})
 	if err != nil {
 		return finish("error", fmt.Errorf("证书申请失败: %w", err))
