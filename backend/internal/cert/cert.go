@@ -242,7 +242,12 @@ func (s *Service) loadAccount(id uint) (*acmeUser, *model.AcmeAccount, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return &acmeUser{email: acct.Email, key: key}, &acct, nil
+	user := &acmeUser{email: acct.Email, key: key}
+	// 复用已注册账户：恢复注册 URI，lego 以此构造 JWS KID（缺失会导致 "No Key ID in JWS header"）
+	if acct.Reg != "" {
+		user.reg = &acme.ExtendedAccount{Location: acct.Reg}
+	}
+	return user, &acct, nil
 }
 
 func dirURLOf(acct *model.AcmeAccount) string {
