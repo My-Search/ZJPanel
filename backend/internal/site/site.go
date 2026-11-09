@@ -326,6 +326,35 @@ func (s *Service) writeSiteConf(site *model.Site) error {
 	return nil
 }
 
+// ensureSiteSSL 站点开启 SSL 时，证书目录缺失则从匹配的泛域名证书目录回退复制。
+// 约定：泛域名证书部署在 /etc/nginx/ssl/<主域>/，站点引用 /etc/nginx/ssl/<站点域名>/。
+func (s *Service) ensureSiteSSL(site *model.Site) {
+	dir := s.SSLDir(site.Domain)
+	certPath := s.SSLCertPath(site.Domain)
+	if _, err := os.Stat(certPath); err == nil {
+		return // 已有证书
+	}
+	labels := strings.Split(site.Domain, ".")
+	for i := 1; i < len(labels)-1; i++ {
+		wildDir := filepath.Join(s.cfg.NginxPrefix, "ssl", strings.Join(labels[i:], "."))
+		ci, err1 := os.Stat(filepath.Join(wildDir, "fullchain.pem"))
+		ki, err2 := os.Stat(filepath.Join(wildDir, "privkey.pem"))
+		if err1 == nil && err2 == nil && !ci.IsDir() && !ki.IsDir() {
+			if err := os.MkdirAll(dir, 0o755); err == nil {
+				data, _ := os.ReadFile(filepath.Join(wildDir, "fullchain.pem"))
+				if len(data) > 0 {
+					_ = os.WriteFile(certPath, data, 0o644)
+				}
+				kdata, _ := os.ReadFile(filepath.Join(wildDir, "privkey.pem"))
+				if len(kdata) > 0 {
+					_ = os.WriteFile(s.SSLKeyPath(site.Domain), kdata, 0o600)
+				}
+			}
+			return
+		}
+	}
+}
+
 func (s *Service) generateForSite(site *model.Site) string {
 	if site.Type == "static" {
 		return s.GenerateStaticConf(site.Domain, site.Root, site.SSL)
@@ -348,6 +377,10 @@ func (s *Service) Update(id uint, req SaveReq) (*model.Site, error) {
 	site.SSL = req.SSL
 	site.MaintenanceHTML = req.MaintenanceHTML
 	site.Remark = req.Remark
+	// 开启 SSL 时若站点证书目录缺失，尝试从匹配的泛域名证书目录回退复制
+	if site.SSL && !site.Advanced {
+		s.ensureSiteSSL(&site)
+	}
 	if req.ComposeProjectID != nil {
 		site.ComposeProjectID = req.ComposeProjectID
 	}
