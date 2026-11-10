@@ -381,10 +381,24 @@ func matchRoute(pattern, path string) bool {
 	if pattern == path {
 		return true
 	}
-	if strings.HasSuffix(pattern, "*") {
-		return strings.HasPrefix(path, strings.TrimSuffix(pattern, "*"))
+	// 按段匹配：* 匹配单个段，尾缀 * 匹配剩余全部（如 /hooks/*/run、/hook/*）
+	ps := strings.Split(strings.Trim(pattern, "/"), "/")
+	xs := strings.Split(strings.Trim(path, "/"), "/")
+	for i, seg := range ps {
+		if seg == "*" {
+			if i == len(ps)-1 {
+				return i < len(xs) // 尾通配：至少要有一段
+			}
+			if i >= len(xs) {
+				return false
+			}
+			continue
+		}
+		if i >= len(xs) || ps[i] != xs[i] {
+			return false
+		}
 	}
-	return false
+	return len(ps) == len(xs)
 }
 
 // ServeAsset 插件静态资产（前端页面，iframe 承载）：/plugin-assets/<id>/<path>。
