@@ -56,7 +56,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onActivated, onMounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, put, post, fmtTime } from '../api'
 import AceEditor from '../components/AceEditor.vue'
@@ -110,6 +110,7 @@ const changePw = async () => {
 }
 
 onMounted(load)
+onActivated(load)
 </script>
 
 <style scoped>

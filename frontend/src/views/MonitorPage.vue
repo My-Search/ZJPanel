@@ -21,7 +21,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
 import { get, wsTopic, fmtBytes } from '../api'
 
 const snap = ref<any>({})
@@ -31,6 +31,7 @@ const netBox = ref<HTMLElement | null>(null)
 const loadBox = ref<HTMLElement | null>(null)
 let charts: any[] = []
 let stopWs: (() => void) | null = null
+let resizeTimer: any = null
 const series = { cpu: [] as any[], mem: [] as any[], net: [] as any[], load: [] as any[] }
 
 const mkOption = (title: string, data: any[], formatter?: (v: any) => string, max?: number) => ({
@@ -75,8 +76,14 @@ onMounted(async () => {
   } catch { /* ignore */ }
   const cur = await get('/api/metrics/current')
   update(cur)
-  stopWs = wsTopic('metrics', (m) => update(m))
-  setInterval(() => charts.forEach(c => c.resize()), 3000)
 })
-onUnmounted(() => { stopWs?.(); charts.forEach(c => c?.dispose()) })
+
+// 保活生命周期：激活重连实时流并恢复图表尺寸；切走时断开实时流（历史数据保留）
+onActivated(() => {
+  stopWs = wsTopic('metrics', (m) => update(m))
+  resizeTimer = setInterval(() => charts.forEach(c => c.resize()), 3000)
+  charts.forEach(c => c.resize())
+})
+onDeactivated(() => { stopWs?.(); stopWs = null; clearInterval(resizeTimer) })
+onUnmounted(() => { stopWs?.(); clearInterval(resizeTimer); charts.forEach(c => c?.dispose()) })
 </script>

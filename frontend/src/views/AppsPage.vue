@@ -222,7 +222,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
+import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post, del } from '../api'
 import { useTermTheme } from '../utils/termTheme'
@@ -514,10 +514,14 @@ const closeExec = () => {
 }
 
 let timer: any = null
-onMounted(async () => {
-  await scan()
+onMounted(() => { scan() })
+
+// 保活生命周期：激活重新扫描并恢复轮询；切走时暂停轮询（终端会话/日志 WS 保持，返回时恢复）
+onActivated(() => {
+  scan()
   timer = setInterval(refreshRuntime, 10000)
 })
+onDeactivated(() => clearInterval(timer))
 onUnmounted(() => { clearInterval(timer); logsWs?.close(); closeExec() })
 </script>
 

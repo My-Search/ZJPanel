@@ -296,7 +296,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post, del, wsTopic, fmtTime } from '../api'
 import { PlusOutlined } from '@ant-design/icons-vue'
@@ -494,8 +494,11 @@ const viewCert = async (r: any, kind: string) => {
 }
 
 let stopRunWs: (() => void) | null = null
-onMounted(async () => {
-  await loadAll()
+onMounted(loadAll)
+
+// 保活生命周期：激活重连证书签发日志流；切走时断开（签发进度通过周期任务与下次激活补偿）
+onActivated(() => {
+  loadAll()
   stopRunWs = wsTopic('cert-run', (m) => {
     if (m.type === 'log') {
       if (m.runId === viewRunId.value) runLog.value += m.line + '\n'
@@ -503,6 +506,7 @@ onMounted(async () => {
     }
   })
 })
+onDeactivated(() => { stopRunWs?.(); stopRunWs = null })
 onUnmounted(() => stopRunWs?.())
 </script>
 

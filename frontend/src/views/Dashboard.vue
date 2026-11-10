@@ -54,7 +54,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
 import { get, wsTopic, fmtBytes } from '../api'
 
 const snap = ref<any>({})
@@ -91,9 +91,15 @@ const loadAll = async () => {
 
 onMounted(async () => {
   await loadAll()
+})
+
+// 保活生命周期：激活重连实时指标流；切走时暂停（周期数据由下次激活 loadAll 补偿）
+onActivated(() => {
+  loadAll()
   stopWs = wsTopic('metrics', (m) => { snap.value = m })
   timer = setInterval(loadAll, 15000)
 })
+onDeactivated(() => { stopWs?.(); stopWs = null; clearInterval(timer) })
 onUnmounted(() => { stopWs?.(); clearInterval(timer) })
 </script>
 

@@ -56,7 +56,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, nextTick } from 'vue'
+import { onActivated, onDeactivated, onUnmounted, ref, nextTick } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post, wsTopic, fmtBytes, upload } from '../api'
 
@@ -197,15 +197,22 @@ const uploadGeo = async (opt: any) => {
   try { await upload('/api/logmap/geoip/upload', opt.file); message.success('已上传并加载'); load() } catch { /* ignore */ }
 }
 
-onMounted(async () => {
-  await load()
-  await nextTick()
-  stopWs = wsTopic('logmap', (m) => {
-    if (m.type === 'summary') { summary.value = m.data; renderMap() }
-    else if (m.type === 'entries') handleEntries(m.data || [])
+// 保活生命周期：激活时重连 WS/轮询并恢复图表；切走时全部暂停。
+// keep-alive 下首次挂载也会触发 onActivated，启动逻辑统一放这里避免重复定时器
+onActivated(() => {
+  load()
+  nextTick(() => {
+    stopWs = wsTopic('logmap', (m) => {
+      if (m.type === 'summary') { summary.value = m.data; renderMap() }
+      else if (m.type === 'entries') handleEntries(m.data || [])
+    })
   })
   timer = setInterval(load, 15000)
   startSweep()
+})
+onDeactivated(() => {
+  stopWs?.(); stopWs = null
+  clearInterval(timer); clearInterval(sweepTimer)
 })
 onUnmounted(() => { stopWs?.(); clearInterval(timer); clearInterval(sweepTimer); chart?.dispose() })
 </script>

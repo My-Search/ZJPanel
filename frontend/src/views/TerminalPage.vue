@@ -67,7 +67,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
+import { onActivated, onDeactivated, onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post, del } from '../api'
 import { DownOutlined } from '@ant-design/icons-vue'
@@ -229,10 +229,14 @@ const testHost = async (h: any) => {
 }
 
 onMounted(async () => {
-  window.addEventListener('resize', fitAll)
   await loadHosts()
   await restoreSessions()
 })
+
+// 保活生命周期：终端 WS 会话保持不断（切走仍输出）；仅窗口 resize 监听随激活/停用增删，
+// 激活时重排尺寸（keep-alive 恢复时容器尺寸可能已变化）
+onActivated(() => { window.addEventListener('resize', fitAll); fitAll() })
+onDeactivated(() => window.removeEventListener('resize', fitAll))
 onUnmounted(() => {
   window.removeEventListener('resize', fitAll)
   tabs.value.forEach(t => t.ws?.close())

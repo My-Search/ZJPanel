@@ -78,7 +78,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onActivated, onMounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post, put, del } from '../api'
 import AceEditor from '../components/AceEditor.vue'
@@ -141,6 +141,8 @@ const saveConf = async () => {
 }
 
 onMounted(load)
+// 保活：重新激活时后台刷新站点数据（首次挂载时两个钩子各拉一次，幂等无害）
+onActivated(load)
 </script>
 
 <style scoped>

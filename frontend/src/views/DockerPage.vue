@@ -76,7 +76,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
+import { onActivated, onDeactivated, onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post, del, fmtBytes } from '../api'
 import { useTermTheme } from '../utils/termTheme'
@@ -198,7 +198,14 @@ const removeImage = async (r: any) => {
 }
 
 let timer: any = null
-onMounted(() => { load(); timer = setInterval(load, 10000) })
+onMounted(() => { load() })
+
+// 保活生命周期（作为 AppsPage 子组件随父级缓存）：激活恢复轮询，切走暂停
+onActivated(() => {
+  load()
+  timer = setInterval(load, 10000)
+})
+onDeactivated(() => clearInterval(timer))
 onUnmounted(() => { clearInterval(timer); logsWs?.close(); closeExec() })
 </script>
 

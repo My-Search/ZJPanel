@@ -44,7 +44,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onActivated, onMounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post, del, fmtTime } from '../api'
 
@@ -79,4 +79,5 @@ const createKey = async () => {
 const revoke = async (k: any) => { await del(`/api/mcp/keys/${k.id}`); load() }
 
 onMounted(load)
+onActivated(load)
 </script>

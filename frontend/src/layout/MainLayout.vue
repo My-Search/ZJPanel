@@ -56,7 +56,12 @@
         </a-space>
       </a-layout-header>
       <a-layout-content class="content">
-        <router-view />
+        <!-- 页面保活：切换菜单立即显示上次状态，返回时后台刷新数据 -->
+        <router-view v-slot="{ Component }">
+          <keep-alive :include="cachedViews">
+            <component :is="Component" />
+          </keep-alive>
+        </router-view>
       </a-layout-content>
     </a-layout>
   </a-layout>
@@ -82,6 +87,12 @@ const drawerOpen = ref(false)
 const version = ref('')
 const pluginMenus = computed(() => menus.items)
 const isMobile = ref(false)
+
+// keep-alive 白名单：组件名需与页面文件名一致（SFC 默认继承文件名，但 vite 插件已显式注入 name）
+const cachedViews = [
+  'AppsPage', 'Dashboard', 'NginxConf', 'TerminalPage', 'CertsPage',
+  'MapPage', 'MonitorPage', 'McpPage', 'PluginsPage', 'SettingsPage',
+]
 
 const mq = window.matchMedia('(max-width: 767px)')
 const syncViewport = () => { isMobile.value = mq.matches; if (!mq.matches) drawerOpen.value = false }

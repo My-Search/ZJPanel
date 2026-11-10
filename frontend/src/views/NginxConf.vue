@@ -27,7 +27,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onActivated, onMounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, put, post } from '../api'
 import AceEditor from '../components/AceEditor.vue'
@@ -101,10 +101,12 @@ const reloadNginx = async () => {
   else message.success(r.output || '已重载')
 }
 
-onMounted(async () => {
+const loadPage = async () => {
   tree.value = await loadTree()
   try { running.value = (await get<any>('/api/nginx/status')).running } catch { /* ignore */ }
-})
+}
+onMounted(loadPage)
+onActivated(loadPage)
 </script>
 
 <style scoped>
