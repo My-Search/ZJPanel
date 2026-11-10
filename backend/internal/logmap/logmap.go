@@ -340,11 +340,12 @@ func (s *Service) SaveMMDB(data []byte) error {
 	return nil
 }
 
-// DownloadMMDB 自动下载 GeoLite2-Country（公开镜像，可关）。
+// DownloadMMDB 自动下载 GeoLite2-City（公开镜像，可关）。City 库为 Country 超集，
+// 含经纬度（请求地图「请求方→服务器」真实流向依赖），Country 库无 location 字段。
 func (s *Service) DownloadMMDB(url string) error {
 	if url == "" {
 		// P3TERX/GeoLite.mmdb 公开镜像（jsdelivr 旧地址已失效，改用 raw.githubusercontent 稳定分支）
-		url = "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-Country.mmdb"
+		url = "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-City.mmdb"
 	}
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Get(url)
