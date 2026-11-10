@@ -131,12 +131,16 @@ onUnmounted(() => mq.removeEventListener('change', syncViewport))
 .user { cursor: pointer; padding: 0 8px; }
 .menu-btn, .theme-btn { padding: 0 8px; }
 .content { margin: 16px; }
-:global(html[data-theme='light']) .header { background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
-:global(html[data-theme='dark']) .header { box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+:global(html[data-theme='light']) .header { background: #fff !important; box-shadow: 0 1px 4px rgba(0,0,0,.08); color: #1f1f1f; }
+:global(html[data-theme='dark']) .header { box-shadow: 0 1px 4px rgba(0,0,0,.4); color: #e6e6e6; }
+:global(html[data-theme='light']) .ver { color: #1f1f1f; }
+:global(html[data-theme='dark']) .ver { color: #e6e6e6; }
 :global(html[data-theme='light']) .logo { color: #1f1f1f; }
 :global(html[data-theme='dark']) .logo { color: #fff; }
 :global(html[data-theme='light']) .user { color: #444; }
 :global(html[data-theme='dark']) .user { color: #e6e6e6; }
+:global(html[data-theme='light']) .theme-btn, :global(html[data-theme='light']) .menu-btn { color: #444; }
+:global(html[data-theme='dark']) .theme-btn, :global(html[data-theme='dark']) .menu-btn { color: #e6e6e6; }
 @media (max-width: 767px) {
   .content { margin: 8px; }
   .header { padding: 0 8px; }

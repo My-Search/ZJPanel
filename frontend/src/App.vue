@@ -12,7 +12,12 @@ import { useTheme } from './store/theme'
 const ui = useTheme()
 const antdTheme = computed(() => ({
   algorithm: ui.isDark ? antd.darkAlgorithm : antd.defaultAlgorithm,
+  // Layout.Header 背景由组件 token colorBgHeader 控制（默认恒为深蓝 #001529），
+  // 必须显式跟随主题，否则浅色模式下顶栏仍是深蓝、文字不可读。
   token: { colorPrimary: '#1677ff', borderRadius: 6 },
+  components: {
+    Layout: { colorBgHeader: ui.isDark ? '#001529' : '#ffffff', colorBgTrigger: ui.isDark ? '#002140' : '#f0f2f5' },
+  },
 }))
 </script>
 
@@ -36,5 +41,9 @@ html[data-theme='dark'] .dir-item:hover { background: #16243f !important; }
   /* 表单控件内联固定宽度在窄屏收缩，避免撑出横向滚动条 */
   .ant-select, .ant-input, .ant-input-number, .ant-picker { max-width: 100%; }
   .login-card { max-width: 92vw; }
+  /* 工具栏（按钮 + 长说明）在窄屏换行，避免 flex 子项把页面撑出水平滚动条 */
+  .toolbar { flex-wrap: wrap; }
+  .toolbar > * { max-width: 100%; }
+  .toolbar .dim { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 }
 </style>
