@@ -25,12 +25,12 @@
 
     <!-- SSH 主机管理 -->
     <a-modal v-model:open="showHostMgr" title="SSH 主机管理" :footer="null" :width="860">
-      <a-button type="primary" style="margin-bottom: 12px" @click="editHost = { port: 22, authType: 'password' }">添加主机</a-button>
+      <a-button type="primary" style="margin-bottom: 12px" @click="openHostEditor()">添加主机</a-button>
       <a-table :data-source="hosts" :columns="hostCols" size="small" row-key="id" :pagination="false">
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'action'">
             <a-space>
-              <a-button size="small" @click="editHost = { ...record }">编辑</a-button>
+              <a-button size="small" @click="openHostEditor(record)">编辑</a-button>
               <a-button size="small" :loading="testingId === record.id" @click="testHost(record)">测试</a-button>
               <a-popconfirm title="删除该主机？" @confirm="delHost(record)"><a-button size="small" danger>删除</a-button></a-popconfirm>
             </a-space>
@@ -202,11 +202,21 @@ const restoreSessions = async () => {
 }
 
 // SSH 主机 CRUD
+/** 打开新增/编辑主机弹窗：新增时预填默认端口与认证方式。 */
+const openHostEditor = (host?: any) => {
+  editHost.value = host ? { ...host } : { port: 22, authType: 'password' }
+  hostOpen.value = true
+}
 const saveHost = async () => {
-  await post('/api/ssh/hosts', editHost.value)
+  // 校验失败的错误提示由 axios 拦截器统一弹出，此处只需保证不关闭弹窗、不误报成功
+  try {
+    await post('/api/ssh/hosts', editHost.value)
+  } catch {
+    return
+  }
   message.success('已保存')
   hostOpen.value = false
-  loadHosts()
+  await loadHosts()
 }
 const delHost = async (h: any) => { await del(`/api/ssh/hosts/${h.id}`); loadHosts() }
 const testHost = async (h: any) => {
