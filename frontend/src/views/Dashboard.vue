@@ -1,5 +1,6 @@
 <template>
   <div>
+    <a-spin :spinning="loading" size="small">
     <a-row :gutter="16">
       <a-col :span="6"><a-card size="small"><a-statistic title="CPU" :value="snap.cpu ?? 0" :precision="1" suffix="%" /></a-card></a-col>
       <a-col :span="6"><a-card size="small"><a-statistic title="内存" :value="snap.memPct ?? 0" :precision="1" suffix="%" /><div class="sub">{{ fmtBytes(snap.memUsed) }} / {{ fmtBytes(snap.memTotal) }}</div></a-card></a-col>
@@ -48,6 +49,7 @@
         </a-card>
       </a-col>
     </a-row>
+    </a-spin>
   </div>
 </template>
 
@@ -59,6 +61,7 @@ const snap = ref<any>({})
 const sites = ref<any[]>([])
 const nginxRunning = ref(false)
 const version = ref('')
+const loading = ref(true)
 let stopWs: (() => void) | null = null
 let timer: any = null
 
@@ -77,11 +80,13 @@ const siteCols = [
 ]
 
 const loadAll = async () => {
+  loading.value = true
   try {
     sites.value = await get('/api/sites')
     nginxRunning.value = (await get<any>('/api/nginx/status')).running
     version.value = (await get<any>('/api/update/current')).version
   } catch { /* ignore */ }
+  loading.value = false
 }
 
 onMounted(async () => {

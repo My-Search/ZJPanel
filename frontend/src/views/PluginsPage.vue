@@ -48,6 +48,7 @@
 import { onMounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post, del, upload } from '../api'
+import { usePluginMenu } from '../store/pluginMenu'
 
 const plugins = ref<any[]>([])
 const settingsOpen = ref(false)
@@ -56,14 +57,17 @@ const settingsDefs = ref<any[]>([])
 const settingsValues = ref<Record<string, string>>({})
 
 const load = async () => { plugins.value = await get('/api/plugins') }
-const enable = async (p: any) => { await post(`/api/plugins/${p.id}/enable`); message.success('已启用'); load() }
-const disable = async (p: any) => { await post(`/api/plugins/${p.id}/disable`); message.success('已停用'); load() }
-const uninstall = async (p: any) => { await del(`/api/plugins/${p.id}`); message.success('已卸载'); load() }
+// 插件安装/启停/卸载会影响侧栏菜单挂载，变更后联动强制刷新菜单缓存
+const menus = usePluginMenu()
+const reloadWithMenu = () => { load(); menus.load(true) }
+const enable = async (p: any) => { await post(`/api/plugins/${p.id}/enable`); message.success('已启用'); reloadWithMenu() }
+const disable = async (p: any) => { await post(`/api/plugins/${p.id}/disable`); message.success('已停用'); reloadWithMenu() }
+const uninstall = async (p: any) => { await del(`/api/plugins/${p.id}`); message.success('已卸载'); reloadWithMenu() }
 const doInstall = async (opt: any) => {
   try {
     const r = await upload('/api/plugins/install', opt.file)
     message.success(`已安装 ${r.id}，点击启用运行`)
-    load()
+    reloadWithMenu()
   } catch { /* 拦截器提示 */ }
 }
 const openSettings = async (p: any) => {

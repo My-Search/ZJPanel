@@ -1,5 +1,6 @@
 <template>
   <a-card size="small">
+    <a-spin :spinning="scanning" size="small">
     <a-tabs v-model:activeKey="tab">
       <!-- ============ Compose 应用（主视图） ============ -->
       <a-tab-pane key="compose" tab="Compose 应用">
@@ -125,6 +126,7 @@
         <DockerPage />
       </a-tab-pane>
     </a-tabs>
+    </a-spin>
 
     <!-- 导入 docker-compose 应用（文件夹选择向导） -->
     <a-modal v-model:open="importOpen" title="导入 docker-compose 应用" :width="680" :footer="null">
@@ -235,6 +237,7 @@ const projects = ref<any[]>([])
 const sites = ref<any[]>([])
 const containers = ref<any[]>([])
 const selected = ref<any>(null)
+const scanning = ref(true)
 
 const addOpen = ref(false)
 const addForm = ref<any>({})
@@ -387,15 +390,20 @@ const refreshRuntime = async () => {
 }
 
 const scan = async () => {
-  projects.value = await get('/api/compose/scan')
-  sites.value = await get('/api/sites')
-  await refreshRuntime()
-  try { composeRoot.value = (await get<any>('/api/settings')).composeRoot } catch { /* ignore */ }
-  if (selected.value) {
-    const again = projects.value.find(p => p.dir === selected.value.dir)
-    selected.value = again || null
+  scanning.value = true
+  try {
+    projects.value = await get('/api/compose/scan')
+    sites.value = await get('/api/sites')
+    await refreshRuntime()
+    try { composeRoot.value = (await get<any>('/api/settings')).composeRoot } catch { /* ignore */ }
+    if (selected.value) {
+      const again = projects.value.find(p => p.dir === selected.value.dir)
+      selected.value = again || null
+    }
+    if (projects.value.length && !selected.value) select(projects.value[0])
+  } finally {
+    scanning.value = false
   }
-  if (projects.value.length && !selected.value) select(projects.value[0])
 }
 
 const select = async (p: any) => {

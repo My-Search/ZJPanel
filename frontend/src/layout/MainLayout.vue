@@ -63,11 +63,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { get } from '../api'
 import { useAuth } from '../store/auth'
 import { useTheme, type ThemeMode } from '../store/theme'
+import { usePluginMenu } from '../store/pluginMenu'
 import SideMenu from '../components/SideMenu.vue'
 import { MenuOutlined, SkinOutlined, UserOutlined } from '@ant-design/icons-vue'
 
@@ -75,10 +76,11 @@ const route = useRoute()
 const router = useRouter()
 const auth = useAuth()
 const ui = useTheme()
+const menus = usePluginMenu()
 const collapsed = ref(false)
 const drawerOpen = ref(false)
 const version = ref('')
-const pluginMenus = ref<{ pluginId: string; title: string; icon: string; path: string }[]>([])
+const pluginMenus = computed(() => menus.items)
 const isMobile = ref(false)
 
 const mq = window.matchMedia('(max-width: 767px)')
@@ -109,16 +111,12 @@ const doLogout = async () => {
 const loadVersion = async () => {
   try { version.value = (await get<any>('/api/update/current')).version } catch { /* ignore */ }
 }
-const loadMenus = async () => {
-  try { pluginMenus.value = await get('/api/plugins/menu') } catch { /* ignore */ }
-}
 
-watch(() => route.path, loadMenus)
 onMounted(() => {
   syncViewport()
   mq.addEventListener('change', syncViewport)
   loadVersion()
-  loadMenus()
+  menus.load()
 })
 onUnmounted(() => mq.removeEventListener('change', syncViewport))
 </script>
