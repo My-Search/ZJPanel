@@ -354,18 +354,20 @@ const firstPort = computed(() => portOpts.value[0]?.value || '')
 
 const projSites = computed(() => sites.value.filter(s => s.composeProjectId === selected.value?.id))
 const siteCount = (p: any) => sites.value.filter(s => s.composeProjectId === p.id).length
+// compose 项目 label 一律为目录小写，而面板项目名可能含大写（如 AgentsWorkStudio），统一按小写比对
+const sameProject = (a?: string, b?: string) => !!a && !!b && a.toLowerCase() === b.toLowerCase()
 const projContainers = computed(() => {
   const name = selected.value?.name
   if (!name) return []
-  return containers.value.filter(c => c.labels?.['com.docker.compose.project'] === name)
+  return containers.value.filter(c => sameProject(c.labels?.['com.docker.compose.project'], name))
 })
 
 // ---- 资源占用（compose 项目聚合，来自 /api/docker/containers/stats） ----
 const stats = ref<any[]>([])
-const projectStats = (p: any) => stats.value.filter(s => s.project === p.name)
+const projectStats = (p: any) => stats.value.filter(s => sameProject(s.project, p.name))
 const runningCount = (p: any) => {
   const name = p.name
-  return containers.value.filter(c => c.labels?.['com.docker.compose.project'] === name && c.state === 'running').length
+  return containers.value.filter(c => sameProject(c.labels?.['com.docker.compose.project'], name) && c.state === 'running').length
 }
 const projCpu = (p: any) => {
   const list = projectStats(p)
