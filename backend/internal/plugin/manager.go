@@ -103,6 +103,12 @@ func (m *Manager) StartAll() {
 	var recs []model.PluginRecord
 	m.db.Where("enabled = ?", true).Find(&recs)
 	for _, r := range recs {
+		m.mu.RLock()
+		_, alreadyRunning := m.running[r.PluginID]
+		m.mu.RUnlock()
+		if alreadyRunning {
+			continue // 自动启用环节已拉起，避免重复 Enable 误标停用
+		}
 		if err := m.Enable(r.PluginID); err != nil {
 			slog.Error("插件启动失败", "id", r.PluginID, "err", err)
 			m.db.Model(&r).Update("enabled", false)
