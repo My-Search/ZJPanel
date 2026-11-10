@@ -24,6 +24,8 @@ import (
 type Entry struct {
 	IP      string `json:"ip"`
 	Country string `json:"country"`
+	Lat     float64 `json:"lat,omitempty"`
+	Lon     float64 `json:"lon,omitempty"`
 	Site    string `json:"site"`
 	Status  int    `json:"status"`
 	Bytes   uint64 `json:"bytes"`
@@ -49,6 +51,7 @@ type Summary struct {
 	Statuses    map[string]int64 `json:"statuses"`
 	Recent      []Entry      `json:"recent"`
 	GeoLoaded   bool         `json:"geoLoaded"`
+	ServerLoc   *[2]float64  `json:"serverLoc,omitempty"` // 服务器真实位置（出口 IP 经 GeoIP 反查）
 }
 
 type SiteAgg struct {
@@ -193,7 +196,7 @@ func (s *Service) tailFile(path string) {
 		line := sc.Text()
 		newOff += int64(len(line)) + 1
 		if e, ok := parseLine(line); ok {
-			e.Country = s.geo.LookupCountry(e.IP)
+			e.Country, e.Lat, e.Lon = s.lookupGeo(e.IP)
 			s.push(e)
 		}
 	}
@@ -233,6 +236,21 @@ func parseLine(line string) (Entry, bool) {
 }
 
 // Summary 窗口聚合（minutes 分钟内；recent 条数）。
+// lookupGeo 一次性查国家与经纬度（国家库无 location 时回退国家质心，保证飞线始终有起点）。
+func (s *Service) lookupGeo(ip string) (string, float64, float64) {
+	country, ll := s.geo.LookupLocation(ip)
+	if country == "unknown" {
+		return country, 0, 0
+	}
+	if ll[0] != 0 || ll[1] != 0 {
+		return country, ll[0], ll[1]
+	}
+	if c, ok := Centroids[country]; ok {
+		return country, c[0], c[1]
+	}
+	return country, 0, 0
+}
+
 func (s *Service) Summary(minutes, recent int) *Summary {
 	if recent <= 0 {
 		recent = 100
@@ -256,6 +274,12 @@ func (s *Service) Summary(minutes, recent int) *Summary {
 	sum := &Summary{
 		Minutes: minutes, Countries: []CountryAgg{}, Sites: []SiteAgg{},
 		Statuses: map[string]int64{}, Recent: []Entry{}, GeoLoaded: s.geo.Loaded(),
+	}
+	// 服务器真实位置：出口 IP 经 GeoIP 反查（无 location 时回退国家质心）
+	if out := OutboundIP(); out != "" {
+		if _, ll := s.geo.LookupLocation(out); ll[0] != 0 || ll[1] != 0 {
+			sum.ServerLoc = &[2]float64{ll[0], ll[1]}
+		}
 	}
 	countries := map[string]*CountryAgg{}
 	sites := map[string]*SiteAgg{}

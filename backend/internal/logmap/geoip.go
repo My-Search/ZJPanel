@@ -23,6 +23,17 @@ type mmdbCountry struct {
 	} `maxminddb:"country"`
 }
 
+// mmdbLoc 国家库中的位置记录（GeoLite2-Country 部分记录含经纬度）。
+type mmdbLoc struct {
+	Country struct {
+		ISOCode string `maxminddb:"iso_code"`
+	} `maxminddb:"country"`
+	Location struct {
+		Latitude  float64 `maxminddb:"latitude"`
+		Longitude float64 `maxminddb:"longitude"`
+	} `maxminddb:"location"`
+}
+
 func NewGeoIP(dataDir string) *GeoIP {
 	g := &GeoIP{path: filepath.Join(dataDir, "geoip", "GeoLite2-Country.mmdb")}
 	g.reload()
@@ -67,6 +78,35 @@ func (g *GeoIP) LookupCountry(ipStr string) string {
 		return "unknown"
 	}
 	return rec.Country.ISOCode
+}
+
+// LookupLocation 查询 IP 的国家与经纬度（国家库部分记录无 location，返回 country 与 zero 坐标）。
+func (g *GeoIP) LookupLocation(ipStr string) (string, [2]float64) {
+	g.mu.RLock()
+	db := g.db
+	g.mu.RUnlock()
+	if db == nil {
+		return "unknown", [2]float64{}
+	}
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return "unknown", [2]float64{}
+	}
+	var rec mmdbLoc
+	if err := db.Lookup(ip, &rec); err != nil {
+		return "unknown", [2]float64{}
+	}
+	return rec.Country.ISOCode, [2]float64{rec.Location.Latitude, rec.Location.Longitude}
+}
+
+// OutboundIP 探测本机对外出口 IP（UDP dial 不实际发包，仅取路由源地址）。
+func OutboundIP() string {
+	conn, err := net.Dial("udp", "8.8.8.8:53")
+	if err != nil {
+		return ""
+	}
+	defer conn.Close()
+	return conn.LocalAddr().(*net.UDPAddr).IP.String()
 }
 
 func (g *GeoIP) MMDBSize() int64 {

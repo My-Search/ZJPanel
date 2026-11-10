@@ -92,7 +92,10 @@ const centroids: Record<string, [number, number]> = {
   NL: [5.29, 52.13], ID: [113.92, -0.79], TH: [100.99, 15.87], VN: [108.27, 14.05], MY: [101.97, 4.21],
   PH: [121.77, 12.87], IT: [12.56, 41.87], ES: [-3.74, 40.46], TR: [35.24, 38.96], UA: [31.16, 48.37],
 }
-const serverPoint = JSON.parse(localStorage.getItem('zjp_server_loc') || 'null') || [116.4, 39.9]
+// 服务器位置：优先后端探测的真实出口位置，回退本地缓存；初始近似北京
+const serverPoint = ref<[number, number]>(
+  JSON.parse(localStorage.getItem('zjp_server_loc') || 'null') || [116.4, 39.9]
+)
 
 // ---- 实时流向 ----
 const realtime = ref(true)
@@ -104,12 +107,15 @@ const handleEntries = (list: any[]) => {
   liveCount.value += list.length
   let changed = false
   for (const e of list) {
-    const c = centroids[e.country]
+    // 飞线起点：请求方真实坐标（后端 GeoIP），缺失时回退国家质心
+    const c: [number, number] | undefined = (e.lat || e.lon)
+      ? [e.lon, e.lat]
+      : centroids[e.country]
     if (!c) continue
     changed = true
     // 同一国家仅保留最新一条飞线（避免多条叠加杂乱）
     liveFlows.value = liveFlows.value.filter(f => f.country !== e.country)
-    liveFlows.value.push({ country: e.country, coords: [c, serverPoint] as [number, number][], ts: Date.now() })
+    liveFlows.value.push({ country: e.country, coords: [c, serverPoint.value] as [number, number][], ts: Date.now() })
     // 实时条目插入最近请求展示（限制长度，summary 会周期覆盖）
     summary.value.recent = [e, ...(summary.value.recent || [])].slice(0, 100)
   }
@@ -175,7 +181,7 @@ const renderMap = async () => {
         type: 'effectScatter', coordinateSystem: 'geo', zlevel: 3,
         symbolSize: 12, rippleEffect: { scale: 3 },
         itemStyle: { color: '#ff5722' },
-        data: [{ value: serverPoint, name: '服务器' }],
+        data: [{ value: serverPoint.value, name: '服务器' }],
       },
     ],
   }, true)
@@ -188,6 +194,16 @@ const mapName = (c: string) => enNames[c] || c
 const load = async () => {
   summary.value = await get('/api/logmap/summary', { minutes: minutes.value, recent: 50 })
   geoLoaded.value = summary.value.geoLoaded
+  // 服务器真实位置（出口 IP 经 GeoIP 反查）：有则缓存并更新地图标记
+  if (summary.value.serverLoc?.length === 2) {
+    const [lon, lat] = summary.value.serverLoc
+    const cur = serverPoint.value
+    if (cur[0] !== lon || cur[1] !== lat) {
+      serverPoint.value = [lon, lat]
+      localStorage.setItem('zjp_server_loc', JSON.stringify(serverPoint.value))
+      renderMap()
+    }
+  }
   renderMap()
 }
 const downloadGeo = async () => {

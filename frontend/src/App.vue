@@ -33,6 +33,14 @@ html[data-theme='dark'] .mode-card.active,
 html[data-theme='dark'] .provider-card.active,
 html[data-theme='dark'] .proj-card.active { background: #16243f !important; }
 html[data-theme='dark'] .dir-item:hover { background: #16243f !important; }
+/* 滚动条主题化：跟随深浅主题（表格纵向滚动、长列表、日志等所有滚动区域） */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #c4ccd6; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #a9b3c0; }
+html[data-theme='dark'] ::-webkit-scrollbar-thumb { background: #4b4b4b; }
+html[data-theme='dark'] ::-webkit-scrollbar-thumb:hover { background: #5f5f5f; }
+::-webkit-scrollbar-corner { background: transparent; }
 /* 窄屏：表格横向滚动而非撑破布局；弹窗/抽屉宽度不超过视口 */
 @media (max-width: 767px) {
   .ant-table-body, .ant-table-content { overflow-x: auto; }
