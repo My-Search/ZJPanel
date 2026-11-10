@@ -25,6 +25,14 @@ func (s *Server) registerDockerRoutes() {
 		}
 		c.JSON(http.StatusOK, list)
 	})
+	g.GET("/containers/stats", func(c *gin.Context) {
+		stats, err := s.Docker.ContainersStats()
+		if err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, stats)
+	})
 	g.POST("/containers/:id/action", func(c *gin.Context) {
 		var req struct{ Action string }
 		if err := c.ShouldBindJSON(&req); err != nil {

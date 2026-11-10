@@ -18,7 +18,9 @@
             <a-empty v-if="!projects.length" description="未发现 compose 项目" />
             <div v-for="p in projects" :key="p.dir || p.id" class="proj-card" :class="{ active: selected?.dir === p.dir }" @click="select(p)">
               <div class="proj-name">{{ p.name }} <a-tag v-if="p.hasDecl" color="purple">声明</a-tag></div>
-              <div class="proj-sub">{{ p.services?.length || 0 }} 服务 · {{ siteCount(p) }} 网站 {{ p.imported ? '· 已导入' : '' }}</div>
+              <div class="proj-sub">{{ runningCount(p) }}/{{ p.services?.length || 0 }} 服务运行 · {{ siteCount(p) }} 网站 {{ p.imported ? '· 已导入' : '' }}</div>
+              <div class="proj-res" v-if="projCpu(p) !== null">CPU {{ projCpu(p) }}% · 内存 {{ projMem(p) }}</div>
+              <div class="proj-res dim-res" v-else-if="runningCount(p) === 0">未运行 · 点「up」启动</div>
               <div class="proj-dir">{{ p.dir }}</div>
             </div>
           </a-col>
@@ -60,6 +62,9 @@
                 <a-alert v-if="orphanList.length" type="warning" show-icon style="margin-bottom: 8px"
                   :message="`面板存在但声明文件未包含：${orphanList.join('、')}（点击「按声明同步」或「立即写出声明文件」可修复）`" />
                 <a-table :data-source="projSites" :columns="siteCols" size="small" row-key="id" :pagination="false">
+                  <template #emptyText>
+                    <a-empty :description="runningCount(selected) === 0 ? '项目未运行，暂无关联网站数据（点上方「up」启动）' : '该项目还没有关联网站'" style="margin: 24px 0" />
+                  </template>
                   <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'ssl'">
                       <a-tag v-if="record.ssl" color="green">HTTPS</a-tag><a-tag v-else>HTTP</a-tag>
@@ -84,6 +89,9 @@
               <!-- 项目容器 -->
               <a-card size="small" title="容器">
                 <a-table :data-source="projContainers" :columns="containerCols" size="small" row-key="id" :pagination="false">
+                  <template #emptyText>
+                    <a-empty :description="runningCount(selected) === 0 ? '项目未启动（点上方「up」启动 compose 服务）' : '未找到带该项目标签的容器'" style="margin: 24px 0" />
+                  </template>
                   <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'name'">{{ (record.name || '').replace('/', '') }}</template>
                     <template v-else-if="column.key === 'state'">
@@ -352,10 +360,34 @@ const projContainers = computed(() => {
   return containers.value.filter(c => c.labels?.['com.docker.compose.project'] === name)
 })
 
+// ---- 资源占用（compose 项目聚合，来自 /api/docker/containers/stats） ----
+const stats = ref<any[]>([])
+const projectStats = (p: any) => stats.value.filter(s => s.project === p.name)
+const runningCount = (p: any) => {
+  const name = p.name
+  return containers.value.filter(c => c.labels?.['com.docker.compose.project'] === name && c.state === 'running').length
+}
+const projCpu = (p: any) => {
+  const list = projectStats(p)
+  if (!list.length) return null
+  return Math.round(list.reduce((a, s) => a + (s.cpuPct || 0), 0) * 10) / 10
+}
+const projMem = (p: any) => {
+  const total = projectStats(p).reduce((a, s) => a + (s.memBytes || 0), 0)
+  if (!total) return '0MB'
+  return total >= 1073741824 ? (total / 1073741824).toFixed(2) + 'GB' : Math.round(total / 1048576) + 'MB'
+}
+const loadStats = async () => { stats.value = await get('/api/docker/containers/stats').catch(() => []) as any }
+/** 运行时数据（容器列表 + 资源占用）统一刷新，避免两处轮询各自为政。 */
+const refreshRuntime = async () => {
+  containers.value = await get('/api/docker/containers').catch(() => []) as any
+  await loadStats()
+}
+
 const scan = async () => {
   projects.value = await get('/api/compose/scan')
   sites.value = await get('/api/sites')
-  containers.value = await get('/api/docker/containers').catch(() => [])
+  await refreshRuntime()
   try { composeRoot.value = (await get<any>('/api/settings')).composeRoot } catch { /* ignore */ }
   if (selected.value) {
     const again = projects.value.find(p => p.dir === selected.value.dir)
@@ -474,7 +506,7 @@ const closeExec = () => {
 let timer: any = null
 onMounted(async () => {
   await scan()
-  timer = setInterval(() => { containers.value = get('/api/docker/containers').catch(() => []) as any }, 10000)
+  timer = setInterval(refreshRuntime, 10000)
 })
 onUnmounted(() => { clearInterval(timer); logsWs?.close(); closeExec() })
 </script>
@@ -485,6 +517,8 @@ onUnmounted(() => { clearInterval(timer); logsWs?.close(); closeExec() })
 .proj-card { border: 1.5px solid #e5e7eb; border-radius: 8px; padding: 12px; margin-bottom: 10px; cursor: pointer; transition: all .2s; }
 .proj-card.active { border-color: #4f7cff; background: #f0f5ff; }
 .proj-name { font-weight: 600; font-size: 14px; }
+.proj-res { margin-top: 4px; font-size: 12px; color: #52c41a; }
+.dim-res { color: #999; }
 .proj-sub { font-size: 12px; color: #888; margin: 4px 0; }
 .proj-dir { font-size: 11px; color: #aaa; word-break: break-all; }
 .decl, .runlog { max-height: 440px; overflow: auto; background: #111; color: #0f0; padding: 12px; font-size: 12px; white-space: pre-wrap; }
