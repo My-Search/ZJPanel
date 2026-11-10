@@ -71,16 +71,10 @@ import { onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post, del } from '../api'
 import { DownOutlined } from '@ant-design/icons-vue'
-import { useTheme } from '../store/theme'
+import { useTermTheme } from '../utils/termTheme'
 import type { Terminal as XtermTerminal } from '@xterm/xterm'
 
-const ui = useTheme()
-const termThemes = {
-  dark: { background: '#0d1117', foreground: '#c9d1d9' },
-  light: { background: '#ffffff', foreground: '#24292f' },
-}
-const termTheme = () => ui.isDark ? termThemes.dark : termThemes.light
-const boxBg = () => ui.isDark ? '#0d1117' : '#ffffff'
+const { ui, current: termTheme, boxBg } = useTermTheme()
 
 interface Tab { id: string; label: string; sessionId: string | null; ws: WebSocket | null; term: XtermTerminal | null; fit: { fit: () => void } | null; created: boolean }
 
