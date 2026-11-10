@@ -135,6 +135,14 @@ func (m *Manager) Enable(id string) error {
 		p = ctor()
 		meta := p.Meta()
 		mf = &Manifest{ID: meta.ID, Name: meta.Name, Version: meta.Version, Description: meta.Description, Permissions: meta.Permissions}
+		// 内置插件菜单贡献：sdk.Meta.Menu 转为 Manifest.Menu（外部插件由 plugin.yaml 提供）
+		for _, mn := range meta.Menu {
+			mf.Menu = append(mf.Menu, struct {
+				Title string `yaml:"title" json:"title"`
+				Icon  string `yaml:"icon" json:"icon"`
+				Path  string `yaml:"path" json:"path"`
+			}{Title: mn.Title, Icon: mn.Icon, Path: mn.Path})
+		}
 	} else {
 		dir := m.extDir(id)
 		if _, err := os.Stat(dir); err != nil {
