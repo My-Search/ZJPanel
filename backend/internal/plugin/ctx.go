@@ -60,6 +60,15 @@ func (c *ctxImpl) RegisterRoute(method, path string, h http.HandlerFunc) {
 	c.Logf("注册路由 %s %s", method, path)
 }
 
+// RegisterPublicRoute 免鉴权公开路由：由 HTTP 层经 DispatchPublicRoute 派发，安全性由插件自校验。
+func (c *ctxImpl) RegisterPublicRoute(method, path string, h http.HandlerFunc) {
+	if method == "" {
+		method = "*"
+	}
+	c.rt.publicRoutes = append(c.rt.publicRoutes, routeEntry{Method: method, Path: path, Handler: h})
+	c.Logf("注册公开路由 %s %s", method, path)
+}
+
 func (c *ctxImpl) RegisterCron(spec string, fn func()) {
 	id := c.mgr.addCron(spec, fn)
 	c.rt.cronIDs = append(c.rt.cronIDs, id)

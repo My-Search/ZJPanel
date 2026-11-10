@@ -30,6 +30,7 @@ import (
 	"zjpanel/backend/internal/update"
 	"zjpanel/backend/internal/ws"
 	"zjpanel/backend/plugins/notifywebhook"
+	"zjpanel/backend/plugins/webhooks"
 )
 
 // cronWrap robfig/cron 适配（CronLike 接口；entryID 以 any 传递）。
@@ -126,6 +127,7 @@ func Run() {
 		func(id any) { cronSvc.RemoveByID(id) },
 	)
 	pluginMgr.RegisterBuiltin(notifywebhook.New())
+	pluginMgr.RegisterBuiltin(webhooks.New())
 	pluginMgr.StartAll()
 
 	updater := update.New(cfg)

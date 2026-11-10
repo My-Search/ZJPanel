@@ -78,8 +78,11 @@ type Context interface {
 	SettingGet(key string) (string, error)
 	SettingSet(key, value string) error
 
-	// RegisterRoute 注册插件 API（自动挂在 /api/plugin/<id>/ 前缀下）。
+	// RegisterRoute 注册插件 API（自动挂在 /api/plugin/<id>/ 前缀下，需面板登录态）。
 	RegisterRoute(method, path string, h http.HandlerFunc)
+	// RegisterPublicRoute 注册免鉴权公开路由（挂在 /api/pub/plugin/<id>/ 前缀下）。
+	// 用于外部服务回调场景（如 CI 系统 POST webhook），安全性由插件自行校验（签名/令牌）。
+	RegisterPublicRoute(method, path string, h http.HandlerFunc)
 	// RegisterCron 注册定时任务（标准 5 段 cron）。
 	RegisterCron(spec string, fn func())
 	// RegisterMCPTool 声明 MCP 工具（聚合到面板唯一 /mcp；名称自动加 <pluginId>_ 前缀）。

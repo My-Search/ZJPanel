@@ -11,6 +11,7 @@ import (
 // 服务层只依赖本包，不依赖 boot，避免循环引用。
 type Config struct {
 	DataDir       string // 面板数据目录（SQLite/证书/插件/geoip）
+	AppDir        string // 程序安装目录（内置插件前端资产 /app/plugin-assets）
 	Port          int    // 面板 HTTP 端口
 	NginxPrefix   string // nginx 配置根（/etc/nginx）
 	NginxLogsDir  string // nginx 日志目录
@@ -48,6 +49,7 @@ func envInt(key string, def int) int {
 func LoadConfig() *Config {
 	cfg := &Config{
 		DataDir:       env("ZJPANEL_DATA", "/data"),
+		AppDir:        env("ZJPANEL_APP_DIR", "/app"),
 		Port:          envInt("ZJPANEL_PORT", 9000),
 		NginxPrefix:   env("ZJPANEL_NGINX_PREFIX", "/etc/nginx"),
 		NginxLogsDir:  env("ZJPANEL_NGINX_LOGS", "/var/log/nginx"),

@@ -41,6 +41,13 @@ html[data-theme='dark'] .dir-item:hover { background: #16243f !important; }
 html[data-theme='dark'] ::-webkit-scrollbar-thumb { background: #4b4b4b; }
 html[data-theme='dark'] ::-webkit-scrollbar-thumb:hover { background: #5f5f5f; }
 ::-webkit-scrollbar-corner { background: transparent; }
+/* 企业级统一设计语言：卡片阴影/表格头（深浅主题各自适配） */
+.ant-card { border-radius: 10px; }
+html[data-theme='light'] .ant-card { box-shadow: 0 1px 3px rgba(15, 23, 42, .06), 0 1px 2px rgba(15, 23, 42, .04); }
+html[data-theme='light'] .ant-table-thead > tr > th { background: #f8fafc; color: #475569; font-weight: 600; }
+html[data-theme='dark'] .ant-table-thead > tr > th { background: #1d1d1d; color: #a3a3a3; font-weight: 600; }
+.ant-btn { border-radius: 7px; }
+.ant-modal .ant-modal-content { border-radius: 12px; }
 /* 窄屏：表格横向滚动而非撑破布局；弹窗/抽屉宽度不超过视口 */
 @media (max-width: 767px) {
   .ant-table-body, .ant-table-content { overflow-x: auto; }
@@ -53,5 +60,14 @@ html[data-theme='dark'] ::-webkit-scrollbar-thumb:hover { background: #5f5f5f; }
   .toolbar { flex-wrap: wrap; }
   .toolbar > * { max-width: 100%; }
   .toolbar .dim { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+  /* 栅格列窄屏全宽堆叠（页面向下排布，不出横向滚动） */
+  .ant-row { row-gap: 10px; }
+  .ant-col { max-width: 100% !important; }
+  .ant-col[class*='ant-col-']:not(.ant-col-24) { flex: 0 0 100% !important; width: 100% !important; }
+  /* 描述列表、标签组换行防溢出 */
+  .ant-descriptions-item { padding-bottom: 8px; }
+  .ant-space { flex-wrap: wrap; }
+  .ant-statistic-title { font-size: 12px; }
+  .ant-statistic-content { font-size: 16px; }
 }
 </style>

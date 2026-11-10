@@ -222,6 +222,10 @@ func (s *Server) registerPluginRoutes() {
 	s.r.Any("/api/plugin/:id/*path", s.auth.Require(), func(c *gin.Context) {
 		s.Plugins.DispatchRoute(c.Writer, c.Request, c.Param("id"), c.Param("path"))
 	})
+	// 插件免鉴权公开路由（外部服务回调，如 CI webhook；签名/令牌由插件自行校验）
+	s.r.Any("/api/pub/plugin/:id/*path", func(c *gin.Context) {
+		s.Plugins.DispatchPublicRoute(c.Writer, c.Request, c.Param("id"), c.Param("path"))
+	})
 	// 插件前端资产（iframe 承载；同源 cookie 鉴权）
 	s.r.GET("/plugin-assets/:id/*path", s.auth.Require(), func(c *gin.Context) {
 		s.Plugins.ServeAsset(c.Writer, c.Request, c.Param("id"), c.Param("path"))

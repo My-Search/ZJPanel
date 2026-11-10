@@ -34,13 +34,14 @@ type routeEntry struct {
 }
 
 type runtime struct {
-	id       string
-	p        sdk.Plugin
-	ctx      *ctxImpl
-	routes   []routeEntry
-	cronIDs  []any
-	mcpNames []string
-	manifest *Manifest
+	id           string
+	p            sdk.Plugin
+	ctx          *ctxImpl
+	routes       []routeEntry
+	publicRoutes []routeEntry // 免鉴权公开路由（/api/pub/plugin/<id>/）
+	cronIDs      []any
+	mcpNames     []string
+	manifest     *Manifest
 }
 
 type Manager struct {
@@ -89,6 +90,16 @@ func loadManifest(dir string) (*Manifest, error) {
 
 // StartAll 启动时恢复已启用插件。
 func (m *Manager) StartAll() {
+	// 内置插件开箱即用：无 DB 记录时自动创建并启用（用户手动停用过则尊重其选择）
+	for id := range m.builtins {
+		var cnt int64
+		m.db.Model(&model.PluginRecord{}).Where("plugin_id = ?", id).Count(&cnt)
+		if cnt == 0 {
+			if err := m.Enable(id); err != nil {
+				slog.Error("内置插件启用失败", "id", id, "err", err)
+			}
+		}
+	}
 	var recs []model.PluginRecord
 	m.db.Where("enabled = ?", true).Find(&recs)
 	for _, r := range recs {
@@ -328,6 +339,30 @@ func (m *Manager) DispatchRoute(w http.ResponseWriter, r *http.Request, id, path
 	http.Error(w, "路由不存在", http.StatusNotFound)
 }
 
+// DispatchPublicRoute 免鉴权公开路由派发：/api/pub/plugin/:id/*path。
+func (m *Manager) DispatchPublicRoute(w http.ResponseWriter, r *http.Request, id, path string) {
+	m.mu.RLock()
+	rt, ok := m.running[id]
+	m.mu.RUnlock()
+	if !ok {
+		http.Error(w, "插件未启用: "+id, http.StatusNotFound)
+		return
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	for _, re := range rt.publicRoutes {
+		if re.Method != "*" && !strings.EqualFold(re.Method, r.Method) {
+			continue
+		}
+		if matchRoute(re.Path, path) {
+			re.Handler(w, r)
+			return
+		}
+	}
+	http.Error(w, "路由不存在", http.StatusNotFound)
+}
+
 func matchRoute(pattern, path string) bool {
 	if pattern == path {
 		return true
@@ -339,18 +374,21 @@ func matchRoute(pattern, path string) bool {
 }
 
 // ServeAsset 插件静态资产（前端页面，iframe 承载）：/plugin-assets/<id>/<path>。
+// 内置插件优先读源码树 assets/<id>/dist（随镜像分发，编译期内嵌目录），缺失再回退数据目录。
 func (m *Manager) ServeAsset(w http.ResponseWriter, r *http.Request, id, path string) {
-	root := filepath.Join(m.extDir(id), "dist")
+	roots := []string{filepath.Join(m.cfg.AppDir, "plugin-assets", id, "dist"), filepath.Join(m.extDir(id), "dist")}
 	// 未启用也允许加载资产页面（页面内可提示）
-	full := filepath.Join(root, filepath.Clean("/"+path))
-	if fi, err := os.Stat(full); err == nil && !fi.IsDir() {
-		http.ServeFile(w, r, full)
-		return
-	}
-	index := filepath.Join(root, "index.html")
-	if _, err := os.Stat(index); err == nil {
-		http.ServeFile(w, r, index)
-		return
+	for _, root := range roots {
+		full := filepath.Join(root, filepath.Clean("/"+path))
+		if fi, err := os.Stat(full); err == nil && !fi.IsDir() {
+			http.ServeFile(w, r, full)
+			return
+		}
+		index := filepath.Join(root, "index.html")
+		if _, err := os.Stat(index); err == nil {
+			http.ServeFile(w, r, index)
+			return
+		}
 	}
 	http.Error(w, "插件页面不存在（dist/index.html 缺失）", http.StatusNotFound)
 }

@@ -27,13 +27,16 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w -X zjpanel/backend/interna
 
 # ========= 阶段 3：运行层（nginx + 面板 + docker cli，单容器） =========
 FROM alpine:3.20
-RUN apk add --no-cache nginx docker-cli docker-cli-compose bash curl ca-certificates tzdata s6-overlay 2>/dev/null || \
-    apk add --no-cache nginx docker-cli docker-cli-compose bash curl ca-certificates tzdata
+# git 供 Webhooks 插件在容器内执行 git pull 部署
+RUN apk add --no-cache nginx docker-cli docker-cli-compose bash curl git ca-certificates tzdata s6-overlay 2>/dev/null || \
+    apk add --no-cache nginx docker-cli docker-cli-compose bash curl git ca-certificates tzdata
 ENV TZ=Asia/Shanghai
 COPY --from=be /out/zjpanel /app/zjpanel
 COPY deploy/entrypoint.sh /app/entrypoint.sh
 COPY deploy/nginx-defaults/ /app/nginx-defaults/
 COPY backend/plugins/notifywebhook/ /app/plugin-examples/notifywebhook/
+# 内置插件前端资产（/plugin-assets/<id>/ 从此读取）
+COPY plugin-assets/ /app/plugin-assets/
 RUN chmod +x /app/entrypoint.sh /app/zjpanel && \
     mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled /etc/nginx/conf.d /var/log/nginx /usr/share/nginx/html /data /compose
 EXPOSE 80 443 9000
