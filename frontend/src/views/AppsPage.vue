@@ -206,19 +206,21 @@
 
     <!-- 容器终端 -->
     <a-modal v-model:open="execOpen" :title="'终端 · ' + execName" :footer="null" :width="860" @cancel="closeExec" @after-close="closeExec">
-      <div ref="execBox" style="height: 420px"></div>
+      <div ref="execBox" style="height: 420px" :style="{ background: boxBg() }"></div>
     </a-modal>
   </a-card>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, nextTick } from 'vue'
+import { computed, onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post, del } from '../api'
+import { useTermTheme } from '../utils/termTheme'
 import Sites from './Sites.vue'
 import DockerPage from './DockerPage.vue'
 import { PlusOutlined, SyncOutlined, DownOutlined, FolderOutlined } from '@ant-design/icons-vue'
 
+const { ui, current: termTheme, boxBg } = useTermTheme()
 const tab = ref('compose')
 const composeRoot = ref('/compose')
 const projects = ref<any[]>([])
@@ -452,7 +454,7 @@ const openExec = async (r: any) => {
   await nextTick()
   const xterm = await import('@xterm/xterm')
   const fitAddon = await import('@xterm/addon-fit')
-  execTerm = new xterm.Terminal({ fontSize: 13, cursorBlink: true, theme: { background: '#0d1117' } })
+  execTerm = new xterm.Terminal({ fontSize: 13, cursorBlink: true, theme: termTheme() })
   execFit = new fitAddon.FitAddon()
   execTerm.loadAddon(execFit)
   execTerm.open(execBox.value!)
@@ -463,6 +465,7 @@ const openExec = async (r: any) => {
   execWs.onmessage = (ev) => { if (ev.data instanceof Blob) ev.data.text().then(t => execTerm?.write(t)); else execTerm?.write(ev.data) }
   execWs.onclose = () => { execTerm?.write('\r\n\x1b[31m[会话结束]\x1b[0m') }
 }
+watch(() => ui.isDark, () => { if (execTerm) execTerm.options.theme = termTheme() })
 const closeExec = () => {
   execWs?.close(); execWs = null
   execTerm?.dispose(); execTerm = null

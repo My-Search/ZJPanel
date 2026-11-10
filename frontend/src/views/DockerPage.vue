@@ -65,7 +65,7 @@
 
     <!-- exec 终端 -->
     <a-modal v-model:open="execOpen" :title="'终端 · ' + execName" :footer="null" :width="860" @after-close="closeExec" @cancel="closeExec">
-      <div ref="execBox" style="height: 420px"></div>
+      <div ref="execBox" style="height: 420px" :style="{ background: boxBg() }"></div>
     </a-modal>
 
     <!-- 拉取进度 -->
@@ -76,10 +76,12 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, nextTick } from 'vue'
+import { onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post, del, fmtBytes } from '../api'
+import { useTermTheme } from '../utils/termTheme'
 
+const { ui, current: termTheme, boxBg } = useTermTheme()
 const available = ref(true)
 const tab = ref('containers')
 const containers = ref<any[]>([])
@@ -160,7 +162,7 @@ const openExec = async (r: any) => {
   await nextTick()
   const xterm = await import('@xterm/xterm')
   const fitAddon = await import('@xterm/addon-fit')
-  execTerm = new xterm.Terminal({ fontSize: 13, cursorBlink: true, theme: { background: '#0d1117' } })
+  execTerm = new xterm.Terminal({ fontSize: 13, cursorBlink: true, theme: termTheme() })
   execFit = new fitAddon.FitAddon()
   execTerm.loadAddon(execFit)
   execTerm.open(execBox.value!)
@@ -172,6 +174,7 @@ const openExec = async (r: any) => {
   execWs.onclose = () => { execTerm?.write('\r\n\x1b[31m[会话结束]\x1b[0m') }
   setTimeout(() => execFit?.fit(), 200)
 }
+watch(() => ui.isDark, () => { if (execTerm) execTerm.options.theme = termTheme() })
 const closeExec = () => {
   execWs?.close(); execWs = null
   execTerm?.dispose(); execTerm = null
