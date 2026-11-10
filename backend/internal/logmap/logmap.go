@@ -275,10 +275,11 @@ func (s *Service) Summary(minutes, recent int) *Summary {
 		Minutes: minutes, Countries: []CountryAgg{}, Sites: []SiteAgg{},
 		Statuses: map[string]int64{}, Recent: []Entry{}, GeoLoaded: s.geo.Loaded(),
 	}
-	// 服务器真实位置：出口 IP 经 GeoIP 反查（无 location 时回退国家质心）
+	// 服务器真实位置：出口 IP 经 GeoIP 反查。数组按 [经度, 纬度] 输出（GeoJSON/echarts 惯例，
+	// 前端 serverPoint 直接消费；LookupLocation 返回的是 [纬度, 经度]，此处必须对调）
 	if out := OutboundIP(); out != "" {
 		if _, ll := s.geo.LookupLocation(out); ll[0] != 0 || ll[1] != 0 {
-			sum.ServerLoc = &[2]float64{ll[0], ll[1]}
+			sum.ServerLoc = &[2]float64{ll[1], ll[0]}
 		}
 	}
 	countries := map[string]*CountryAgg{}
