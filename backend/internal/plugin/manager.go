@@ -329,32 +329,19 @@ func (m *Manager) Uninstall(id string) error {
 
 // ---- 运行时接线：路由 / 菜单 / 资产 ----
 
-// DispatchRoute gin 动态派发：/api/plugin/:id/*path。
-func (m *Manager) DispatchRoute(w http.ResponseWriter, r *http.Request, id, path string) {
-	m.mu.RLock()
-	rt, ok := m.running[id]
-	m.mu.RUnlock()
-	if !ok {
-		http.Error(w, "插件未启用: "+id, http.StatusNotFound)
-		return
-	}
-	if !strings.HasPrefix(path, "/") {
-		path = "/" + path
-	}
-	for _, re := range rt.routes {
-		if re.Method != "*" && !strings.EqualFold(re.Method, r.Method) {
-			continue
-		}
-		if matchRoute(re.Path, path) {
-			re.Handler(w, r)
-			return
-		}
-	}
-	http.Error(w, "路由不存在", http.StatusNotFound)
-}
-
 // DispatchPublicRoute 免鉴权公开路由派发：/api/pub/plugin/:id/*path。
 func (m *Manager) DispatchPublicRoute(w http.ResponseWriter, r *http.Request, id, path string) {
+	m.dispatch(w, r, id, path, true)
+}
+
+// DispatchRoute gin 动态派发：/api/plugin/:id/*path。
+func (m *Manager) DispatchRoute(w http.ResponseWriter, r *http.Request, id, path string) {
+	m.dispatch(w, r, id, path, false)
+}
+
+// dispatch 统一派发：剥离前缀后的子路径经 X-Plugin-Path 头传给插件 handler
+//（handler 内用 r.URL.Path 只能拿到完整原始路径，无法得知自身挂载前缀）。
+func (m *Manager) dispatch(w http.ResponseWriter, r *http.Request, id, path string, public bool) {
 	m.mu.RLock()
 	rt, ok := m.running[id]
 	m.mu.RUnlock()
@@ -365,7 +352,13 @@ func (m *Manager) DispatchPublicRoute(w http.ResponseWriter, r *http.Request, id
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
-	for _, re := range rt.publicRoutes {
+	r.Header.Set("X-Plugin-Path", path)
+	r.Header.Set("X-Plugin-Id", id)
+	routes := rt.routes
+	if public {
+		routes = rt.publicRoutes
+	}
+	for _, re := range routes {
 		if re.Method != "*" && !strings.EqualFold(re.Method, r.Method) {
 			continue
 		}

@@ -201,7 +201,7 @@ func (p *Plugin) apiSave(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Plugin) apiDelete(w http.ResponseWriter, r *http.Request) {
-	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/hooks/"), "/")
+	id := strings.Trim(strings.TrimPrefix(pluginPath(r), "/hooks/"), "/")
 	p.mu.Lock()
 	delete(p.hooks, id)
 	delete(p.logs, id)
@@ -215,7 +215,7 @@ func (p *Plugin) apiDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Plugin) apiLogs(w http.ResponseWriter, r *http.Request) {
-	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/logs/"), "/")
+	id := strings.Trim(strings.TrimPrefix(pluginPath(r), "/logs/"), "/")
 	p.mu.Lock()
 	logs := append([]RunLog{}, p.logs[id]...)
 	p.mu.Unlock()
@@ -223,7 +223,7 @@ func (p *Plugin) apiLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Plugin) apiRun(w http.ResponseWriter, r *http.Request) {
-	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/hooks/"), "/")
+	id := strings.Trim(strings.TrimPrefix(pluginPath(r), "/hooks/"), "/")
 	id = strings.TrimSuffix(id, "/run")
 	out, err := p.runHook(id)
 	writeJSON(w, http.StatusOK, ginH("output", out, "error", errStr(err)))
@@ -255,8 +255,16 @@ func errStr(err error) string {
 
 // ---- 接收端点（免鉴权 + 签名校验）----
 
+// pluginPath 派发层注入的剥离前缀后的子路径（handler 不能用 r.URL.Path，那是完整原始路径）。
+func pluginPath(r *http.Request) string {
+	if p := r.Header.Get("X-Plugin-Path"); p != "" {
+		return p
+	}
+	return r.URL.Path
+}
+
 func (p *Plugin) apiReceive(w http.ResponseWriter, r *http.Request) {
-	id := strings.Trim(strings.TrimPrefix(r.URL.Path, "/hook/"), "/")
+	id := strings.Trim(strings.TrimPrefix(pluginPath(r), "/hook/"), "/")
 	p.mu.Lock()
 	h, ok := p.hooks[id]
 	p.mu.Unlock()
