@@ -319,7 +319,8 @@ func (s *Service) SaveMMDB(data []byte) error {
 // DownloadMMDB 自动下载 GeoLite2-Country（公开镜像，可关）。
 func (s *Service) DownloadMMDB(url string) error {
 	if url == "" {
-		url = "https://testingcf.jsdelivr.net/gh/P3TERX/GeoLite.mmdb@main/GeoLite2-Country.mmdb"
+		// P3TERX/GeoLite.mmdb 公开镜像（jsdelivr 旧地址已失效，改用 raw.githubusercontent 稳定分支）
+		url = "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-Country.mmdb"
 	}
 	client := &http.Client{Timeout: 120 * time.Second}
 	resp, err := client.Get(url)
