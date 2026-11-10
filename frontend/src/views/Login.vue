@@ -55,5 +55,5 @@ const submit = async () => {
 
 <style scoped>
 .login-wrap { height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #4f7cff 0%, #7c4dff 100%); }
-.login-card { width: 400px; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.18); }
+.login-card { width: 400px; max-width: 92vw; border-radius: 12px; box-shadow: 0 12px 40px rgba(0,0,0,.18); }
 </style>

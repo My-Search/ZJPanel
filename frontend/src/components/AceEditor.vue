@@ -4,6 +4,7 @@
 
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref, watch } from 'vue'
+import { useTheme } from '../store/theme'
 import ace from 'ace-builds'
 import 'ace-builds/src-noconflict/mode-nginx'
 import 'ace-builds/src-noconflict/mode-html'
@@ -16,6 +17,9 @@ import 'ace-builds/src-noconflict/ext-searchbox'
 const props = defineProps<{ modelValue: string; mode?: string; theme?: string; readonly?: boolean }>()
 const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>()
 
+const ui = useTheme()
+const aceTheme = () => props.theme || (ui.isDark ? 'terminal' : 'chrome')
+
 const host = ref<HTMLElement | null>(null)
 let editor: any = null
 let suppress = false
@@ -24,7 +28,7 @@ onMounted(() => {
   editor = ace.edit(host.value!)
   editor.setOptions({
     mode: 'ace/mode/' + (props.mode || 'text'),
-    theme: 'ace/theme/' + (props.theme || 'chrome'),
+    theme: 'ace/theme/' + aceTheme(),
     fontSize: '13px',
     useWorker: false,
     readOnly: !!props.readonly,
@@ -49,6 +53,7 @@ watch(() => props.modelValue, (v) => {
 })
 watch(() => props.mode, (m) => editor?.getSession().setMode('ace/mode/' + (m || 'text')))
 watch(() => props.readonly, (r) => editor?.setReadOnly(!!r))
+watch([() => props.theme, () => ui.isDark], () => editor?.setTheme('ace/theme/' + aceTheme()))
 
 onBeforeUnmount(() => editor?.destroy())
 </script>

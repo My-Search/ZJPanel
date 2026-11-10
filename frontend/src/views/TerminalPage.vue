@@ -18,8 +18,8 @@
     </a-space>
 
     <a-tabs v-model:activeKey="activeTab" type="editable-card" hide-add size="small" @edit="closeTab">
-      <a-tab-pane v-for="t in tabs" :key="t.id" :tab="t.label" style="height: 420px">
-        <div :ref="el => setTermBox(t.id, el)" style="height: 420px; background: #0d1117"></div>
+      <a-tab-pane v-for="t in tabs" :key="t.id" :tab="t.label" class="term-pane">
+        <div :ref="el => setTermBox(t.id, el)" class="term-box" :style="{ background: boxBg() }"></div>
       </a-tab-pane>
     </a-tabs>
 
@@ -67,12 +67,22 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, nextTick } from 'vue'
+import { onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post, del } from '../api'
 import { DownOutlined } from '@ant-design/icons-vue'
+import { useTheme } from '../store/theme'
+import type { Terminal as XtermTerminal } from '@xterm/xterm'
 
-interface Tab { id: string; label: string; sessionId: string | null; ws: WebSocket | null; term: any; fit: any; created: boolean }
+const ui = useTheme()
+const termThemes = {
+  dark: { background: '#0d1117', foreground: '#c9d1d9' },
+  light: { background: '#ffffff', foreground: '#24292f' },
+}
+const termTheme = () => ui.isDark ? termThemes.dark : termThemes.light
+const boxBg = () => ui.isDark ? '#0d1117' : '#ffffff'
+
+interface Tab { id: string; label: string; sessionId: string | null; ws: WebSocket | null; term: XtermTerminal | null; fit: { fit: () => void } | null; created: boolean }
 
 const hosts = ref<any[]>([])
 const tabs = ref<Tab[]>([])
@@ -101,7 +111,7 @@ const openSession = async (t: Tab, createMsg: Record<string, any> | null) => {
   const fitAddon = await import('@xterm/addon-fit')
   const term = new xterm.Terminal({
     fontSize: 13, cursorBlink: true, scrollback: 5000,
-    theme: { background: '#0d1117', foreground: '#c9d1d9' },
+    theme: termTheme(),
   })
   const fit = new fitAddon.FitAddon()
   term.loadAddon(fit)
@@ -128,6 +138,7 @@ const openSession = async (t: Tab, createMsg: Record<string, any> | null) => {
     switch (msg.type) {
       case 'created':
         t.sessionId = msg.session.id
+        if (msg.replay) term.write(msg.replay)
         term.write('\x1b[36m[已连接 ' + msg.session.label + ']\x1b[0m\r\n')
         break
       case 'attached':
@@ -214,12 +225,28 @@ const testHost = async (h: any) => {
 }
 
 onMounted(async () => {
+  window.addEventListener('resize', fitAll)
   await loadHosts()
   await restoreSessions()
 })
-onUnmounted(() => tabs.value.forEach(t => t.ws?.close()))
+onUnmounted(() => {
+  window.removeEventListener('resize', fitAll)
+  tabs.value.forEach(t => t.ws?.close())
+})
+
+// 主题/窗口变化：同步所有已打开终端的配色并重新适配尺寸
+const fitAll = () => tabs.value.forEach(t => t.fit?.fit())
+watch(() => ui.isDark, () => {
+  tabs.value.forEach(t => { if (t.term) t.term.options.theme = termTheme() })
+  fitAll()
+})
 </script>
 
 <style scoped>
 .dim { color: #999; font-size: 12px; }
+.term-pane { height: min(60vh, 520px); min-height: 320px; }
+.term-box { height: 100%; }
+@media (max-width: 767px) {
+  .term-pane { height: 60vh; min-height: 260px; }
+}
 </style>

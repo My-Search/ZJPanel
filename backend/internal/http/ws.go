@@ -2,9 +2,10 @@ package httpapi
 
 import (
 	"context"
-	"net/http"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net/http"
 	"sync"
 	"time"
 
@@ -95,26 +96,11 @@ func (s *Server) wsTerminal(c *gin.Context) {
 		}
 		switch msg["type"] {
 		case "create":
-			kind, _ := msg["kind"].(string)
-			switch kind {
-			case "ssh":
-				hostID := uint(numOf(msg["hostId"]))
-				newSess, err := s.Term.CreateSSH(hostID)
-				if err != nil {
-					_ = tc.WriteText(`{"type":"error","message":` + jsonString(err.Error()) + `}`)
-					continue
-				}
-				sess = newSess
-				_ = tc.WriteText(`{"type":"created","session":` + s.termInfoJSON(newSess) + `}`)
-			case "local":
-				newSess, err := s.Term.CreateLocal()
-				if err != nil {
-					_ = tc.WriteText(`{"type":"error","message":` + jsonString(err.Error()) + `}`)
-					continue
-				}
-				sess = newSess
-				_ = tc.WriteText(`{"type":"created","session":` + s.termInfoJSON(newSess) + `}`)
+			// 一条连接只绑定一个会话：重复创建前先解绑旧会话，避免残留客户端。
+			if sess != nil {
+				sess.Detach(tc)
 			}
+			sess = s.createTerminalSession(tc, msg)
 		case "attach":
 			sid, _ := msg["sessionId"].(string)
 			got := s.Term.Get(sid)
@@ -131,6 +117,30 @@ func (s *Server) wsTerminal(c *gin.Context) {
 			}
 		}
 	}
+}
+
+// createTerminalSession 创建会话并立即把当前连接注册为输出客户端。
+// 新建会话若未 Attach，命令会执行但没有任何实时输出回显（只有刷新后 attach 才看得到）。
+func (s *Server) createTerminalSession(tc *termConn, msg map[string]any) *terminal.Session {
+	var newSess *terminal.Session
+	var err error
+	kind, _ := msg["kind"].(string)
+	switch kind {
+	case "ssh":
+		newSess, err = s.Term.CreateSSH(uint(numOf(msg["hostId"])))
+	case "local":
+		newSess, err = s.Term.CreateLocal()
+	default:
+		err = fmt.Errorf("未知终端类型: %s", kind)
+	}
+	if err != nil {
+		_ = tc.WriteText(`{"type":"error","message":` + jsonString(err.Error()) + `}`)
+		return nil
+	}
+	// 先注册输出客户端再回 created，避免 shell 启动横幅丢失。
+	replay := newSess.Attach(tc)
+	_ = tc.WriteText(`{"type":"created","session":` + s.termInfoJSON(newSess) + `,"replay":` + jsonStringBytes(replay) + `}`)
+	return newSess
 }
 
 func (s *Server) termInfoJSON(sess *terminal.Session) string {
