@@ -135,6 +135,11 @@ onUnmounted(() => mq.removeEventListener('change', syncViewport))
 <style scoped>
 .logo { height: 56px; font-size: 18px; font-weight: 700; display: flex; align-items: center; justify-content: center; letter-spacing: 1px; gap: 8px; }
 .logo-mark { width: 26px; height: 26px; border-radius: 7px; }
+/* 抽屉侧栏：容器背景与深色菜单统一，消除 Logo 区与菜单区的色差 */
+.nav-drawer :global(.ant-drawer-content),
+.nav-drawer :global(.ant-drawer-body) { background: #001529; }
+:global(html[data-theme='light']) .nav-drawer :global(.ant-drawer-content),
+:global(html[data-theme='light']) .nav-drawer :global(.ant-drawer-body) { background: #fff; }
 .header { padding: 0 16px; display: flex; align-items: center; justify-content: space-between; height: 48px; line-height: 48px; }
 .header-left { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .ver { font-size: 12px; opacity: .65; white-space: nowrap; }

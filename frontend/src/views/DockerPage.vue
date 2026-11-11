@@ -80,6 +80,7 @@ import { onActivated, onDeactivated, onMounted, onUnmounted, ref, nextTick, watc
 import { message } from 'ant-design-vue'
 import { get, post, del, fmtBytes } from '../api'
 import { useTermTheme } from '../utils/termTheme'
+import { wsMessageToText } from '../utils/wsMessage'
 
 const { ui, current: termTheme, boxBg } = useTermTheme()
 const available = ref(true)
@@ -152,7 +153,12 @@ const openLogs = (r: any) => {
   logsOpen.value = true
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   logsWs = new WebSocket(`${proto}://${location.host}/api/ws/docker/logs/${r.id}`)
-  logsWs.onmessage = (ev) => { logsText.value += ev.data; nextTick(() => { if (logsText.value.length > 400000) logsText.value = logsText.value.slice(-300000) }) }
+  logsWs.onmessage = (ev) => {
+    wsMessageToText(ev.data).then(t => {
+      logsText.value += t
+      nextTick(() => { if (logsText.value.length > 400000) logsText.value = logsText.value.slice(-300000) })
+    })
+  }
   logsWs.onclose = () => { logsWs = null }
 }
 
@@ -170,7 +176,7 @@ const openExec = async (r: any) => {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   execWs = new WebSocket(`${proto}://${location.host}/api/ws/docker/exec/${r.id}`)
   execWs.onopen = () => execTerm.onData((d: string) => execWs?.send(new TextEncoder().encode(d)))
-  execWs.onmessage = (ev) => { if (ev.data instanceof Blob) ev.data.text().then(t => execTerm?.write(t)); else execTerm?.write(ev.data) }
+  execWs.onmessage = (ev) => { wsMessageToText(ev.data).then(t => execTerm?.write(t)) }
   execWs.onclose = () => { execTerm?.write('\r\n\x1b[31m[会话结束]\x1b[0m') }
   setTimeout(() => execFit?.fit(), 200)
 }
