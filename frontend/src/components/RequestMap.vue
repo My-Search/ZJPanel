@@ -1,7 +1,6 @@
 <template>
   <div class="request-map">
     <a-space class="map-toolbar" wrap>
-      <a-select v-model:value="minutes" style="width: 140px" :options="minuteOpts" @change="load" />
       <a-tag :color="geoLoaded ? 'green' : 'orange'">{{ geoLoaded ? 'GeoIP 已加载' : 'GeoIP 未加载' }}</a-tag>
       <span class="dim">实时流向</span>
       <a-switch v-model:checked="realtime" size="small" />
@@ -14,6 +13,12 @@
     </a-space>
 
     <div ref="mapBox" class="map-box" :style="{ '--map-height': height + 'px' }"></div>
+
+    <!-- 统计时间范围放在地图下方（与详细统计同区），避免误读为地图实时数据的过滤条件 -->
+    <div class="stats-range">
+      <a-select v-model:value="minutes" style="width: 140px" :options="minuteOpts" @change="load" />
+      <span class="dim">以下统计的时间范围</span>
+    </div>
 
     <!-- 地图下方详细信息：默认收纳，点击标题展开 -->
     <a-collapse v-model:activeKey="detailsOpen" :bordered="false" class="details-collapse">
@@ -119,7 +124,9 @@ const serverPoint = ref<[number, number]>(
 
 const realtime = ref(true)
 const liveCount = ref(0)
-const liveFlows = ref<{ country: string; coords: [number, number][]; ts: number }[]>([])
+// 实时流向：一次请求 = 一条「来源黄点 → 服务器」的飞线。
+// 记录国家、坐标与时间戳；同一国家短时间内多次请求合并计数，用线的宽度/亮度体现请求量。
+const liveFlows = ref<{ country: string; coords: [number, number][]; ts: number; count: number }[]>([])
 
 const handleEntries = (list: any[]) => {
   if (!realtime.value) return
@@ -129,9 +136,15 @@ const handleEntries = (list: any[]) => {
     const c: [number, number] | undefined = (e.lat || e.lon) ? [e.lon, e.lat] : centroids[e.country]
     if (!c) continue
     changed = true
-    // 同一国家仅保留最新一条飞线，避免叠加杂乱
-    liveFlows.value = liveFlows.value.filter(f => f.country !== e.country)
-    liveFlows.value.push({ country: e.country, coords: [c, serverPoint.value] as [number, number][], ts: Date.now() })
+    // 同一国家 5s 内的多次请求合并为一条飞线（count 累加 → 线更粗更亮）
+    const cur = liveFlows.value.find(f => f.country === e.country)
+    if (cur && Date.now() - cur.ts < 5000) {
+      cur.count++
+      cur.ts = Date.now()
+    } else {
+      liveFlows.value = liveFlows.value.filter(f => f.country !== e.country)
+      liveFlows.value.push({ country: e.country, coords: [c, serverPoint.value] as [number, number][], ts: Date.now(), count: 1 })
+    }
     summary.value.recent = [e, ...(summary.value.recent || [])].slice(0, 100)
   }
   if (changed) renderMap()
@@ -173,7 +186,23 @@ const renderMap = async () => {
   const maxCount = Math.max(1, ...countries.map((c: any) => c.count))
   const shades = ['#dbe9ff', '#9dbdff', '#5c8dff', '#2f5fe0', '#1c3fd6']
   const colorFor = (n: number) => shades[Math.min(shades.length - 1, Math.floor((n / maxCount) * shades.length))]
-  const flows = realtime.value ? liveFlows.value.map(f => ({ coords: f.coords })) : []
+  // 实时流向：来源黄点 + 飞线（宽度/透明度随请求量增强），方向 = 来源 → 服务器
+  const maxFlow = Math.max(1, ...liveFlows.value.map(f => f.count))
+  const flows = realtime.value
+    ? liveFlows.value.map(f => ({
+        coords: f.coords,
+        lineStyle: { width: 1 + (f.count / maxFlow) * 2.5, opacity: 0.35 + (f.count / maxFlow) * 0.45 },
+        effect: { symbolSize: 5 + (f.count / maxFlow) * 4 },
+      }))
+    : []
+  const srcPoints = realtime.value
+    ? liveFlows.value.map(f => ({
+        value: f.coords[0],
+        name: mapName(f.country),
+        symbolSize: 7,
+        itemStyle: { color: '#ffd54d' },
+      }))
+    : []
   chart.setOption({
     tooltip: { show: true, formatter: (p: any) => p.name || '' },
     // 深浅主题各自适配的底图配色
@@ -186,13 +215,21 @@ const renderMap = async () => {
     series: [
       {
         type: 'lines', coordinateSystem: 'geo', zlevel: 2,
-        effect: { show: true, period: 4, trailLength: 0.6, symbol: 'arrow', symbolSize: 9, color: '#ffb54d' },
-        lineStyle: { color: '#4f7cff', width: 2, opacity: 0.5, curveness: 0.35 },
+        effect: { show: true, period: 4, trailLength: 0.5, symbol: 'arrow', symbolSize: 6, color: '#ffd54d' },
+        lineStyle: { color: '#4f7cff', width: 1.5, opacity: 0.4, curveness: 0.35 },
         data: flows,
       },
       {
+        // 请求来源点：黄色小数据点（实时请求落点）
         type: 'effectScatter', coordinateSystem: 'geo', zlevel: 3,
-        symbolSize: 12, rippleEffect: { scale: 3 },
+        rippleEffect: { scale: 2.2, brushType: 'stroke' },
+        itemStyle: { color: '#ffd54d' },
+        data: srcPoints,
+      },
+      {
+        // 服务器位置：红色小点（缩小，避免喧宾夺主）
+        type: 'effectScatter', coordinateSystem: 'geo', zlevel: 3,
+        symbolSize: 7, rippleEffect: { scale: 2 },
         itemStyle: { color: '#ff5722' },
         data: [{ value: serverPoint.value, name: '服务器' }],
       },
@@ -260,6 +297,7 @@ onUnmounted(() => { stop(); resizeObserver?.disconnect(); resizeObserver = null;
 <style scoped>
 .dim { color: #999; font-size: 12px; }
 .map-toolbar { margin-bottom: 12px; }
+.stats-range { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; }
 .map-box { width: 100%; height: var(--map-height); }
 @media (max-width: 767px) { .map-box { height: min(var(--map-height), 320px); } }
 .details-collapse { margin-top: 8px; }

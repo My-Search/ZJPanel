@@ -2,6 +2,7 @@ package terminal
 
 import (
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"sync"
@@ -57,7 +58,29 @@ type netCounts struct {
 func (c *StatsCollector) StartLocal() { go c.loop(c.sampleLocal) }
 
 // StartRemote 采集 SSH 远程机器（复用既有 SSH 连接，无需对端装 agent）。
+// 每 30s 发一次 keepalive 探测（带超时）：连接半开时及时失败，
+// 避免 NewSession/Output 挂起（与 runRemote 超时双保险）。
 func (c *StatsCollector) StartRemote(client *ssh.Client) {
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-c.stop:
+				return
+			case <-t.C:
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					_, _, _ = client.SendRequest("keepalive@openssh.com", true, nil)
+				}()
+				select {
+				case <-done:
+				case <-time.After(remoteCmdTimeout):
+				}
+			}
+		}
+	}()
 	go c.loop(func() (HostStats, error) { return c.sampleRemote(client) })
 }
 
@@ -77,6 +100,8 @@ func (c *StatsCollector) Last() (HostStats, bool) {
 func (c *StatsCollector) loop(sample func() (HostStats, error)) {
 	if st, err := sample(); err == nil {
 		c.save(st)
+	} else {
+		slog.Debug("stats 首次采样失败", "err", err)
 	}
 	tick := time.NewTicker(statsInterval)
 	defer tick.Stop()
@@ -87,6 +112,10 @@ func (c *StatsCollector) loop(sample func() (HostStats, error)) {
 		case <-tick.C:
 			if st, err := sample(); err == nil {
 				c.save(st)
+			} else {
+				// 采样失败静默保留上一次结果；仅 debug 记录（终端场景宁缺毋吵）。
+				// 失败多由 SSH 连接半开/对端拒绝引起，runRemote 已带超时，不会永久卡死。
+				slog.Debug("stats 采样失败", "err", err)
 			}
 		}
 	}
@@ -148,13 +177,30 @@ func (c *StatsCollector) sampleRemote(client *ssh.Client) (HostStats, error) {
 	return st, nil
 }
 
+// remoteCmdTimeout 单次远程采样命令的超时：防止 SSH 连接半开（手机后台/NAT 掐断）
+// 时 NewSession/Output 永久阻塞，采集 goroutine 死锁 → 状态栏永远「资源采集中」。
+const remoteCmdTimeout = 10 * time.Second
+
 func runRemote(client *ssh.Client, cmd string) ([]byte, error) {
-	sess, err := client.NewSession()
-	if err != nil {
-		return nil, err
+	done := make(chan struct{})
+	var out []byte
+	var err error
+	go func() {
+		defer close(done)
+		sess, e := client.NewSession()
+		if e != nil {
+			err = e
+			return
+		}
+		defer sess.Close()
+		out, err = sess.Output(cmd)
+	}()
+	select {
+	case <-done:
+		return out, err
+	case <-time.After(remoteCmdTimeout):
+		return nil, fmt.Errorf("远程采样超时(%v)，SSH 连接可能已半开", remoteCmdTimeout)
 	}
-	defer sess.Close()
-	return sess.Output(cmd)
 }
 
 // parseRemote 解析 cat /proc/stat /proc/meminfo /proc/net/dev + df -kP / 的合并输出。
