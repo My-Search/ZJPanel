@@ -131,9 +131,9 @@ func (c *StatsCollector) diskLocal() (float64, string) {
 
 // ---- SSH 远程采样（一次会话执行一条只读命令） ----
 
-// remoteCmd 拼接只读采样命令：/proc 三文件 + 根分区 df（POSIX 输出）。
+// remoteCmd 拼接只读采样命令：/proc 四文件 + 根分区 df（POSIX 输出）。
 func remoteCmd() string {
-	return "cat /proc/stat /proc/meminfo /proc/net/dev 2>/dev/null; echo ---; df -kP / 2>/dev/null"
+	return "cat /proc/stat /proc/meminfo /proc/net/dev /proc/loadavg 2>/dev/null; echo ---; df -kP / 2>/dev/null"
 }
 
 func (c *StatsCollector) sampleRemote(client *ssh.Client) (HostStats, error) {
@@ -173,9 +173,9 @@ func (c *StatsCollector) parseRemote(out []byte, now time.Time) (HostStats, erro
 				st.CPU = c.cpuPct(ct)
 			}
 		case strings.HasPrefix(line, "MemTotal:"):
-			memTotalKB, _ = strconv.ParseUint(trimColon(line), 10, 64)
+			memTotalKB = parseFirstUint(line)
 		case strings.HasPrefix(line, "MemAvailable:"):
-			memAvailKB, _ = strconv.ParseUint(trimColon(line), 10, 64)
+			memAvailKB = parseFirstUint(line)
 		case strings.Contains(line, ":") && !dfDone && !strings.HasPrefix(line, "Filesystem"):
 			if in, out2, ok := parseProcNetDev(line); ok {
 				netIn, netOut = netIn+in, netOut+out2 // 所有物理网卡累计（lo 已排除）
@@ -199,10 +199,35 @@ func (c *StatsCollector) parseRemote(out []byte, now time.Time) (HostStats, erro
 		st.MemTXT = humanBytes(used) + " / " + humanBytes(memTotalKB*1024)
 	}
 	st.NetIn, st.NetOut = c.netRates(netIn, netOut, now)
+	st.Load1 = parseLoad1(string(out))
 	if st.CPU == 0 && st.Mem == 0 && st.Disk == 0 {
 		return st, fmt.Errorf("远程采样输出无法解析")
 	}
 	return st, nil
+}
+
+// parseFirstUint 取 "MemTotal:  16307612 kB" 首个数值字段（忽略 kB 等后缀）。
+func parseFirstUint(line string) uint64 {
+	for _, f := range strings.Fields(line) {
+		if n, err := strconv.ParseUint(f, 10, 64); err == nil {
+			return n
+		}
+	}
+	return 0
+}
+
+// parseLoad1 从合并输出识别 /proc/loadavg 行（"0.51 0.58 0.59 1/477 12345"，首个浮点后跟斜杠分数）。
+// cat 合并输出没有文件名标记，只能按该特征行识别；未找到返回 0。
+func parseLoad1(out string) float64 {
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(strings.TrimRight(line, "\r"))
+		if len(f) >= 4 && strings.Contains(f[3], "/") {
+			if v, err := strconv.ParseFloat(f[0], 64); err == nil {
+				return v
+			}
+		}
+	}
+	return 0
 }
 
 // parseProcStatCPU 解析 "cpu  user nice system idle iowait irq softirq steal ..." 行。
@@ -247,13 +272,6 @@ func parseProcNetDev(line string) (uint64, uint64, bool) {
 	return in, out, true
 }
 
-func trimColon(line string) string {
-	if i := strings.Index(line, ":"); i >= 0 {
-		return strings.TrimSpace(line[i+1:])
-	}
-	return strings.TrimSpace(line)
-}
-
 // ---- 差分计算（相邻两次采样） ----
 
 func (c *StatsCollector) cpuPct(ct cpuTimes) float64 {
@@ -277,7 +295,15 @@ func (c *StatsCollector) netRates(in, out uint64, now time.Time) (float64, float
 		return 0, 0
 	}
 	dt := now.Sub(prev.t).Seconds()
-	return clampPct(float64(in-prev.in) / dt), clampPct(float64(out-prev.out) / dt)
+	return ratePerSec(in, prev.in, dt), ratePerSec(out, prev.out, dt)
+}
+
+// ratePerSec 字节差分速率（B/s）；计数器回绕（重启）时返回 0。
+func ratePerSec(cur, prev uint64, dt float64) float64 {
+	if cur < prev || dt <= 0 {
+		return 0
+	}
+	return float64(cur-prev) / dt
 }
 
 func clampPct(v float64) float64 {
