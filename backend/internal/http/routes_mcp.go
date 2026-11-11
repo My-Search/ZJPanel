@@ -17,6 +17,7 @@ import (
 	"zjpanel/backend/internal/pkg"
 	sitePkg "zjpanel/backend/internal/site"
 	"zjpanel/backend/internal/update"
+	sdk "zjpanel/backend/sdk/plugin"
 )
 
 // ===================== MCP（聚合端点 + API Key 管理） =====================
@@ -172,20 +173,17 @@ func (s *Server) registerPluginRoutes() {
 	})
 	g.GET("/:id/settings", func(c *gin.Context) {
 		id := c.Param("id")
-		defs := []struct {
-			Key, Title, Type, Default, Help string
-			Options                         []string
-		}{}
+		// 直接返回 sdk.SettingDef（自带小写 json tag）；旧匿名结构体无 tag，
+		// 序列化成 Key/Title 大写字段导致前端表单无标签无帮助文案
+		defs := []sdk.SettingDef{}
 		values := map[string]string{}
 		for _, p := range s.Plugins.List() {
 			if p.ID != id {
 				continue
 			}
 			for _, sd := range p.Settings {
-				defs = append(defs, struct {
-					Key, Title, Type, Default, Help string
-					Options                         []string
-				}{sd.Key, sd.Title, sd.Type, sd.Default, sd.Help, sd.Options})
+				// 直接返回 sdk.SettingDef（自带小写 json tag），匿名结构体曾导致前端拿到 Title/Help 大写字段、表单无标签
+				defs = append(defs, sd)
 				var rec model.PluginSetting
 				if err := s.db.Where("plugin_id = ? AND key = ?", id, sd.Key).First(&rec).Error; err == nil {
 					values[sd.Key] = rec.Value

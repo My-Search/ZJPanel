@@ -8,7 +8,7 @@
       :theme="ui.isDark ? 'dark' : 'light'"
       :width="220"
     >
-      <div class="logo">🚀 {{ collapsed ? '' : 'ZJPanel' }}</div>
+      <div class="logo"><img src="/favicon.svg" alt="" class="logo-mark" /> {{ collapsed ? '' : 'ZJPanel' }}</div>
       <SideMenu :selected="selected" :plugin-menus="pluginMenus" @navigate="onMenu" />
     </a-layout-sider>
     <a-drawer
@@ -20,7 +20,7 @@
       :body-style="{ padding: 0 }"
       class="nav-drawer"
     >
-      <div class="logo">🚀 ZJPanel</div>
+      <div class="logo"><img src="/favicon.svg" alt="" class="logo-mark" /> ZJPanel</div>
       <SideMenu :selected="selected" :plugin-menus="pluginMenus" @navigate="onMenu" />
     </a-drawer>
 
@@ -133,7 +133,8 @@ onUnmounted(() => mq.removeEventListener('change', syncViewport))
 </script>
 
 <style scoped>
-.logo { height: 56px; font-size: 18px; font-weight: 700; display: flex; align-items: center; justify-content: center; letter-spacing: 1px; }
+.logo { height: 56px; font-size: 18px; font-weight: 700; display: flex; align-items: center; justify-content: center; letter-spacing: 1px; gap: 8px; }
+.logo-mark { width: 26px; height: 26px; border-radius: 7px; }
 .header { padding: 0 16px; display: flex; align-items: center; justify-content: space-between; height: 48px; line-height: 48px; }
 .header-left { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .ver { font-size: 12px; opacity: .65; white-space: nowrap; }

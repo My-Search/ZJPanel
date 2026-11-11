@@ -13,9 +13,9 @@
           </span>
         </div>
 
-        <a-row :gutter="12">
+        <a-row :gutter="12" class="apps-layout">
           <!-- 项目列表 -->
-          <a-col :span="7">
+          <a-col :span="7" class="proj-col">
             <a-empty v-if="!projects.length" description="未发现 compose 项目" />
             <div v-for="p in projects" :key="p.dir || p.id" class="proj-card" :class="{ active: selected?.dir === p.dir }" @click="select(p)">
               <div class="proj-name">{{ p.name }} <a-tag v-if="p.hasDecl" color="purple">声明</a-tag></div>
@@ -27,7 +27,7 @@
           </a-col>
 
           <!-- 项目详情 -->
-          <a-col :span="17">
+          <a-col :span="17" class="detail-col">
             <template v-if="selected">
               <a-card size="small" :title="'项目：' + selected.name" style="margin-bottom: 12px">
                 <template #extra>
@@ -539,4 +539,11 @@ onUnmounted(() => { clearInterval(timer); logsWs?.close(); closeExec() })
 .dir-list { max-height: 300px; overflow: auto; border: 1px solid #eee; border-radius: 6px; }
 .dir-item { display: flex; align-items: center; padding: 9px 14px; cursor: pointer; border-bottom: 1px solid #f5f5f5; }
 .dir-item:hover { background: #f0f5ff; }
+/* 移动端：项目列表与详情保持左右布局——列表变为固定高度横向滚动条带，详情占满其余宽度 */
+@media (max-width: 767px) {
+  .apps-layout { display: flex; flex-wrap: nowrap; }
+  .apps-layout > .ant-col { flex: 0 0 auto; }
+  .proj-col { width: 168px; max-width: 44vw; height: calc(100vh - 260px); overflow-y: auto; }
+  .detail-col { flex: 1 1 auto; width: auto; min-width: 0; }
+}
 </style>
