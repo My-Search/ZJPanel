@@ -48,6 +48,10 @@ html[data-theme='light'] .ant-table-thead > tr > th { background: #f8fafc; color
 html[data-theme='dark'] .ant-table-thead > tr > th { background: #1d1d1d; color: #a3a3a3; font-weight: 600; }
 .ant-btn { border-radius: 7px; }
 .ant-modal .ant-modal-content { border-radius: 12px; }
+/* 移动端抽屉侧栏：容器与菜单同色（仅导航抽屉，避免影响其它抽屉） */
+.nav-drawer .ant-drawer-content, .nav-drawer .ant-drawer-body { background: #001529; }
+html[data-theme='light'] .nav-drawer .ant-drawer-content,
+html[data-theme='light'] .nav-drawer .ant-drawer-body { background: #fff; }
 /* 窄屏：表格横向滚动而非撑破布局；弹窗/抽屉宽度不超过视口 */
 @media (max-width: 767px) {
   .ant-table-body, .ant-table-content { overflow-x: auto; }
