@@ -10,12 +10,13 @@
     </a-row>
 
     <a-card title="磁盘" size="small" style="margin-top: 12px">
-      <a-descriptions :column="2" size="small">
+      <a-descriptions v-if="(snap.disks || []).length" :column="2" size="small">
         <a-descriptions-item v-for="d in snap.disks || []" :key="d.mount" :label="d.mount">
           {{ fmtBytes(d.used) }} / {{ fmtBytes(d.total) }}（{{ d.usedPct?.toFixed(1) }}%）
           <a-progress :percent="d.usedPct" size="small" :show-info="false" style="width: 160px" :stroke-color="d.usedPct > 90 ? '#f5222d' : '#52c41a'" />
         </a-descriptions-item>
       </a-descriptions>
+      <a-empty v-else :image-style="{ height: '48px' }" description="暂无磁盘数据" style="padding: 12px 0" />
     </a-card>
   </a-card>
 </template>

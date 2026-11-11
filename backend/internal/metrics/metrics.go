@@ -159,23 +159,8 @@ func (s *Service) Snapshot() *Snapshot {
 	if snap == nil {
 		return &Snapshot{Time: time.Now()}
 	}
-	// 磁盘占用（挂载点去重）
-	seen := map[string]bool{}
-	snap.Disks = []Disk{}
-	if parts, err := disk.PartitionsWithContext(context2(), false); err == nil {
-		for _, p := range parts {
-			if seen[p.Mountpoint] {
-				continue
-			}
-			seen[p.Mountpoint] = true
-			if du, err := disk.UsageWithContext(context2(), p.Mountpoint); err == nil && du.Total > 0 {
-				snap.Disks = append(snap.Disks, Disk{
-					Device: p.Device, Mount: p.Mountpoint,
-					Total: du.Total, Used: du.Used, UsedPct: du.UsedPercent,
-				})
-			}
-		}
-	}
+	// 磁盘占用（容器 bind mount 兼容 + 设备去重，见 collectDisks）
+	snap.Disks = collectDisks(context2())
 	s.mu.RLock()
 	prev := s.last
 	s.mu.RUnlock()
@@ -204,3 +189,45 @@ var _ = runtime.GOOS
 var _ = slog.Info
 
 func context2() context.Context { return context.Background() }
+
+// collectDisks 采集真实文件系统的磁盘占用。
+// 容器（尤其 host/bind mount 部署）内 Partitions(false) 会把 bind mount 全部过滤、
+// 根分区又是 overlay，可能导致结果为空 → 这里改用 all=true 后按真实文件系统白名单过滤，
+// 同一设备只统计第一个挂载点（/ 与挂载 bind 同设备），仍为空时回退统计根分区。
+func collectDisks(ctx context.Context) []Disk {
+	realFS := map[string]bool{
+		"ext2": true, "ext3": true, "ext4": true, "xfs": true, "btrfs": true,
+		"zfs": true, "f2fs": true, "ntfs": true, "ntfs3": true, "vfat": true, "exfat": true,
+	}
+	seenDev := map[string]bool{}
+	disks := []Disk{}
+	appendDisk := func(p disk.PartitionStat) {
+		if seenDev[p.Device] {
+			return
+		}
+		du, err := disk.UsageWithContext(ctx, p.Mountpoint)
+		if err != nil || du.Total == 0 {
+			return
+		}
+		seenDev[p.Device] = true
+		disks = append(disks, Disk{
+			Device: p.Device, Mount: p.Mountpoint,
+			Total: du.Total, Used: du.Used, UsedPct: du.UsedPercent,
+		})
+	}
+	if parts, err := disk.PartitionsWithContext(ctx, true); err == nil {
+		for _, p := range parts {
+			if !realFS[p.Fstype] {
+				continue
+			}
+			appendDisk(p)
+		}
+	}
+	// 兜底：仍为空时至少统计根分区（如受限容器内挂载信息不可见）
+	if len(disks) == 0 {
+		if du, err := disk.UsageWithContext(ctx, "/"); err == nil && du.Total > 0 {
+			disks = append(disks, Disk{Device: du.Fstype, Mount: "/", Total: du.Total, Used: du.Used, UsedPct: du.UsedPercent})
+		}
+	}
+	return disks
+}

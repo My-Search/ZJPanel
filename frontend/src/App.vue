@@ -30,9 +30,9 @@ html[data-theme='light'] { background: #f5f7fa; color-scheme: light; }
 body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
 html[data-theme='light'] body { background: #f5f7fa; color: #1f1f1f; }
 html[data-theme='dark'] body { background: #141414; color: #e6e6e6; }
-/* 深色模式兜底：历史页面中写死的浅色内联/局部背景，统一压暗 */
-html[data-theme='dark'] pre[style*="#f6f6f6"],
-html[data-theme='dark'] pre[style*="background: #f6f6f6"] { background: #1f1f1f !important; color: #d9d9d9 !important; }
+/* 代码块：深浅主题适配（MCP 快速接入 JSON、证书 PEM 查看） */
+.code-block { background: #f6f6f6; padding: 10px; font-size: 12px; overflow: auto; border-radius: 6px; }
+html[data-theme='dark'] .code-block { background: #1f1f1f; color: #d9d9d9; }
 html[data-theme='dark'] .mode-card.active,
 html[data-theme='dark'] .provider-card.active,
 html[data-theme='dark'] .proj-card.active { background: #16243f !important; }

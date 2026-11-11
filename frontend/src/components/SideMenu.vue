@@ -5,7 +5,6 @@
     <a-menu-item key="/nginx"><template #icon><CodeOutlined /></template>Nginx</a-menu-item>
     <a-menu-item key="/terminal"><template #icon><TerminalIcon /></template>终端</a-menu-item>
     <a-menu-item key="/certs"><template #icon><SafetyCertificateOutlined /></template>证书</a-menu-item>
-    <a-menu-item key="/map"><template #icon><EnvironmentOutlined /></template>请求地图</a-menu-item>
     <a-menu-item key="/monitor"><template #icon><DashboardOutlined /></template>监控</a-menu-item>
     <a-menu-item key="/mcp"><template #icon><ApiOutlined /></template>MCP</a-menu-item>
     <a-menu-item key="/plugins"><template #icon><AppstoreAddOutlined /></template>插件</a-menu-item>
@@ -22,7 +21,7 @@ import { useTheme } from '../store/theme'
 import TerminalIcon from './icons/TerminalIcon.vue'
 import {
   AppstoreOutlined, ClusterOutlined, CodeOutlined,
-  SafetyCertificateOutlined, EnvironmentOutlined, DashboardOutlined,
+  SafetyCertificateOutlined, DashboardOutlined,
   ApiOutlined, AppstoreAddOutlined, SettingOutlined, ThunderboltOutlined,
 } from '@ant-design/icons-vue'
 

@@ -272,7 +272,7 @@
 
     <!-- 证书内容查看 -->
     <a-modal v-model:open="certViewOpen" :title="certViewKind === 'key' ? '私钥（PEM）' : '证书（PEM）'" :footer="null" :width="760">
-      <pre style="max-height: 420px; overflow: auto; font-size: 12px; background: #f6f6f6; padding: 10px">{{ certViewText }}</pre>
+      <pre class="code-block" style="max-height: 420px">{{ certViewText }}</pre>
     </a-modal>
 
     <!-- 任务运行日志（certd 式抽屉：历史 + 节点日志） -->

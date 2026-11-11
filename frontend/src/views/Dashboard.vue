@@ -4,7 +4,7 @@
       <a-col :span="6"><a-card size="small"><a-statistic title="CPU" :value="snap.cpu ?? 0" :precision="1" suffix="%" /></a-card></a-col>
       <a-col :span="6"><a-card size="small"><a-statistic title="内存" :value="snap.memPct ?? 0" :precision="1" suffix="%" /><div class="sub">{{ fmtBytes(snap.memUsed) }} / {{ fmtBytes(snap.memTotal) }}</div></a-card></a-col>
       <a-col :span="6"><a-card size="small"><a-statistic title="网络速率" :value="fmtBytes(snap.netRateOut ?? 0) + ' ↑ / ' + fmtBytes(snap.netRateIn ?? 0) + ' ↓'" /></a-card></a-col>
-      <a-col :span="6"><a-card size="small"><a-statistic title="运行时间" :value="uptimeText" /></a-card></a-col>
+      <a-col :span="6"><a-card size="small"><a-statistic title="磁盘" :value="mainDiskPct" :precision="1" suffix="%" /><div class="sub">{{ mainDiskLabel }}</div></a-card></a-col>
     </a-row>
 
     <a-row :gutter="16" style="margin-top: 16px">
@@ -46,6 +46,8 @@
           <p><b>主机名：</b>{{ snap.hostname || '-' }}</p>
           <p><b>系统：</b>{{ snap.os || '-' }}</p>
           <p><b>负载：</b>{{ snap.load1?.toFixed(2) }} / {{ snap.load5?.toFixed(2) }} / {{ snap.load15?.toFixed(2) }}</p>
+          <p><b>磁盘：</b>{{ disksSummary || '-' }}</p>
+          <p><b>运行时间：</b>{{ uptimeText }}</p>
           <p><b>面板版本：</b>{{ version }}</p>
         </a-card>
         <a-card title="快捷入口" size="small">
@@ -77,6 +79,19 @@ const uptimeText = computed(() => {
   const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60)
   return `${d}天 ${h}时 ${m}分`
 })
+
+// 磁盘：统计卡取第一个真实分区（通常即系统盘），明细进系统信息卡
+const disks = computed<any[]>(() => snap.value?.disks || [])
+const mainDiskPct = computed(() => disks.value[0]?.usedPct ?? 0)
+const mainDiskLabel = computed(() => {
+  const d = disks.value[0]
+  if (!d) return '采集中'
+  const mount = d.mount === '/' ? '系统盘' : d.mount
+  return `${mount} ${fmtBytes(d.used)} / ${fmtBytes(d.total)}`
+})
+const disksSummary = computed(() =>
+  disks.value.map(d => `${d.mount} ${(d.usedPct ?? 0).toFixed(1)}%`).join('，') || ''
+)
 
 const siteCols = [
   { title: '域名', dataIndex: 'domain', key: 'domain' },

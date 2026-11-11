@@ -31,7 +31,7 @@
     </a-card>
 
     <a-card title="快速接入（Claude / 任意 MCP 客户端）" size="small">
-      <pre style="background: #f6f6f6; padding: 10px; font-size: 12px; overflow: auto">{
+      <pre class="code-block">{
   "mcpServers": {
     "zjpanel": {
       "url": "{{ origin }}/mcp",
