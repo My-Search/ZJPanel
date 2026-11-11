@@ -164,15 +164,27 @@ const startSweep = () => {
 const enNames: Record<string, string> = { CN: 'China', US: 'United States', JP: 'Japan', KR: 'Korea', SG: 'Singapore', HK: 'Hong Kong', TW: 'Taiwan', DE: 'Germany', GB: 'United Kingdom', FR: 'France', RU: 'Russia', IN: 'India', CA: 'Canada', AU: 'Australia', BR: 'Brazil', NL: 'Netherlands', ID: 'Indonesia', TH: 'Thailand', VN: 'Vietnam', MY: 'Malaysia', PH: 'Philippines', IT: 'Italy', ES: 'Spain', TR: 'Turkey', UA: 'Ukraine' }
 const mapName = (c: string) => enNames[c] || c
 
+// 预加载：echarts（1.1MB chunk）与世界地图数据（1MB）在模块加载时即并行拉起，
+// 不等组件挂载——串行懒加载是「地图迟迟不出来」的另一根因。结果缓存复用。
+let preloadEcharts: Promise<any> | null = null
+let preloadGeo: Promise<any> | null = null
+const preload = () => {
+  if (!preloadEcharts) preloadEcharts = import('echarts')
+  if (!preloadGeo) {
+    preloadGeo = fetch('/map/world.json').then(r => r.json())
+      .then((geo) => { return geo })
+      .catch(() => { preloadGeo = null; return null }) // 失败允许重试
+  }
+}
+preload()
+
 const ensureChart = async () => {
   if (chart) return
   if (initPromise) return initPromise
   initPromise = (async () => {
-    const echarts = await import('echarts')
-    const res = await fetch('/map/world.json')
-    const geo = await res.json()
+    const [echarts, geo] = await Promise.all([preloadEcharts, preloadGeo])
     if (!mapBox.value || !active) return // 初始化期间页面已被切走
-    echarts.registerMap('world', geo as any)
+    if (geo) echarts.registerMap('world', geo as any)
     chart = echarts.init(mapBox.value)
   })().finally(() => { initPromise = null })
   return initPromise

@@ -29,7 +29,14 @@ func RegisterStatic(r *gin.Engine) {
 		}
 		// 精确文件存在 → 直接输出（避免 http.FileServer 对 index.html 的 301 规范化重定向）
 		if b, err := fs.ReadFile(sub, name); err == nil {
-			c.Header("Cache-Control", "no-cache")
+			// 带 hash 的静态资源（vite 产物）与地图数据可长期缓存：
+			// 内容变更时文件名/hash 必变，长缓存安全。地图此前每次访问都重下 ~1MB，
+			// 手机网络下「地图迟迟不出来」的根因之一。
+			if strings.HasPrefix(name, "assets/") || strings.HasPrefix(name, "map/") {
+				c.Header("Cache-Control", "public, max-age=31536000, immutable")
+			} else {
+				c.Header("Cache-Control", "no-cache")
+			}
 			http.ServeContent(c.Writer, c.Request, name, time.Now(), bytes.NewReader(b))
 			return
 		}
