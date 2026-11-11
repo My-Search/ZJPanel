@@ -23,6 +23,10 @@ const antdTheme = computed(() => ({
 
 <style>
 html, body, #app { height: 100%; margin: 0; }
+/* 深色优先兜底：CSS 加载完成前就不出现白底（夜间不闪眼）；
+   首屏主题引导脚本与 store/theme.ts 会按用户选择同步覆盖。 */
+html { background: #141414; color-scheme: dark; }
+html[data-theme='light'] { background: #f5f7fa; color-scheme: light; }
 body { font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
 html[data-theme='light'] body { background: #f5f7fa; color: #1f1f1f; }
 html[data-theme='dark'] body { background: #141414; color: #e6e6e6; }
