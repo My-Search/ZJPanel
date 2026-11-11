@@ -3,7 +3,7 @@
     <a-menu-item key="/dashboard"><template #icon><AppstoreOutlined /></template>仪表盘</a-menu-item>
     <a-menu-item key="/apps"><template #icon><ClusterOutlined /></template>应用</a-menu-item>
     <a-menu-item key="/nginx"><template #icon><CodeOutlined /></template>Nginx</a-menu-item>
-    <a-menu-item key="/terminal"><template #icon><CodeSandboxOutlined /></template>终端</a-menu-item>
+    <a-menu-item key="/terminal"><template #icon><TerminalIcon /></template>终端</a-menu-item>
     <a-menu-item key="/certs"><template #icon><SafetyCertificateOutlined /></template>证书</a-menu-item>
     <a-menu-item key="/map"><template #icon><EnvironmentOutlined /></template>请求地图</a-menu-item>
     <a-menu-item key="/monitor"><template #icon><DashboardOutlined /></template>监控</a-menu-item>
@@ -19,9 +19,10 @@
 
 <script setup lang="ts">
 import { useTheme } from '../store/theme'
+import TerminalIcon from './icons/TerminalIcon.vue'
 import {
   AppstoreOutlined, ClusterOutlined, CodeOutlined,
-  CodeSandboxOutlined, SafetyCertificateOutlined, EnvironmentOutlined, DashboardOutlined,
+  SafetyCertificateOutlined, EnvironmentOutlined, DashboardOutlined,
   ApiOutlined, AppstoreAddOutlined, SettingOutlined, ThunderboltOutlined,
 } from '@ant-design/icons-vue'
 
