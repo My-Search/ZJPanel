@@ -9,10 +9,19 @@
     </a-row>
 
     <a-row :gutter="16" style="margin-top: 16px">
+      <a-col :span="24">
+        <a-card title="请求地图" size="small">
+          <template #extra><router-link to="/map" class="map-link">完整地图 →</router-link></template>
+          <RequestMap compact :height="360" />
+        </a-card>
+      </a-col>
+    </a-row>
+
+    <a-row :gutter="16" style="margin-top: 16px">
       <a-col :span="14">
         <a-card title="站点状态" size="small">
           <template #extra><a-tag :color="nginxRunning ? 'green' : 'red'">Nginx {{ nginxRunning ? '运行中' : '未运行' }}</a-tag></template>
-          <a-table :data-source="sites" :columns="siteCols" size="small" :pagination="false" row-key="domain">
+          <a-table :data-source="sites" :columns="siteCols" size="small" :pagination="false" row-key="domain" :scroll="{ x: 520 }">
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'status'">
                 <a-tag :color="record.check?.status === 'online' ? 'green' : record.check?.status === 'offline' ? 'red' : 'orange'">
@@ -56,6 +65,7 @@
 <script setup lang="ts">
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
 import { get, wsTopic, fmtBytes } from '../api'
+import RequestMap from '../components/RequestMap.vue'
 
 const snap = ref<any>({})
 const sites = ref<any[]>([])
@@ -105,4 +115,5 @@ onUnmounted(() => { stopWs?.(); clearInterval(timer) })
 
 <style scoped>
 .sub { color: #999; font-size: 12px; }
+.map-link { font-size: 12px; }
 </style>

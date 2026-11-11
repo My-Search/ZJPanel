@@ -3,7 +3,7 @@
     <a-alert v-if="!available" type="warning" show-icon message="Docker 不可用（检查 docker.sock 挂载 / DOCKER_HOST 环境变量）" style="margin-bottom: 12px" />
     <a-tabs v-model:activeKey="tab">
       <a-tab-pane key="containers" tab="容器">
-        <a-table :data-source="containers" :columns="containerCols" size="small" row-key="id" :pagination="false" :scroll="{ y: 460 }">
+        <a-table :data-source="containers" :columns="containerCols" size="small" row-key="id" :pagination="false" :scroll="{ x: 900, y: 460 }">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'name'">{{ (record.name || '').replace('/', '') }}</template>
             <template v-else-if="column.key === 'state'">
@@ -34,7 +34,7 @@
           <a-input v-model:value="pullRef" placeholder="镜像名:tag，如 redis:7" style="width: 300px" />
           <a-button type="primary" @click="doPull">拉取镜像</a-button>
         </a-space>
-        <a-table :data-source="images" :columns="imageCols" size="small" row-key="id" :pagination="false" :scroll="{ y: 440 }">
+        <a-table :data-source="images" :columns="imageCols" size="small" row-key="id" :pagination="false" :scroll="{ x: 720, y: 440 }">
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'tags'">
               <a-tag v-for="t in record.tags.slice(0, 3)" :key="t">{{ t }}</a-tag>
@@ -50,11 +50,11 @@
       </a-tab-pane>
 
       <a-tab-pane key="networks" tab="网络">
-        <a-table :data-source="networks" :columns="netCols" size="small" row-key="id" :pagination="false" />
+        <a-table :data-source="networks" :columns="netCols" size="small" row-key="id" :pagination="false" :scroll="{ x: 700 }" />
       </a-tab-pane>
 
       <a-tab-pane key="volumes" tab="卷">
-        <a-table :data-source="volumes" :columns="volCols" size="small" row-key="name" :pagination="false" />
+        <a-table :data-source="volumes" :columns="volCols" size="small" row-key="name" :pagination="false" :scroll="{ x: 700 }" />
       </a-tab-pane>
     </a-tabs>
 

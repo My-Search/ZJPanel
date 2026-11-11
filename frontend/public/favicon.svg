@@ -1,36 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#3b5bdb"/>
-      <stop offset=".55" stop-color="#4c6ef5"/>
-      <stop offset="1" stop-color="#7048e8"/>
+    <linearGradient id="zjp-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0.0" stop-color="#1e40af"/>
+      <stop offset="0.52" stop-color="#2563eb"/>
+      <stop offset="1.0" stop-color="#0ea5e9"/>
     </linearGradient>
-    <linearGradient id="flame" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffd43b"/>
-      <stop offset="1" stop-color="#ff922b"/>
+    <linearGradient id="zjp-mark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dbeafe"/>
+    </linearGradient>
+    <linearGradient id="zjp-gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
     </linearGradient>
   </defs>
-  <!-- 圆角方块底 -->
-  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#bg)"/>
-  <rect x="2" y="2" width="60" height="60" rx="16" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="1.5"/>
-  <!-- 火箭（斜向 45°，指向右上） -->
-  <g transform="rotate(45 32 32)">
-    <!-- 机身 -->
-    <path d="M32 12c6.5 5 9.5 12.5 9.5 20.5 0 3.4-.6 6.6-1.7 9.5h-15.6a26.6 26.6 0 0 1-1.7-9.5C22.5 24.5 25.5 17 32 12z" fill="#f8f9fa"/>
-    <!-- 舷窗 -->
-    <circle cx="32" cy="28" r="4.6" fill="#4c6ef5"/>
-    <circle cx="32" cy="28" r="3.1" fill="#dbe4ff"/>
-    <!-- 左翼 -->
-    <path d="M22.6 33.5c-2.6 1.9-4.3 5.3-4.6 9.4l7.6-2.3z" fill="#ced4da"/>
-    <!-- 右翼 -->
-    <path d="M41.4 33.5c2.6 1.9 4.3 5.3 4.6 9.4l-7.6-2.3z" fill="#ced4da"/>
-    <!-- 尾焰 -->
-    <path d="M28.6 43.5c0 4 1.5 6.5 3.4 9 1.9-2.5 3.4-5 3.4-9z" fill="url(#flame)"/>
-  </g>
-  <!-- 速度线 -->
-  <g stroke="rgba(255,255,255,.55)" stroke-width="2.4" stroke-linecap="round">
-    <line x1="12" y1="46" x2="19" y2="46"/>
-    <line x1="9" y1="52" x2="17" y2="52"/>
-    <line x1="14" y1="58" x2="20" y2="58"/>
-  </g>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#zjp-bg)"/>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#zjp-gloss)"/>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="1.4"/>
+  <path d="M19 21 H45 L19 43 H45" fill="none" stroke="url(#zjp-mark)" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

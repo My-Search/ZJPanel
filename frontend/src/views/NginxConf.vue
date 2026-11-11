@@ -1,7 +1,7 @@
 <template>
   <a-card size="small" :body-style="{ padding: '12px' }">
     <a-space style="margin-bottom: 12px" wrap>
-      <a-select v-model:value="root" style="width: 150px" :options="rootOpts" @change="loadTree" />
+      <a-select v-model:value="root" style="width: 150px" :options="rootOpts" @change="onRootChange" />
       <a-button @click="testNginx">nginx -t</a-button>
       <a-button type="primary" ghost @click="reloadNginx">重载 nginx</a-button>
       <a-tag :color="running ? 'green' : 'red'">{{ running ? 'nginx 运行中' : 'nginx 未运行' }}</a-tag>
@@ -10,12 +10,13 @@
     </a-space>
 
     <a-row :gutter="12">
-      <a-col :span="7" style="max-height: 620px; overflow: auto">
+      <a-col :span="7" class="tree-col">
         <a-tree :tree-data="tree" :load-data="onLoadData" @select="onSelect" block-node />
       </a-col>
-      <a-col :span="17">
-        <div style="height: 620px; border: 1px solid #eee">
-          <AceEditor v-model="content" :mode="mode" />
+      <a-col :span="17" class="editor-col">
+        <div class="editor-wrap">
+          <AceEditor v-if="currentPath" v-model="content" :mode="mode" />
+          <a-empty v-else description="从左侧目录选择一个文件查看 / 编辑" class="editor-empty" />
         </div>
       </a-col>
     </a-row>
@@ -41,13 +42,11 @@ const rootOpts = [
 const tree = ref<any[]>([])
 const content = ref('')
 const currentPath = ref('')
-const currentDir = ref(false)
 const running = ref(false)
 const outOpen = ref(false)
 const outContent = ref('')
 
-const editorMode = () => {
-  const p = currentPath.value || ''
+const editorMode = (p: string) => {
   if (p.endsWith('.conf')) return 'nginx'
   if (p.endsWith('.html')) return 'html'
   if (p.endsWith('.yml') || p.endsWith('.yaml')) return 'yaml'
@@ -56,30 +55,63 @@ const editorMode = () => {
 }
 const mode = ref('nginx')
 
-const loadTree = async (path = '') => {
-  const nodes = await get('/api/nginx/files', { root: root.value, path })
-  return (nodes || []).map((n: any) => ({
-    title: n.name,
-    key: `${root.value}:${n.path}`,
-    isLeaf: !n.dir,
-    path: n.path,
-  }))
+const toNodes = (nodes: any[]) => (nodes || []).map((n: any) => ({
+  title: n.name,
+  key: `${root.value}:${n.path}`,
+  isLeaf: !n.dir,
+  path: n.path,
+}))
+
+const loadTree = async (path = '') => toNodes(await get('/api/nginx/files', { root: root.value, path }))
+
+// 切换根目录：旧目录的文件路径不再有效，清空编辑态后重建树
+const onRootChange = async () => {
+  currentPath.value = ''
+  content.value = ''
+  tree.value = await loadTree()
 }
 
+// 将已加载的子节点按 key 合并进新树，避免刷新时收起用户已展开的目录
+const mergeTree = (fresh: any[], old: any[]): any[] => {
+  const loaded = new Map<string, any[]>()
+  const collect = (nodes: any[]) => {
+    for (const n of nodes) {
+      if (n.children) { loaded.set(n.key, n.children); collect(n.children) }
+    }
+  }
+  collect(old)
+  const apply = (nodes: any[]): any[] => nodes.map(n => {
+    const kids = loaded.get(n.key)
+    return kids ? { ...n, children: apply(kids) } : n
+  })
+  return apply(fresh)
+}
+
+// 页面激活刷新目录树与运行状态，保留当前打开的文件、未保存内容与展开的目录
+const loadPage = async () => {
+  tree.value = mergeTree(await loadTree(), tree.value)
+  try { running.value = (await get<any>('/api/nginx/status')).running } catch { /* ignore */ }
+}
+
+/**
+ * antdv 4 的 loadData 收到的是节点快照（eventData），直接改 node.children 不会更新树；
+ * 必须写回 node.dataRef（指向 treeData 中的原始响应式对象）并整体替换数组触发重渲染。
+ */
 const onLoadData = async (node: any) => {
+  if (node.dataRef?.children) return
   const kids = await loadTree(node.path)
-  node.children = kids
+  if (node.dataRef) node.dataRef.children = kids
+  tree.value = [...tree.value]
 }
 
 const onSelect = async (_keys: any[], e: any) => {
   const node = e.node
-  if (node.isLeaf) {
-    currentPath.value = node.path
-    currentDir.value = false
-    const d = await get('/api/nginx/file', { root: root.value, path: node.path })
-    content.value = d.content || ''
-    mode.value = editorMode()
-  }
+  if (!node?.isLeaf) return
+  const path = node.dataRef?.path || node.path
+  currentPath.value = path
+  const d = await get('/api/nginx/file', { root: root.value, path })
+  content.value = d.content || ''
+  mode.value = editorMode(currentPath.value)
 }
 
 const saveFile = async () => {
@@ -101,14 +133,17 @@ const reloadNginx = async () => {
   else message.success(r.output || '已重载')
 }
 
-const loadPage = async () => {
-  tree.value = await loadTree()
-  try { running.value = (await get<any>('/api/nginx/status')).running } catch { /* ignore */ }
-}
 onMounted(loadPage)
 onActivated(loadPage)
 </script>
 
 <style scoped>
 .dim { color: #999; font-size: 12px; }
+.tree-col { max-height: 620px; overflow: auto; }
+.editor-wrap { height: 620px; border: 1px solid #eee; }
+.editor-empty { height: 100%; display: flex; flex-direction: column; justify-content: center; }
+@media (max-width: 767px) {
+  .tree-col { max-height: 300px; }
+  .editor-wrap { height: 420px; }
+}
 </style>

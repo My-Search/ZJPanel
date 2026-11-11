@@ -67,7 +67,7 @@ html[data-theme='light'] .nav-drawer .ant-drawer-body { background: #fff; }
   /* 栅格列窄屏全宽堆叠（页面向下排布，不出横向滚动） */
   .ant-row { row-gap: 10px; }
   .ant-col { max-width: 100% !important; }
-  .ant-col[class*='ant-col-']:not(.ant-col-24):not(.proj-col):not(.detail-col) { flex: 0 0 100% !important; width: 100% !important; }
+  .ant-col[class*='ant-col-']:not(.ant-col-24) { flex: 0 0 100% !important; width: 100% !important; }
   /* 描述列表、标签组换行防溢出 */
   .ant-descriptions-item { padding-bottom: 8px; }
   .ant-space { flex-wrap: wrap; }

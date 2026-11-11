@@ -62,7 +62,7 @@
                 </template>
                 <a-alert v-if="orphanList.length" type="warning" show-icon style="margin-bottom: 8px"
                   :message="`面板存在但声明文件未包含：${orphanList.join('、')}（点击「按声明同步」或「立即写出声明文件」可修复）`" />
-                <a-table :data-source="projSites" :columns="siteCols" size="small" row-key="id" :pagination="false">
+                <a-table :data-source="projSites" :columns="siteCols" size="small" row-key="id" :pagination="false" :scroll="{ x: 700 }">
                   <template #emptyText>
                     <a-empty :description="runningCount(selected) === 0 ? '项目未运行，暂无关联网站数据（点上方「up」启动）' : '该项目还没有关联网站'" style="margin: 24px 0" />
                   </template>
@@ -89,7 +89,7 @@
 
               <!-- 项目容器 -->
               <a-card size="small" title="容器">
-                <a-table :data-source="projContainers" :columns="containerCols" size="small" row-key="id" :pagination="false">
+                <a-table :data-source="projContainers" :columns="containerCols" size="small" row-key="id" :pagination="false" :scroll="{ x: 880 }">
                   <template #emptyText>
                     <a-empty :description="runningCount(selected) === 0 ? '项目未启动（点上方「up」启动 compose 服务）' : '未找到带该项目标签的容器'" style="margin: 24px 0" />
                   </template>
@@ -540,11 +540,12 @@ onUnmounted(() => { clearInterval(timer); logsWs?.close(); closeExec() })
 .dir-list { max-height: 300px; overflow: auto; border: 1px solid #eee; border-radius: 6px; }
 .dir-item { display: flex; align-items: center; padding: 9px 14px; cursor: pointer; border-bottom: 1px solid #f5f5f5; }
 .dir-item:hover { background: #f0f5ff; }
-/* 移动端：项目列表与详情保持左右布局——列表变为固定高度横向滚动条带，详情占满其余宽度 */
+/* 移动端：项目列表压缩成横向滑动的卡片带，详情占满宽度（上下布局，不出横向溢出） */
 @media (max-width: 767px) {
-  .apps-layout { display: flex; flex-wrap: nowrap; }
-  .apps-layout > .ant-col { flex: 0 0 auto; }
-  .proj-col { width: 168px; max-width: 44vw; height: calc(100vh - 260px); overflow-y: auto; }
-  .detail-col { flex: 1 1 auto; width: auto; min-width: 0; }
+  .apps-layout { display: block; }
+  .proj-col { width: 100%; max-width: 100%; display: flex; gap: 8px; overflow-x: auto; padding-bottom: 6px; }
+  .proj-col .proj-card { flex: 0 0 74%; max-width: 74%; margin-bottom: 0; }
+  .proj-col .ant-empty { flex: 0 0 100%; }
+  .detail-col { width: 100%; max-width: 100%; margin-top: 10px; }
 }
 </style>

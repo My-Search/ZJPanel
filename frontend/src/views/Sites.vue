@@ -3,7 +3,7 @@
     <template #extra>
       <a-button type="primary" @click="openCreate">新建站点</a-button>
     </template>
-    <a-table :data-source="sites" :columns="cols" size="small" row-key="id" :pagination="false">
+    <a-table :data-source="sites" :columns="cols" size="small" row-key="id" :pagination="false" :scroll="{ x: 1100 }">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'status'">
           <a-tag v-if="record.maintenance" color="orange">维护中</a-tag>
