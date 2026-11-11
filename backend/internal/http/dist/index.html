@@ -1,14 +1,51 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark" style="color-scheme: dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ZJPanel</title>
-    <script type="module" crossorigin src="/assets/index-_n9t8qlj.js"></script>
+    <title>ZJPanel · 一体化运维面板</title>
+    <meta name="description" content="ZJPanel 一体化站点 · 应用 · 证书运维面板" />
+    <!--
+      首屏主题引导：必须在任何 CSS / 业务 JS 之前同步执行，避免夜间打开/刷新时
+      先以浏览器默认白底渲染再切深色（闪白）。默认深色优先，用户显式选择浅色才用浅色。
+      同时设置 color-scheme 让浏览器原生控件、表单、滚动条一起变暗。
+    -->
+    <script>
+      (function () {
+        // 与 store/theme.ts 的 default + sync 保持严格一致：
+        // 未设置/深色 → 深色；跟随系统 → 看 prefers-color-scheme；仅显式浅色 → 浅色。
+        try {
+          var saved = localStorage.getItem('zjpanel-theme')
+          var dark = !saved || saved === 'dark' ||
+            (saved === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+          var theme = dark ? 'dark' : 'light'
+          var el = document.documentElement
+          el.setAttribute('data-theme', theme)
+          el.style.colorScheme = theme
+          // 内联背景零依赖生效：CSS 尚未加载时也不会露出浏览器默认白底
+          el.style.backgroundColor = dark ? '#141414' : '#f5f7fa'
+          var meta = document.querySelector('meta[name="theme-color"]')
+          if (meta) meta.setAttribute('content', dark ? '#141414' : '#ffffff')
+        } catch (e) { /* localStorage 不可用（隐私模式）时保持 HTML 上的深色兜底 */ }
+      })()
+    </script>
+    <!-- 企业级品牌图标：SVG 主标 + 多尺寸位图（旧版/桌面/移动端/桌面快捷方式） -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+    <meta name="theme-color" content="#141414" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="ZJPanel" />
+    <script type="module" crossorigin src="/assets/index-BZjJSred.js"></script>
     <link rel="modulepreload" crossorigin href="/assets/rolldown-runtime-XKyaHtl9.js">
-    <link rel="modulepreload" crossorigin href="/assets/runtime-core.esm-bundler-u8dkqYE8.js">
-    <link rel="modulepreload" crossorigin href="/assets/api-DlNe-2V9.js">
-    <link rel="stylesheet" crossorigin href="/assets/index-BJny-owr.css">
+    <link rel="modulepreload" crossorigin href="/assets/runtime-core.esm-bundler-DtibMblc.js">
+    <link rel="modulepreload" crossorigin href="/assets/api-C58lE5fG.js">
+    <link rel="modulepreload" crossorigin href="/assets/pinia-DF97nLa3.js">
+    <link rel="stylesheet" crossorigin href="/assets/index-1XMbNToV.css">
   </head>
   <body>
     <div id="app"></div>

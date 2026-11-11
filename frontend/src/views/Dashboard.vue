@@ -155,7 +155,7 @@ onUnmounted(() => { stopWs?.(); clearInterval(timer) })
 .stat-card { position: relative; overflow: hidden; height: 100%; }
 .stat-card :deep(.ant-card-body) { height: 100%; box-sizing: border-box; }
 .stat-icon {
-  position: absolute; right: 8px; bottom: 2px; font-size: 52px;
+  position: absolute; right: 6px; bottom: 4px; font-size: 44px;
   opacity: .08; pointer-events: none;
 }
 html[data-theme='dark'] .stat-icon { opacity: .12; }

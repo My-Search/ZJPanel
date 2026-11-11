@@ -198,14 +198,17 @@ const renderMap = async () => {
   const maxCount = Math.max(1, ...countries.map((c: any) => c.count))
   const shades = ['#dbe9ff', '#9dbdff', '#5c8dff', '#2f5fe0', '#1c3fd6']
   const colorFor = (n: number) => shades[Math.min(shades.length - 1, Math.floor((n / maxCount) * shades.length))]
-  // 实时流向：来源黄点 + 飞线（宽度/透明度随请求量增强），方向 = 来源 → 服务器
+  // 实时流向：来源黄点 + 数据流点（沿线流动的光点带拖尾，请求量越大点越大、流动越快），方向 = 来源 → 服务器
   const maxFlow = Math.max(1, ...liveFlows.value.map(f => f.count))
   const flows = realtime.value
-    ? liveFlows.value.map(f => ({
-        coords: f.coords,
-        lineStyle: { width: 1 + (f.count / maxFlow) * 2.5, opacity: 0.35 + (f.count / maxFlow) * 0.45 },
-        effect: { symbolSize: 5 + (f.count / maxFlow) * 4 },
-      }))
+    ? liveFlows.value.map(f => {
+        const k = f.count / maxFlow
+        return {
+          coords: f.coords,
+          lineStyle: { width: 1 + k * 2, opacity: 0.3 + k * 0.4 },
+          effect: { period: 4 - k * 1.8, symbolSize: 6 + k * 5 },
+        }
+      })
     : []
   const srcPoints = realtime.value
     ? liveFlows.value.map(f => ({
@@ -226,9 +229,10 @@ const renderMap = async () => {
     },
     series: [
       {
+        // 数据流：沿线流动的圆形光点带短拖尾（数据流点效果）
         type: 'lines', coordinateSystem: 'geo', zlevel: 2,
-        effect: { show: true, period: 4, trailLength: 0.5, symbol: 'arrow', symbolSize: 6, color: '#ffd54d' },
-        lineStyle: { color: '#4f7cff', width: 1.5, opacity: 0.4, curveness: 0.35 },
+        effect: { show: true, period: 4, trailLength: 0.2, symbol: 'circle', symbolSize: 6, color: '#ffd54d' },
+        lineStyle: { color: '#4f7cff', width: 1.2, opacity: 0.35, curveness: 0.35 },
         data: flows,
       },
       {

@@ -77,7 +77,7 @@ html[data-theme='light'] .nav-drawer .ant-drawer-body { background: #fff; }
   .ant-space { flex-wrap: wrap; }
   .ant-statistic-title { font-size: 12px; }
   .ant-statistic-content { font-size: 16px; }
-  /* 统计卡右侧背景水印图标：窄屏卡片变高后右下角显得偏沉，改为垂直居中 */
-  .stat-icon { right: 10px !important; top: 50% !important; bottom: auto !important; transform: translateY(-50%) !important; }
+  /* 统计卡右侧背景水印图标：窄屏卡片变高后缩小并垂直居中，避免压住文字 */
+  .stat-icon { right: 6px !important; top: 50% !important; bottom: auto !important; transform: translateY(-50%) !important; font-size: 40px !important; }
 }
 </style>

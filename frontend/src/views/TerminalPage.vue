@@ -174,8 +174,11 @@ const openSession = async (t: Tab, createMsg: Record<string, any> | null) => {
 }
 
 const addTab = (label: string) => {
-  const t: Tab = { id: Math.random().toString(36).slice(2), label, sessionId: null, ws: null, term: null, fit: null, created: false, stats: null, statsTimer: null }
-  tabs.value.push(t)
+  // push 后从响应式数组取回代理对象：直接用原始对象时 t.stats 赋值不触发更新，
+  // 状态栏会一直停在「资源采集中」（切标签页等偶然重渲染才显示）
+  const raw: Tab = { id: Math.random().toString(36).slice(2), label, sessionId: null, ws: null, term: null, fit: null, created: false, stats: null, statsTimer: null }
+  tabs.value.push(raw)
+  const t = tabs.value[tabs.value.length - 1]
   activeTab.value = t.id
   return t
 }

@@ -9,7 +9,7 @@ const router = createRouter({
       path: '/',
       component: () => import('../layout/MainLayout.vue'),
       children: [
-        { path: '', redirect: '/apps' },
+        { path: '', redirect: '/dashboard' },
         { path: 'apps', component: () => import('../views/AppsPage.vue') },
         { path: 'sites', redirect: '/apps' },
         { path: 'compose', redirect: '/apps' },
