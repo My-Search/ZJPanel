@@ -27,6 +27,7 @@ type Session struct {
 	mu      sync.Mutex
 	buf     *RingBuf
 	pty     ptyHandle
+	stats   *StatsCollector
 	clients map[Client]struct{}
 	lastAct time.Time
 	closed  bool
@@ -128,7 +129,37 @@ func (s *Session) Close() {
 	if p != nil && !already {
 		p.Close()
 	}
+	s.StopStats()
 	s.notifyClosed()
+}
+
+// SetStats 挂载状态栏采集器（EnableStats 调用）。
+func (s *Session) SetStats(c *StatsCollector) {
+	s.mu.Lock()
+	s.stats = c
+	s.mu.Unlock()
+}
+
+// StopStats 停止并摘除状态栏采集器。
+func (s *Session) StopStats() {
+	s.mu.Lock()
+	c := s.stats
+	s.stats = nil
+	s.mu.Unlock()
+	if c != nil {
+		c.Stop()
+	}
+}
+
+// Stats 最近一次机器资源采样（终端底部状态栏；未启用或尚未采到时 ok=false）。
+func (s *Session) Stats() (HostStats, bool) {
+	s.mu.Lock()
+	c := s.stats
+	s.mu.Unlock()
+	if c == nil {
+		return HostStats{}, false
+	}
+	return c.Last()
 }
 
 func (s *Session) isClosed() bool {
@@ -204,6 +235,7 @@ func (m *Manager) CreateSSH(hostID uint) (*Session, error) {
 	m.mu.Lock()
 	m.sessions[sess.ID] = sess
 	m.mu.Unlock()
+	m.EnableStats(sess) // 底部状态栏：采集远程机器资源
 	return sess, nil
 }
 
@@ -223,13 +255,18 @@ func (m *Manager) CreateLocal() (*Session, error) {
 	m.mu.Lock()
 	m.sessions[sess.ID] = sess
 	m.mu.Unlock()
+	m.EnableStats(sess) // 底部状态栏：采集面板宿主机资源
 	return sess, nil
 }
 
 func (m *Manager) remove(id string) {
 	m.mu.Lock()
+	sess := m.sessions[id]
 	delete(m.sessions, id)
 	m.mu.Unlock()
+	if sess != nil {
+		sess.StopStats() // 会话移除时停止状态栏采集
+	}
 }
 
 func (m *Manager) Get(id string) *Session {

@@ -115,6 +115,17 @@ func (s *Server) wsTerminal(c *gin.Context) {
 			if sess != nil {
 				_ = sess.Resize(int(numOf(msg["cols"])), int(numOf(msg["rows"])))
 			}
+		case "stats":
+			// 终端底部状态栏：返回所连机器最近一次资源采样
+			if sess == nil {
+				continue
+			}
+			if st, ok := sess.Stats(); ok {
+				b, _ := json.Marshal(map[string]any{"type": "stats", "sessionId": sess.ID, "stats": st})
+				_ = tc.WriteText(string(b))
+			} else {
+				_ = tc.WriteText(`{"type":"stats","sessionId":"` + sess.ID + `","stats":null}`)
+			}
 		}
 	}
 }

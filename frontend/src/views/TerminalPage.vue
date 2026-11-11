@@ -20,6 +20,7 @@
     <a-tabs v-model:activeKey="activeTab" type="editable-card" hide-add size="small" @edit="closeTab">
       <a-tab-pane v-for="t in tabs" :key="t.id" :tab="t.label" class="term-pane">
         <div :ref="el => setTermBox(t.id, el)" class="term-box" :style="{ background: boxBg() }"></div>
+        <StatusStrip :stats="t.stats" />
       </a-tab-pane>
     </a-tabs>
 
@@ -72,11 +73,18 @@ import { message } from 'ant-design-vue'
 import { get, post, del } from '../api'
 import { DownOutlined } from '@ant-design/icons-vue'
 import { useTermTheme } from '../utils/termTheme'
+import StatusStrip from '../components/StatusStrip.vue'
 import type { Terminal as XtermTerminal } from '@xterm/xterm'
 
 const { ui, current: termTheme, boxBg } = useTermTheme()
 
-interface Tab { id: string; label: string; sessionId: string | null; ws: WebSocket | null; term: XtermTerminal | null; fit: { fit: () => void } | null; created: boolean }
+interface TermStats {
+  cpu: number; mem: number; memTxt: string
+  disk: number; diskTxt: string
+  netIn: number; netOut: number; load1: number
+}
+
+interface Tab { id: string; label: string; sessionId: string | null; ws: WebSocket | null; term: XtermTerminal | null; fit: { fit: () => void } | null; created: boolean; stats: TermStats | null; statsTimer: any }
 
 const hosts = ref<any[]>([])
 const tabs = ref<Tab[]>([])
@@ -146,8 +154,16 @@ const openSession = async (t: Tab, createMsg: Record<string, any> | null) => {
       case 'closed':
         term.write('\r\n\x1b[31m[会话已关闭]\x1b[0m\r\n')
         break
+      case 'stats':
+        // 底部状态栏数据（5s 轮询响应）
+        t.stats = msg.stats || null
+        break
     }
   }
+  // 状态栏轮询：连接建立后每 5s 拉一次（与后端采集周期一致）
+  const pullStats = () => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'stats' })) }
+  setTimeout(pullStats, 600)
+  t.statsTimer = setInterval(pullStats, 5000)
   term.onData((d: string) => {
     if (ws.readyState === 1) ws.send(new TextEncoder().encode(d))
   })
@@ -158,7 +174,7 @@ const openSession = async (t: Tab, createMsg: Record<string, any> | null) => {
 }
 
 const addTab = (label: string) => {
-  const t: Tab = { id: Math.random().toString(36).slice(2), label, sessionId: null, ws: null, term: null, fit: null, created: false }
+  const t: Tab = { id: Math.random().toString(36).slice(2), label, sessionId: null, ws: null, term: null, fit: null, created: false, stats: null, statsTimer: null }
   tabs.value.push(t)
   activeTab.value = t.id
   return t
@@ -176,6 +192,7 @@ const closeTab = async (id: string | number, action: string) => {
   if (action === 'remove') {
     const t = tabs.value.find(x => x.id === id)
     if (!t) return
+    if (t.statsTimer) clearInterval(t.statsTimer)
     t.ws?.close()
     if (t.sessionId) await fetch(`/api/terminal/sessions/${t.sessionId}`, { method: 'DELETE' })
     t.term?.dispose()
@@ -239,7 +256,7 @@ onActivated(() => { window.addEventListener('resize', fitAll); fitAll() })
 onDeactivated(() => window.removeEventListener('resize', fitAll))
 onUnmounted(() => {
   window.removeEventListener('resize', fitAll)
-  tabs.value.forEach(t => t.ws?.close())
+  tabs.value.forEach(t => { t.ws?.close(); if (t.statsTimer) clearInterval(t.statsTimer) })
 })
 
 // 主题/窗口变化：同步所有已打开终端的配色并重新适配尺寸
@@ -252,8 +269,10 @@ watch(() => ui.isDark, () => {
 
 <style scoped>
 .dim { color: #999; font-size: 12px; }
-.term-pane { height: min(60vh, 520px); min-height: 320px; }
-.term-box { height: 100%; }
+.term-pane { height: min(60vh, 520px); min-height: 320px; display: flex; flex-direction: column; }
+.term-pane :deep(.ant-tabs-tab-pane) { display: flex; flex-direction: column; height: 100%; }
+.term-box { flex: 1; min-height: 0; }
+.status-strip { flex: none; }
 @media (max-width: 767px) {
   .term-pane { height: 60vh; min-height: 260px; }
 }
