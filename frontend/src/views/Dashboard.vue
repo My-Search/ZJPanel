@@ -1,10 +1,34 @@
 <template>
   <div>
     <a-row :gutter="16">
-      <a-col :span="6"><a-card size="small"><a-statistic title="CPU" :value="snap.cpu ?? 0" :precision="1" suffix="%" /></a-card></a-col>
-      <a-col :span="6"><a-card size="small"><a-statistic title="内存" :value="snap.memPct ?? 0" :precision="1" suffix="%" /><div class="sub">{{ fmtBytes(snap.memUsed) }} / {{ fmtBytes(snap.memTotal) }}</div></a-card></a-col>
-      <a-col :span="6"><a-card size="small"><a-statistic title="网络速率" :value="fmtBytes(snap.netRateOut ?? 0) + ' ↑ / ' + fmtBytes(snap.netRateIn ?? 0) + ' ↓'" /></a-card></a-col>
-      <a-col :span="6"><a-card size="small"><a-statistic title="磁盘" :value="mainDiskPct" :precision="1" suffix="%" /><div class="sub">{{ mainDiskLabel }}</div></a-card></a-col>
+      <a-col :span="6">
+        <a-card size="small" class="stat-card">
+          <a-statistic title="CPU" :value="snap.cpu ?? 0" :precision="1" suffix="%" />
+          <div class="sub">负载 {{ snap.load1?.toFixed(2) || '0.00' }}</div>
+          <ThunderboltOutlined class="stat-icon" />
+        </a-card>
+      </a-col>
+      <a-col :span="6">
+        <a-card size="small" class="stat-card">
+          <a-statistic title="内存" :value="snap.memPct ?? 0" :precision="1" suffix="%" />
+          <div class="sub">{{ fmtBytes(snap.memUsed) }} / {{ fmtBytes(snap.memTotal) }}</div>
+          <DatabaseOutlined class="stat-icon" />
+        </a-card>
+      </a-col>
+      <a-col :span="6">
+        <a-card size="small" class="stat-card">
+          <a-statistic title="网络速率" :value="fmtBytes(snap.netRateOut ?? 0) + ' ↑ / ' + fmtBytes(snap.netRateIn ?? 0) + ' ↓'" />
+          <div class="sub">实时上下行合计</div>
+          <GlobalOutlined class="stat-icon" />
+        </a-card>
+      </a-col>
+      <a-col :span="6">
+        <a-card size="small" class="stat-card">
+          <a-statistic title="磁盘" :value="mainDiskPct" :precision="1" suffix="%" />
+          <div class="sub">{{ mainDiskLabel }}</div>
+          <HddOutlined class="stat-icon" />
+        </a-card>
+      </a-col>
     </a-row>
 
     <a-row :gutter="16" style="margin-top: 16px">
@@ -64,6 +88,7 @@
 
 <script setup lang="ts">
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
+import { ThunderboltOutlined, DatabaseOutlined, GlobalOutlined, HddOutlined } from '@ant-design/icons-vue'
 import { get, wsTopic, fmtBytes } from '../api'
 import RequestMap from '../components/RequestMap.vue'
 
@@ -126,4 +151,12 @@ onUnmounted(() => { stopWs?.(); clearInterval(timer) })
 <style scoped>
 .sub { color: #999; font-size: 12px; }
 .map-link { font-size: 12px; }
+/* 统计卡：等高 + 右侧半透明图标背景（阿杰反馈：高度不一致、加图标） */
+.stat-card { position: relative; overflow: hidden; height: 100%; }
+.stat-card :deep(.ant-card-body) { height: 100%; box-sizing: border-box; }
+.stat-icon {
+  position: absolute; right: 8px; bottom: 2px; font-size: 52px;
+  opacity: .08; pointer-events: none;
+}
+html[data-theme='dark'] .stat-icon { opacity: .12; }
 </style>

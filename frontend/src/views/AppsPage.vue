@@ -17,7 +17,7 @@
           <!-- 项目列表 -->
           <a-col :span="7" class="proj-col">
             <a-empty v-if="!projects.length" description="未发现 compose 项目" />
-            <div v-for="p in projects" :key="p.dir || p.id" class="proj-card" :class="{ active: selected?.dir === p.dir }" @click="select(p)">
+            <div v-for="p in sortedProjects" :key="p.dir || p.id" class="proj-card" :class="{ active: selected?.dir === p.dir }" @click="select(p)">
               <div class="proj-name">{{ p.name }} <a-tag v-if="p.hasDecl" color="purple">声明</a-tag></div>
               <div class="proj-sub">{{ runningCount(p) }}/{{ p.services?.length || 0 }} 服务运行 · {{ siteCount(p) }} 网站 {{ p.imported ? '· 已导入' : '' }}</div>
               <div class="proj-res" v-if="projCpu(p) !== null">CPU {{ projCpu(p) }}% · 内存 {{ projMem(p) }}</div>
@@ -373,6 +373,12 @@ const runningCount = (p: any) => {
   const name = p.name
   return containers.value.filter(c => sameProject(c.labels?.['com.docker.compose.project'], name) && c.state === 'running').length
 }
+// 项目列表排序：运行中的排前面（组内保持原顺序），未运行的排后面（阿杰反馈）
+const sortedProjects = computed(() => {
+  const running: any[] = [], stopped: any[] = []
+  for (const p of projects.value) (runningCount(p) > 0 ? running : stopped).push(p)
+  return [...running, ...stopped]
+})
 const projCpu = (p: any) => {
   const list = projectStats(p)
   if (!list.length) return null
