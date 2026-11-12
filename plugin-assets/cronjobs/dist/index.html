@@ -4,6 +4,21 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>定时任务</title>
+<script>
+// 与面板主题联动（iframe 同源）：必须在 head 首帧渲染前同步，否则先亮后暗闪眼。
+try {
+  const root = document.documentElement;
+  const apply = () => {
+    const dark = window.parent && window.parent.document.documentElement.getAttribute('data-theme');
+    if (dark && root.getAttribute('data-theme') !== dark) root.setAttribute('data-theme', dark);
+  };
+  apply();
+  if (window.parent && window.parent.document && window.parent.document.documentElement) {
+    new MutationObserver(apply).observe(window.parent.document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  }
+  setInterval(apply, 800);
+} catch (e) { /* 跨域降级 */ }
+</script>
 <style>
   :root {
     --bg: #f5f7fa; --card: #ffffff; --border: #e5e7eb; --text: #1f1f1f;
@@ -15,6 +30,7 @@
     --dim: #8c8c8c; --primary: #1677ff; --primary-weak: #16243f;
   }
   * { box-sizing: border-box; }
+  html[data-theme='dark'] { background: #141414; color-scheme: dark; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
   .wrap { max-width: 980px; margin: 0 auto; padding: 16px; }
   .topbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
@@ -94,16 +110,6 @@
 <div class="toast" id="toast"></div>
 
 <script>
-// 与面板主题联动（iframe 同源）
-try {
-  const apply = () => {
-    const dark = window.parent && window.parent.document.documentElement.getAttribute('data-theme');
-    if (dark) document.documentElement.setAttribute('data-theme', dark);
-  };
-  apply();
-  setInterval(apply, 800);
-} catch (e) { /* 跨域降级 */ }
-
 const $ = (s) => document.querySelector(s);
 const api = (p, opt) => fetch('/api/plugin/cronjobs' + p, opt).then(r => r.json());
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 2200); }
