@@ -339,9 +339,10 @@ func (p *Plugin) apiDeleteConn(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ginH("ok", true))
 }
 
-// testConn 探活：连接超时 5s，SELECT 1 验证。
-func (p *Plugin) testConn(c *Connection) error {
-	dbh, err := sql.Open("mysql", p.dsnWithPassword(c, "", c.Password))
+// testConn 探活：连接超时 6s，SELECT 1 验证。plainPwd 由调用方按密码形态传入：
+// 表单直测传明文（未加密），已存连接测试传 openPassword 解密结果。
+func (p *Plugin) testConn(c *Connection, plainPwd string) error {
+	dbh, err := sql.Open("mysql", p.dsnWithPassword(c, "", plainPwd))
 	if err != nil {
 		return err
 	}
@@ -366,11 +367,11 @@ func (p *Plugin) apiTestForm(w http.ResponseWriter, r *http.Request) {
 	if c.Port == "" {
 		c.Port = "3306"
 	}
-	terr := p.testConn(&c)
+	terr := p.testConn(&c, c.Password) // 表单密码为明文
 	writeJSON(w, http.StatusOK, ginH("ok", terr == nil, "error", errStr(terr)))
 }
 
-// apiTestConn POST /connections/<id>/test：测试已保存的连接。
+// apiTestConn POST /connections/<id>/test：测试已保存的连接（密码按密文解密）。
 func (p *Plugin) apiTestConn(w http.ResponseWriter, r *http.Request) {
 	id := seg(strings.Trim(pluginPath(r), "/"), 1)
 	c := p.findConn(id)
@@ -378,7 +379,7 @@ func (p *Plugin) apiTestConn(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "连接不存在"})
 		return
 	}
-	err := p.testConn(c)
+	err := p.testConn(c, p.openPassword(c))
 	writeJSON(w, http.StatusOK, ginH("ok", err == nil, "error", errStr(err)))
 }
 
