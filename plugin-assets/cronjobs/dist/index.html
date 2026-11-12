@@ -107,7 +107,7 @@ try {
 const $ = (s) => document.querySelector(s);
 const api = (p, opt) => fetch('/api/plugin/cronjobs' + p, opt).then(r => r.json());
 function toast(msg) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 2200); }
-function esc(s) { return String(s ?? '').replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c])); }
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
 let tasks = [];
 async function loadAll() {
