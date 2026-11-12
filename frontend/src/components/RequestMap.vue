@@ -292,10 +292,20 @@ const start = () => {
   startSweep()
   nextTick(() => {
     if (mapBox.value && !resizeObserver) {
-      resizeObserver = new ResizeObserver(() => chart?.resize())
+      resizeObserver = new ResizeObserver((entries) => {
+        // keep-alive 切走时组件 DOM 脱离文档、容器瞬间 0 尺寸，此时 resize 会把
+        // echarts 画布缩到 0×0，返回页面后画布保持空白（canvas width=0）。
+        // 只在容器恢复真实尺寸后才 resize，0 尺寸一律忽略。
+        const r = entries[entries.length - 1]?.contentRect
+        if (r && r.width > 0 && r.height > 0) chart?.resize()
+      })
       resizeObserver.observe(mapBox.value)
     }
-    chart?.resize()
+    // 返回 keep-alive 缓存页时 RO 可能不再触发（离开时已按 0 尺寸收缩），
+    // 双 rAF 等布局完成后再手动恢复一次画布尺寸
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (active && mapBox.value && mapBox.value.clientWidth > 0 && mapBox.value.clientHeight > 0) chart?.resize()
+    }))
   })
 }
 const stop = () => {
