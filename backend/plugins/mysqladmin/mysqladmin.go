@@ -77,11 +77,12 @@ func (p *Plugin) OnInit(ctx sdk.Context) error {
 	p.box = pkg.NewSecretBox(key)
 	p.loadConns()
 
-	api := p.route // 别名，注册更紧凑
+	// 路由按「具体 → 泛化」顺序注册：派发按注册顺序首中即返回，
+	// 泛化尾通配（/connections/*）必须放最后，否则会遮蔽嵌套路由（删库误删连接的教训）。
+	api := func(method, path string, h http.HandlerFunc) { ctx.RegisterRoute(method, path, h) }
 	api("GET", "/connections", p.apiListConns)
 	api("POST", "/connections", p.apiSaveConn)
-	api("DELETE", "/connections/*", p.apiDeleteConn)
-	api("POST", "/connections/*/test", p.apiTestConn)
+	api("POST", "/connections/test", p.apiTestForm)
 	api("GET", "/connections/*/databases", p.apiDatabases)
 	api("POST", "/connections/*/databases", p.apiCreateDatabase)
 	api("DELETE", "/connections/*/databases/*", p.apiDropDatabase)
@@ -89,6 +90,8 @@ func (p *Plugin) OnInit(ctx sdk.Context) error {
 	api("GET", "/connections/*/databases/*/tables/*/schema", p.apiSchema)
 	api("POST", "/connections/*/databases/*/tables/*/truncate", p.apiTruncate)
 	api("POST", "/connections/*/databases/*/tables/*/drop", p.apiDropTable)
+	api("POST", "/connections/*/test", p.apiTestConn)
+	api("DELETE", "/connections/*", p.apiDeleteConn)
 	api("GET", "/rows", p.apiRows)
 	api("POST", "/query", p.apiQuery)
 	api("GET", "/history", p.apiHistory)
@@ -314,7 +317,12 @@ func (p *Plugin) apiSaveConn(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Plugin) apiDeleteConn(w http.ResponseWriter, r *http.Request) {
-	id := seg(pluginPath(r), 1)
+	// /connections/<id> → 段1。此路由为最泛化尾通配，嵌套路由（删库/删表）必须先注册命中。
+	id := seg(strings.Trim(pluginPath(r), "/"), 1)
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少连接 ID"})
+		return
+	}
 	p.mu.Lock()
 	delete(p.conns, id)
 	err := p.saveConns()
@@ -339,20 +347,27 @@ func (p *Plugin) testConn(c *Connection) error {
 	return dbh.QueryRowContext(ctx, "SELECT 1").Scan(&one)
 }
 
-func (p *Plugin) apiTestConn(w http.ResponseWriter, r *http.Request) {
-	// POST /connections/test 可用未保存的表单参数直接测试（保存前验证）
-	if strings.HasSuffix(strings.Trim(pluginPath(r), "/"), "connections/test") {
-		var c Connection
-		if err := json.NewDecoder(r.Body).Decode(&c); err == nil && c.Host != "" {
-			if c.Port == "" {
-				c.Port = "3306"
-			}
-			terr := p.testConn(&c)
-			writeJSON(w, http.StatusOK, ginH("ok", terr == nil, "error", errStr(terr)))
-			return
-		}
+// apiTestForm POST /connections/test：用未保存的表单参数直接测试（保存前验证）。
+func (p *Plugin) apiTestForm(w http.ResponseWriter, r *http.Request) {
+	var c Connection
+	if err := json.NewDecoder(r.Body).Decode(&c); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
-	id := seg(pluginPath(r), 1)
+	if c.Host == "" || c.User == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "主机/用户名必填"})
+		return
+	}
+	if c.Port == "" {
+		c.Port = "3306"
+	}
+	terr := p.testConn(&c)
+	writeJSON(w, http.StatusOK, ginH("ok", terr == nil, "error", errStr(terr)))
+}
+
+// apiTestConn POST /connections/<id>/test：测试已保存的连接。
+func (p *Plugin) apiTestConn(w http.ResponseWriter, r *http.Request) {
+	id := seg(strings.Trim(pluginPath(r), "/"), 1)
 	c := p.findConn(id)
 	if c == nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "连接不存在"})
@@ -415,8 +430,8 @@ func (p *Plugin) apiCreateDatabase(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Plugin) apiDropDatabase(w http.ResponseWriter, r *http.Request) {
-	id := seg(pluginPath(r), 1)
-	name := seg(pluginPath(r), 3)
+	path := strings.Trim(pluginPath(r), "/")
+	id, name := seg(path, 1), seg(path, 3) // /connections/<id>/databases/<name>
 	if !validName(name) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "库名含非法字符"})
 		return
