@@ -148,13 +148,18 @@ func (p *Plugin) openPassword(c *Connection) string {
 	return plain
 }
 
-// dsn 组装连接串；db 为空时连实例本身。openPassword 需要插件实例，故作为方法实现。
+// dsn 组装连接串（已保存连接，密码为密文需解密）；db 为空时连 information_schema。
 func (p *Plugin) dsn(c *Connection, db string) string {
+	return p.dsnWithPassword(c, db, p.openPassword(c))
+}
+
+// dsnWithPassword 用明文密码直接组装连接串。db 为空时连 information_schema。
+func (p *Plugin) dsnWithPassword(c *Connection, db, plainPwd string) string {
 	if db == "" {
 		db = "information_schema"
 	}
 	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local&timeout=5s&readTimeout=30s&writeTimeout=30s",
-		c.User, p.openPassword(c), c.Host, c.Port, db)
+		c.User, plainPwd, c.Host, c.Port, db)
 }
 
 func (p *Plugin) findConn(id string) *Connection {
@@ -336,7 +341,7 @@ func (p *Plugin) apiDeleteConn(w http.ResponseWriter, r *http.Request) {
 
 // testConn 探活：连接超时 5s，SELECT 1 验证。
 func (p *Plugin) testConn(c *Connection) error {
-	dbh, err := sql.Open("mysql", p.dsn(c, ""))
+	dbh, err := sql.Open("mysql", p.dsnWithPassword(c, "", c.Password))
 	if err != nil {
 		return err
 	}
