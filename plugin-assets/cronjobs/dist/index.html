@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>定时任务</title>
+<style>
+  :root {
+    --bg: #f5f7fa; --card: #ffffff; --border: #e5e7eb; --text: #1f1f1f;
+    --dim: #6b7280; --primary: #1677ff; --primary-weak: #e6f0ff;
+    --green: #52c41a; --red: #ff4d4f; --orange: #fa8c16; --radius: 10px;
+  }
+  html[data-theme='dark'] {
+    --bg: #141414; --card: #1f1f1f; --border: #333; --text: #e6e6e6;
+    --dim: #8c8c8c; --primary: #1677ff; --primary-weak: #16243f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 16px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  h1 { font-size: 17px; margin: 0; }
+  .btn { border: 1px solid var(--border); background: var(--card); color: var(--text); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+  .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .btn.danger { color: var(--red); }
+  .btn.small { padding: 3px 10px; font-size: 12px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 12px; }
+  .task-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .task-name { font-weight: 600; font-size: 15px; }
+  .tag { font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--primary-weak); color: var(--primary); }
+  .tag.off { background: transparent; border: 1px solid var(--border); color: var(--dim); }
+  .task-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+  .meta { color: var(--dim); font-size: 12px; margin-top: 6px; word-break: break-all; }
+  table.logs { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+  table.logs th, table.logs td { border-top: 1px solid var(--border); padding: 6px 8px; text-align: left; }
+  .ok { color: var(--green); } .fail { color: var(--red); } .warn { color: var(--orange); }
+  .log-pre { background: #111; color: #0f0; padding: 10px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; max-height: 260px; overflow: auto; margin-top: 8px; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+  @media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } }
+  label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 3px; }
+  input { width: 100%; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 6px; padding: 7px 10px; font-size: 13px; }
+  .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; padding: 16px; z-index: 10; }
+  .modal-mask.open { display: flex; }
+  .modal { background: var(--card); border-radius: 12px; padding: 18px; width: 560px; max-width: 100%; max-height: 90vh; overflow: auto; }
+  .modal h3 { margin: 0 0 12px; font-size: 15px; }
+  .modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; align-items: center; }
+  .empty { text-align: center; color: var(--dim); padding: 40px 0; }
+  .toast { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); background: var(--card); border: 1px solid var(--border); color: var(--text); padding: 8px 18px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.15); display: none; z-index: 20; }
+  .cron-presets { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .cron-presets .btn { font-size: 11px; padding: 2px 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="topbar">
+    <h1>定时任务</h1>
+    <div style="display:flex;gap:8px">
+      <button class="btn" onclick="loadAll()">刷新</button>
+      <button class="btn primary" onclick="openEditor()">+ 新建任务</button>
+    </div>
+  </div>
+  <div class="card" style="color:var(--dim);font-size:12px">
+    标准 5 段 cron 表达式（分 时 日 月 周），任务随面板启动自动调度；常用预设：<code>*/5 * * * *</code> 每 5 分钟 ·
+    <code>0 3 * * *</code> 每天凌晨 3 点 · <code>0 * * * *</code> 每小时整点。
+  </div>
+  <div id="list"></div>
+</div>
+
+<div class="modal-mask" id="editorMask">
+  <div class="modal">
+    <h3 id="editorTitle">新建任务</h3>
+    <div class="form-grid">
+      <div><label>标识（小写字母/数字/短横线）</label><input id="f_id" placeholder="backup-db"></div>
+      <div><label>任务名称</label><input id="f_name" placeholder="数据库备份"></div>
+      <div><label>cron 表达式（5 段）</label><input id="f_cron" placeholder="*/30 * * * *">
+        <div class="cron-presets">
+          <button class="btn" onclick="$('#f_cron').value='*/5 * * * *'">每5分钟</button>
+          <button class="btn" onclick="$('#f_cron').value='*/30 * * * *'">每30分钟</button>
+          <button class="btn" onclick="$('#f_cron').value='0 * * * *'">每小时</button>
+          <button class="btn" onclick="$('#f_cron').value='0 3 * * *'">每天3点</button>
+          <button class="btn" onclick="$('#f_cron').value='0 3 * * 1'">每周一3点</button>
+        </div>
+      </div>
+      <div><label>超时（秒，默认 3600）</label><input id="f_timeout" type="number" placeholder="3600"></div>
+      <div style="grid-column:1/-1"><label>命令（bash 执行）</label><input id="f_cmd" placeholder="bash /opt/backup/backup.sh"></div>
+      <div style="grid-column:1/-1"><label>工作目录（可选）</label><input id="f_dir" placeholder="/opt/backup"></div>
+      <div><label><input type="checkbox" id="f_enabled" checked style="width:auto"> 启用（保存后立即生效）</label></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" onclick="closeEditor()">取消</button>
+      <button class="btn primary" onclick="saveTask()">保存</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+// 与面板主题联动（iframe 同源）
+try {
+  const apply = () => {
+    const dark = window.parent && window.parent.document.documentElement.getAttribute('data-theme');
+    if (dark) document.documentElement.setAttribute('data-theme', dark);
+  };
+  apply();
+  setInterval(apply, 800);
+} catch (e) { /* 跨域降级 */ }
+
+const $ = (s) => document.querySelector(s);
+const api = (p, opt) => fetch('/api/plugin/cronjobs' + p, opt).then(r => r.json());
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 2200); }
+function esc(s) { return String(s ?? '').replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',\"'\":'&#39;'}[c])); }
+
+let tasks = [];
+async function loadAll() {
+  tasks = await api('/tasks') || [];
+  render();
+}
+function render() {
+  const el = $('#list');
+  if (!tasks.length) { el.innerHTML = '<div class="empty">还没有任务，点右上角「新建任务」创建第一个</div>'; return; }
+  el.innerHTML = tasks.map(t => `
+    <div class="card">
+      <div class="task-head">
+        <span class="task-name">${esc(t.name)}</span>
+        <span class="tag ${t.enabled ? '' : 'off'}">${t.enabled ? '启用' : '停用'}</span>
+        <span class="tag">${esc(t.id)}</span>
+        <div class="task-actions">
+          <button class="btn small" onclick="runTask('${esc(t.id)}')">立即执行</button>
+          <button class="btn small" onclick="toggleTask('${esc(t.id)}', ${!t.enabled})">${t.enabled ? '停用' : '启用'}</button>
+          <button class="btn small" onclick="showLogs('${esc(t.id)}')">日志</button>
+          <button class="btn small" onclick="openEditor('${esc(t.id)}')">编辑</button>
+          <button class="btn small danger" onclick="delTask('${esc(t.id)}')">删除</button>
+        </div>
+      </div>
+      <div class="meta">表达式：<code>${esc(t.cron)}</code> · 命令：<code>${esc(t.command)}</code>
+        ${t.workDir ? ' · 目录：' + esc(t.workDir) : ''} · 超时：${t.timeout > 0 ? t.timeout + 's' : '3600s'}
+        ${t.enabled && t.nextRun ? ' · <span class="ok">下次执行：' + esc(t.nextRun) + '</span>' : ''}</div>
+      <div id="logs-${esc(t.id)}"></div>
+    </div>`).join('');
+}
+
+function openEditor(id) {
+  const t = tasks.find(x => x.id === id) || {};
+  $('#editorTitle').textContent = id ? '编辑任务 · ' + id : '新建任务';
+  $('#f_id').value = t.id || ''; $('#f_id').disabled = !!id;
+  $('#f_name').value = t.name || '';
+  $('#f_cron').value = t.cron || '';
+  $('#f_cmd').value = t.command || '';
+  $('#f_dir').value = t.workDir || '';
+  $('#f_timeout').value = t.timeout > 0 ? t.timeout : '';
+  $('#f_enabled').checked = id ? !!t.enabled : true;
+  $('#editorMask').classList.add('open');
+}
+function closeEditor() { $('#editorMask').classList.remove('open'); }
+
+async function saveTask() {
+  const body = {
+    id: $('#f_id').value.trim(), name: $('#f_name').value.trim(),
+    cron: $('#f_cron').value.trim(), command: $('#f_cmd').value.trim(),
+    workDir: $('#f_dir').value.trim(), timeout: +$('#f_timeout').value || 0,
+    enabled: $('#f_enabled').checked,
+  };
+  const r = await api('/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  if (r.error) { toast(r.error); return; }
+  toast('已保存'); closeEditor(); loadAll();
+}
+async function delTask(id) {
+  if (!confirm('删除任务 ' + id + '？')) return;
+  await api('/tasks/' + id, { method: 'DELETE' });
+  toast('已删除'); loadAll();
+}
+async function toggleTask(id, enabled) {
+  const r = await api('/tasks/' + id + '/toggle', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+  r.error ? toast(r.error) : toast(enabled ? '已启用' : '已停用');
+  loadAll();
+}
+async function runTask(id) {
+  toast('已触发执行');
+  const r = await api('/tasks/' + id + '/run', { method: 'POST' });
+  toast(r.error ? '执行失败: ' + r.error : '执行完成');
+  showLogs(id);
+}
+async function showLogs(id) {
+  const box = $('#logs-' + id);
+  const logs = await api('/logs/' + id) || [];
+  if (!logs.length) { box.innerHTML = '<div class="meta">暂无执行记录</div>'; return; }
+  box.innerHTML = `
+    <table class="logs">
+      <tr><th>时间</th><th>退出码</th><th>耗时</th><th>操作</th></tr>
+      ${logs.map((l, i) => `<tr>
+        <td>${esc(l.startAt)}</td>
+        <td class="${l.exitCode === 0 ? 'ok' : 'fail'}">${l.exitCode}${l.timeout ? ' <span class="warn">超时</span>' : ''}</td>
+        <td>${esc(l.duration)}</td>
+        <td><button class="btn small" onclick="toggleLog('${esc(id)}',${i})">查看输出</button></td>
+      </tr>`).join('')}
+    </table>
+    <pre class="log-pre" id="out-${esc(id)}" style="display:none">${esc(logs[0].output)}</pre>`;
+}
+function toggleLog(id, i) {
+  const pre = $('#out-' + id);
+  if (pre.style.display === 'none') { pre.style.display = 'block'; }
+  else pre.style.display = 'none';
+}
+loadAll();
+</script>
+</body>
+</html>

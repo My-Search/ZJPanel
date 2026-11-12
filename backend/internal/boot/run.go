@@ -10,17 +10,17 @@ import (
 	"github.com/robfig/cron/v3"
 	"golang.org/x/crypto/ssh"
 
-	httpapi "zjpanel/backend/internal/http"
 	"zjpanel/backend/internal/bus"
 	"zjpanel/backend/internal/cert"
 	"zjpanel/backend/internal/cert/targets"
 	"zjpanel/backend/internal/compose"
 	"zjpanel/backend/internal/docker"
+	httpapi "zjpanel/backend/internal/http"
 	"zjpanel/backend/internal/logmap"
 	"zjpanel/backend/internal/mcp"
 	"zjpanel/backend/internal/metrics"
-	"zjpanel/backend/internal/model"
 	"zjpanel/backend/internal/middleware"
+	"zjpanel/backend/internal/model"
 	"zjpanel/backend/internal/nginx"
 	"zjpanel/backend/internal/pkg"
 	"zjpanel/backend/internal/plugin"
@@ -29,6 +29,8 @@ import (
 	"zjpanel/backend/internal/terminal"
 	"zjpanel/backend/internal/update"
 	"zjpanel/backend/internal/ws"
+	"zjpanel/backend/plugins/cronjobs"
+	"zjpanel/backend/plugins/mysqladmin"
 	"zjpanel/backend/plugins/notifywebhook"
 	"zjpanel/backend/plugins/webhooks"
 )
@@ -128,6 +130,8 @@ func Run() {
 	)
 	pluginMgr.RegisterBuiltin(notifywebhook.New())
 	pluginMgr.RegisterBuiltin(webhooks.New())
+	pluginMgr.RegisterBuiltin(mysqladmin.New())
+	pluginMgr.RegisterBuiltin(cronjobs.New())
 	pluginMgr.StartAll()
 
 	updater := update.New(cfg)
