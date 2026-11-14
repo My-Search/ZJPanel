@@ -407,7 +407,8 @@ const scan = async () => {
       const again = projects.value.find(p => p.dir === selected.value.dir)
       selected.value = again || null
     }
-    if (projects.value.length && !selected.value) select(projects.value[0])
+    // 默认选中列表第一项（按展示排序：运行中优先），而非后端扫描顺序
+    if (projects.value.length && !selected.value) select(sortedProjects.value[0] || projects.value[0])
   } finally {
     scanning.value = false
   }
@@ -537,6 +538,20 @@ onUnmounted(() => { clearInterval(timer); logsWs?.close(); closeExec() })
 .dim { color: #999; font-size: 12px; }
 .proj-card { border: 1.5px solid #e5e7eb; border-radius: 8px; padding: 12px; margin-bottom: 10px; cursor: pointer; transition: all .2s; }
 .proj-card.active { border-color: #4f7cff; background: #f0f5ff; }
+/* 桌面端：左右两栏各自独立滚动（左列表/右详情最大高度 = 视口 - 页头/工具条占用） */
+@media (min-width: 768px) {
+  .apps-layout { align-items: flex-start; }
+  .proj-col, .detail-col {
+    max-height: calc(100vh - 230px);
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+  .proj-col::-webkit-scrollbar, .detail-col::-webkit-scrollbar { width: 8px; }
+  .proj-col::-webkit-scrollbar-thumb, .detail-col::-webkit-scrollbar-thumb {
+    background: rgba(128,128,128,.3); border-radius: 4px;
+  }
+  .proj-col::-webkit-scrollbar-thumb:hover, .detail-col::-webkit-scrollbar-thumb:hover { background: rgba(128,128,128,.5); }
+}
 .proj-name { font-weight: 600; font-size: 14px; }
 .proj-res { margin-top: 4px; font-size: 12px; color: #52c41a; }
 .dim-res { color: #999; }
