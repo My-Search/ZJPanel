@@ -14,6 +14,7 @@ import (
 	"zjpanel/backend/internal/cert/targets"
 	"zjpanel/backend/internal/mcp"
 	"zjpanel/backend/internal/model"
+	"zjpanel/backend/internal/notify"
 	sdk "zjpanel/backend/sdk/plugin"
 )
 
@@ -85,6 +86,14 @@ func (c *ctxImpl) RegisterMCPTool(name, description string, inputSchema map[stri
 	}
 	c.rt.mcpNames = append(c.rt.mcpNames, full)
 	c.Logf("注册 MCP 工具 %s", full)
+}
+
+// Notify 发送统一通知（Source 记为插件 ID；服务未注入时为空操作）。
+func (c *ctxImpl) Notify(nType, level, title, body string) {
+	if c.mgr.notify == nil {
+		return
+	}
+	c.mgr.notify.Send(c.id, notify.Input{Type: nType, Level: level, Title: title, Body: body})
 }
 
 func (c *ctxImpl) SubscribeEvent(topic string, fn func(payload map[string]any)) {

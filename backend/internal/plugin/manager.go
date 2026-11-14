@@ -20,6 +20,7 @@ import (
 	"zjpanel/backend/internal/cert/targets"
 	"zjpanel/backend/internal/mcp"
 	"zjpanel/backend/internal/model"
+	"zjpanel/backend/internal/notify"
 	"zjpanel/backend/internal/pkg"
 	sdk "zjpanel/backend/sdk/plugin"
 )
@@ -45,20 +46,24 @@ type runtime struct {
 }
 
 type Manager struct {
-	cfg   *pkg.Config
-	db    *gorm.DB
-	box   *pkg.SecretBox
-	bus   *bus.Bus
-	mcp   *mcp.Registry
-	dns   *certdns.DNSRegistry
-	tgt   *targets.TargetRegistry
+	cfg     *pkg.Config
+	db      *gorm.DB
+	box     *pkg.SecretBox
+	bus     *bus.Bus
+	mcp     *mcp.Registry
+	dns     *certdns.DNSRegistry
+	tgt     *targets.TargetRegistry
 	addCron func(spec string, fn func()) any
 	rmCron  func(id any)
+	notify  *notify.Service // 统一通知（SetNotify 注入；nil 时插件 Notify 为空操作）
 
-	mu      sync.RWMutex
-	running map[string]*runtime
+	mu       sync.RWMutex
+	running  map[string]*runtime
 	builtins map[string]func() sdk.Plugin
 }
+
+// SetNotify 注入统一通知服务（须在 StartAll 之前调用）。
+func (m *Manager) SetNotify(n *notify.Service) { m.notify = n }
 
 func New(cfg *pkg.Config, db *gorm.DB, box *pkg.SecretBox, b *bus.Bus, mcpReg *mcp.Registry,
 	dnsReg *certdns.DNSRegistry, tgtReg *targets.TargetRegistry,
@@ -230,14 +235,14 @@ func (m *Manager) extDir(id string) string {
 // ---- 列表 / 安装 / 卸载 ----
 
 type PluginInfo struct {
-	ID          string        `json:"id"`
-	Name        string        `json:"name"`
-	Version     string        `json:"version"`
-	Description string        `json:"description"`
-	Enabled     bool          `json:"enabled"`
-	Builtin     bool          `json:"builtin"`
-	Running     bool          `json:"running"`
-	Menu        []sdk.Menu    `json:"menu,omitempty"`
+	ID          string           `json:"id"`
+	Name        string           `json:"name"`
+	Version     string           `json:"version"`
+	Description string           `json:"description"`
+	Enabled     bool             `json:"enabled"`
+	Builtin     bool             `json:"builtin"`
+	Running     bool             `json:"running"`
+	Menu        []sdk.Menu       `json:"menu,omitempty"`
 	Settings    []sdk.SettingDef `json:"settings,omitempty"`
 }
 
@@ -340,7 +345,7 @@ func (m *Manager) DispatchRoute(w http.ResponseWriter, r *http.Request, id, path
 }
 
 // dispatch 统一派发：剥离前缀后的子路径经 X-Plugin-Path 头传给插件 handler
-//（handler 内用 r.URL.Path 只能拿到完整原始路径，无法得知自身挂载前缀）。
+// （handler 内用 r.URL.Path 只能拿到完整原始路径，无法得知自身挂载前缀）。
 func (m *Manager) dispatch(w http.ResponseWriter, r *http.Request, id, path string, public bool) {
 	m.mu.RLock()
 	rt, ok := m.running[id]

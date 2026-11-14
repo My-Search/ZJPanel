@@ -22,6 +22,7 @@ import (
 	"zjpanel/backend/internal/middleware"
 	"zjpanel/backend/internal/model"
 	"zjpanel/backend/internal/nginx"
+	"zjpanel/backend/internal/notify"
 	"zjpanel/backend/internal/pkg"
 	"zjpanel/backend/internal/plugin"
 	"zjpanel/backend/internal/site"
@@ -123,11 +124,16 @@ func Run() {
 	mcpReg := mcp.NewRegistry()
 	mcpSrv := mcp.NewServer(mcpReg)
 
+	// 统一通知（先于插件装配：插件 ctx.Notify 依赖它）
+	notifySvc := notify.New(db, box, hub, eventBus)
+	notifySvc.Start() // 订阅面板事件主题（cert/sitecheck/plugin）+ 每日过期清理
+
 	// 插件运行时
 	pluginMgr := plugin.New(cfg, db, box, eventBus, mcpReg, certSvc.DNS, certSvc.Targets,
 		func(spec string, fn func()) any { return cronSvc.AddFunc(spec, fn) },
 		func(id any) { cronSvc.RemoveByID(id) },
 	)
+	pluginMgr.SetNotify(notifySvc)
 	pluginMgr.RegisterBuiltin(notifywebhook.New())
 	pluginMgr.RegisterBuiltin(webhooks.New())
 	pluginMgr.RegisterBuiltin(mysqladmin.New())
@@ -135,6 +141,20 @@ func Run() {
 	pluginMgr.StartAll()
 
 	updater := update.New(cfg)
+
+	// 更新检查：每日 09:00 检查新版本，有更新即发统一通知
+	cronSvc.AddFunc("0 9 * * *", func() {
+		if info, err := updater.Check(); err == nil {
+			if avail, _ := info["updateAvailable"].(bool); avail {
+				latest, _ := info["latest"].(string)
+				notifySvc.Send("core", notify.Input{
+					Type: "panel.update", Level: "info",
+					Title: "发现面板新版本 " + latest,
+					Body:  "可在「设置 → 检查更新」中查看并一键更新。",
+				})
+			}
+		}
+	})
 
 	// HTTP 服务
 	srv := httpapi.NewServer(cfg, db, middleware.NewAuth(), hub, box)
@@ -149,6 +169,7 @@ func Run() {
 	srv.Cert = certSvc
 	srv.Updater = updater
 	srv.Plugins = pluginMgr
+	srv.Notify = notifySvc
 	srv.MCPReg = mcpReg
 	srv.MCPSrv = mcpSrv
 	httpapi.RegisterStatic(srv.Engine())

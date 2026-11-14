@@ -364,6 +364,23 @@ func (p *Plugin) runTask(id string) (string, error) {
 		p.logs[id] = p.logs[id][:20]
 	}
 	p.mu.Unlock()
+	// 失败 → 统一通知（站内信 + 按订阅邮件）；成功不通知，避免刷屏
+	if err != nil || timedOut {
+		detail := ""
+		if err != nil {
+			detail = err.Error()
+		}
+		if timedOut {
+			detail = fmt.Sprintf("执行超时（>%ds）", timeout)
+		}
+		out := string(outBytes)
+		if len(out) > 500 {
+			out = out[len(out)-500:] + "（尾部 500 字符）"
+		}
+		p.ctx.Notify("cron.failed", "error",
+			fmt.Sprintf("定时任务失败: %s（exit %d）", t.Name, exitCode),
+			detail+"\n输出：\n"+out)
+	}
 	return rl.Output, err
 }
 

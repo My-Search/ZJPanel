@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/pkg/stdcopy"
@@ -14,6 +15,7 @@ import (
 
 	"zjpanel/backend/internal/mcp"
 	"zjpanel/backend/internal/model"
+	"zjpanel/backend/internal/notify"
 	"zjpanel/backend/internal/pkg"
 	sitePkg "zjpanel/backend/internal/site"
 	"zjpanel/backend/internal/update"
@@ -245,6 +247,27 @@ func (s *Server) registerMCPTools() {
 	reg := func(name, desc string, schema map[string]any, h func(args map[string]any) (string, error)) {
 		_ = s.MCPReg.Register(&mcp.Tool{Name: name, Description: desc, InputSchema: schema, Handler: h, Owner: "core"})
 	}
+	reg("panel_notify", "发送一条面板统一通知（站内信必发；邮件按类型订阅设置发送）",
+		map[string]any{"type": "object", "properties": map[string]any{
+			"type":  map[string]any{"type": "string", "description": "消息类型，建议带前缀（如 ops.backup）"},
+			"level": map[string]any{"type": "string", "enum": []string{"info", "warn", "error"}, "description": "级别，默认 info"},
+			"title": map[string]any{"type": "string", "description": "标题"},
+			"body":  map[string]any{"type": "string", "description": "正文"},
+		}, "required": []string{"title"}},
+		func(args map[string]any) (string, error) {
+			title, _ := args["title"].(string)
+			if s.Notify == nil || strings.TrimSpace(title) == "" {
+				return "", fmt.Errorf("title 必填")
+			}
+			nType, _ := args["type"].(string)
+			if nType == "" {
+				nType = "mcp.manual"
+			}
+			level, _ := args["level"].(string)
+			body, _ := args["body"].(string)
+			s.Notify.Send("mcp", notify.Input{Type: nType, Level: level, Title: title, Body: body})
+			return jstr(map[string]any{"ok": true}), nil
+		})
 	reg("panel_info", "获取面板信息（版本/站点数/容器数）",
 		map[string]any{"type": "object", "properties": map[string]any{}},
 		func(args map[string]any) (string, error) {

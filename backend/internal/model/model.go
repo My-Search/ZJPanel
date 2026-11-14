@@ -187,3 +187,15 @@ type AuditLog struct {
 	Detail string    `gorm:"type:text" json:"detail"`
 	IP     string    `gorm:"size:64" json:"ip"`
 }
+
+// Notification 统一通知（站内信）：Type 即消息类型（事件主题/插件自定义），ReadAt 为空表示未读。
+type Notification struct {
+	ID        uint       `gorm:"primaryKey" json:"id"`
+	Type      string     `gorm:"size:64;index" json:"type"`
+	Level     string     `gorm:"size:16" json:"level"` // info | warn | error
+	Title     string     `gorm:"size:255" json:"title"`
+	Body      string     `gorm:"type:text" json:"body"`
+	Source    string     `gorm:"size:64" json:"source"` // core 或插件 ID
+	CreatedAt time.Time  `json:"createdAt"`
+	ReadAt    *time.Time `json:"readAt"`
+}

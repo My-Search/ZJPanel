@@ -93,4 +93,7 @@ type Context interface {
 	RegisterDNSProvider(name, title string, fields []FieldDef, factory func(cfg map[string]string) (DNSProvider, error))
 	// RegisterDeployTarget 注册证书部署目标。
 	RegisterDeployTarget(typ, title string, fields []FieldDef, runner func(args DeployArgs) (string, error))
+	// Notify 发送统一通知：站内信必发；邮件按面板「通知设置」的类型订阅发给收件人。
+	// nType 建议用带前缀的消息类型（如 cron.failed、<pluginId>.something），level 取 info|warn|error。
+	Notify(nType, level, title, body string)
 }

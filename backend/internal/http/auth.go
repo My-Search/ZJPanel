@@ -17,6 +17,7 @@ import (
 	"zjpanel/backend/internal/middleware"
 	"zjpanel/backend/internal/model"
 	"zjpanel/backend/internal/nginx"
+	"zjpanel/backend/internal/notify"
 	"zjpanel/backend/internal/pkg"
 	"zjpanel/backend/internal/plugin"
 	"zjpanel/backend/internal/site"
@@ -47,6 +48,7 @@ type Server struct {
 	Cert    *cert.Service
 	Updater *update.Service
 	Plugins *plugin.Manager
+	Notify  *notify.Service
 	MCPReg  *mcp.Registry
 	MCPSrv  *mcp.Server
 }
@@ -93,7 +95,7 @@ func (s *Server) registerAuthRoutes() {
 		c.JSON(http.StatusOK, gin.H{
 			"initialized": cnt > 0,
 			"loggedIn":    sess != nil,
-			"username":    func() any {
+			"username": func() any {
 				if sess != nil {
 					return sess.Username
 				}

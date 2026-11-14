@@ -33,6 +33,7 @@
           <span class="ver">ZJPanel {{ version }}</span>
         </div>
         <a-space :size="4">
+          <NotifyBell />
           <a-dropdown>
             <a-button type="text" class="theme-btn" :title="'主题：' + themeLabel">
               <SkinOutlined />
@@ -74,7 +75,9 @@ import { get } from '../api'
 import { useAuth } from '../store/auth'
 import { useTheme, type ThemeMode } from '../store/theme'
 import { usePluginMenu } from '../store/pluginMenu'
+import { useNotify } from '../store/notify'
 import SideMenu from '../components/SideMenu.vue'
+import NotifyBell from '../components/NotifyBell.vue'
 import { MenuOutlined, SkinOutlined, UserOutlined } from '@ant-design/icons-vue'
 
 const route = useRoute()
@@ -128,6 +131,7 @@ onMounted(() => {
   mq.addEventListener('change', syncViewport)
   loadVersion()
   menus.load()
+  useNotify().fetchUnread()
 })
 onUnmounted(() => mq.removeEventListener('change', syncViewport))
 </script>

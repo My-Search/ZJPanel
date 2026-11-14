@@ -27,6 +27,7 @@ func (s *Server) RegisterRoutes() {
 	s.registerMCPRoutes()
 	s.registerUpdateRoutes()
 	s.registerPluginRoutes()
+	s.registerNotifyRoutes()
 	s.registerMCPTools()
 	s.registerWSRoutes()
 	s.registerMaintenanceRoute()
