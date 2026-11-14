@@ -260,7 +260,8 @@ func (s *Service) lookupGeo(ip string) (string, string, float64, float64) {
 		return country, city, ll[0], ll[1]
 	}
 	if c, ok := Centroids[country]; ok {
-		return country, "", c[0], c[1] // 质心回退不带城市名，避免误导
+		// Centroids 存储为 [经度, 纬度]，Entry.Lat/Lon 语义为纬度/经度，必须对调
+		return country, "", c[1], c[0] // 质心回退不带城市名，避免误导
 	}
 	return country, "", 0, 0
 }
