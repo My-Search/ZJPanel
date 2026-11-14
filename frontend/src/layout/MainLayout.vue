@@ -57,11 +57,17 @@
         </a-space>
       </a-layout-header>
       <a-layout-content class="content">
-        <!-- 页面保活：切换菜单立即显示上次状态，返回时后台刷新数据 -->
-        <router-view v-slot="{ Component }">
-          <keep-alive :include="cachedViews">
-            <component :is="Component" />
-          </keep-alive>
+        <!-- 页面保活：切换菜单立即显示上次状态，返回时后台刷新数据。
+             过渡：out-in（旧页淡出→新页淡入），140ms 单程，避免整页硬切的生硬感；
+             transition 必须包在 keep-alive 外层（Vue 官方约定）；
+             :key=route.path 强制 vnode 身份随路径变化 —— Transition+KeepAlive 组合下
+             组件经缓存激活时 vnode type 相同，Transition 识别不到「子级更换」会静默跳过动画。 -->
+        <router-view v-slot="{ Component, route }">
+          <transition name="page-fade" mode="out-in">
+            <keep-alive :include="cachedViews">
+              <component :is="Component" :key="route.path" />
+            </keep-alive>
+          </transition>
         </router-view>
       </a-layout-content>
     </a-layout>
@@ -158,5 +164,30 @@ onUnmounted(() => mq.removeEventListener('change', syncViewport))
 @media (max-width: 767px) {
   .content { margin: 8px; }
   .header { padding: 0 8px; }
+}
+</style>
+
+<style>
+/* 路由切换过渡（必须是全局样式：动画对象是路由组件的根节点，携带的是子页面的
+   scope 属性而非本组件的，scoped 规则永远匹配不上 → 动画时长为 0 直接完成）。
+   out-in：旧页淡出 → 新页淡入上移，140ms 单程；系统开启「减少动态效果」时禁用。 */
+.page-fade-enter-active,
+.page-fade-leave-active {
+  transition: opacity 0.14s ease, transform 0.14s ease;
+  will-change: opacity, transform;
+}
+.page-fade-enter-from {
+  opacity: 0;
+  transform: translateY(10px);
+}
+.page-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+@media (prefers-reduced-motion: reduce) {
+  .page-fade-enter-active,
+  .page-fade-leave-active {
+    transition: none;
+  }
 }
 </style>

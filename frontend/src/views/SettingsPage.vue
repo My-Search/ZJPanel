@@ -19,10 +19,12 @@
         <a-space direction="vertical" style="width: 100%">
           <a-space>
             <a-button type="primary" :loading="checking" @click="checkUpdate">检查更新</a-button>
-            <a-button v-if="info?.updateAvailable" type="primary" danger :loading="applying" @click="applyUpdate">一键更新（重建容器）</a-button>
+            <a-button v-if="info?.updateAvailable && !isDevBuild" type="primary" danger :loading="applying" @click="applyUpdate">一键更新（重建容器）</a-button>
           </a-space>
           <a-alert v-if="info" :type="info.updateAvailable ? 'warning' : 'success'" show-icon
             :message="info.updateAvailable ? `发现新版本 ${info.latest}（当前 ${info.current}）` : `已是最新版本 ${info.current}`" />
+          <a-alert v-if="isDevBuild" type="warning" show-icon
+            message="当前为开发构建（本地直接运行，非 Docker 部署）：一键更新不可用。本地升级请重新构建二进制；服务器 Docker 部署可在宿主机执行 ./update.sh 或使用面板一键更新。" />
           <p v-if="info?.notes" class="dim">{{ info.notes }}</p>
           <a-alert type="info" show-icon message="也可在宿主机执行 ./update.sh 升级（同效）" />
         </a-space>
@@ -56,7 +58,7 @@
 </template>
 
 <script setup lang="ts">
-import { onActivated, onMounted, ref } from 'vue'
+import { computed, onActivated, onMounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, put, post, fmtTime } from '../api'
 import AceEditor from '../components/AceEditor.vue'
@@ -66,6 +68,8 @@ const version = ref('')
 const info = ref<any>(null)
 const checking = ref(false)
 const applying = ref(false)
+// dev 构建（本地 exe 直接运行）不支持容器式一键更新
+const isDevBuild = computed(() => /dev|^0\.0\.0/.test(version.value || '') || /dev|^0\.0\.0/.test(info.value?.current || ''))
 const maintTemplate = ref('')
 const varHint = '支持变量 {domain} {time} {message}（渲染为域名/时间/提示语）'
 const oldP = ref('')
