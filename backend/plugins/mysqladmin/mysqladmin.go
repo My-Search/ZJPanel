@@ -1,7 +1,8 @@
 // Package mysqladmin 内置插件：MySQL 管理工具（轻量 Navicat）。
 // 能力：连接管理（凭据 AES-GCM 加密存储）、库/表浏览（表结构/索引/建表语句）、
 // 常用操作（建库/删库/清空表/删表）、SQL 控制台（结果表格 + 执行历史环形保留）、
-// 数据浏览（分页 + 条件筛选）。API 挂 /api/plugin/mysqladmin/*（面板登录态）。
+// SQL 文件导入执行（语句拆分/DELIMITER/遇错继续）、数据浏览（分页/筛选/排序）
+// 与行级编辑（主键定位的插入/更新/删除）。API 挂 /api/plugin/mysqladmin/*（面板登录态）。
 package mysqladmin
 
 import (
@@ -9,6 +10,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -62,7 +64,7 @@ func (p *Plugin) Meta() sdk.Meta {
 		ID:          "mysqladmin",
 		Name:        "MySQL 管理",
 		Version:     "0.1.0",
-		Description: "MySQL 连接管理 / 库表浏览 / 建删库表 / SQL 控制台 / 数据分页浏览（凭据加密存储）",
+		Description: "MySQL 连接管理 / 库表浏览 / 建删库表 / SQL 控制台 / SQL 文件导入执行 / 数据分页浏览与行级编辑（凭据加密存储）",
 		Permissions: []string{"http"},
 		Menu:        []sdk.Menu{{Title: "MySQL", Icon: "database", Path: "/"}},
 	}
@@ -78,18 +80,23 @@ func (p *Plugin) OnInit(ctx sdk.Context) error {
 	p.loadConns()
 
 	// 路由按「具体 → 泛化」顺序注册：派发按注册顺序首中即返回，
-	// 泛化尾通配（/connections/*）必须放最后，否则会遮蔽嵌套路由（删库误删连接的教训）。
+	// 且尾通配 * 匹配剩余全部段 —— 泛化尾通配（如 DELETE /connections/*/databases/*）
+	// 必须放在所有嵌套它的新增路由之后，否则嵌套 DELETE（删行）会被截胡成删库。
 	api := func(method, path string, h http.HandlerFunc) { ctx.RegisterRoute(method, path, h) }
 	api("GET", "/connections", p.apiListConns)
 	api("POST", "/connections", p.apiSaveConn)
 	api("POST", "/connections/test", p.apiTestForm)
 	api("GET", "/connections/*/databases", p.apiDatabases)
 	api("POST", "/connections/*/databases", p.apiCreateDatabase)
-	api("DELETE", "/connections/*/databases/*", p.apiDropDatabase)
 	api("GET", "/connections/*/databases/*/tables", p.apiTables)
 	api("GET", "/connections/*/databases/*/tables/*/schema", p.apiSchema)
 	api("POST", "/connections/*/databases/*/tables/*/truncate", p.apiTruncate)
 	api("POST", "/connections/*/databases/*/tables/*/drop", p.apiDropTable)
+	api("POST", "/connections/*/databases/*/tables/*/rows", p.apiInsertRow)
+	api("PUT", "/connections/*/databases/*/tables/*/rows", p.apiUpdateRow)
+	api("DELETE", "/connections/*/databases/*/tables/*/rows", p.apiDeleteRow)
+	api("POST", "/connections/*/sqlfile", p.apiRunSQLFile)         // 无尾通配，与既有 POST 路由互不冲突
+	api("DELETE", "/connections/*/databases/*", p.apiDropDatabase) // 嵌套 DELETE 之后注册，防止截胡
 	api("POST", "/connections/*/test", p.apiTestConn)
 	api("DELETE", "/connections/*", p.apiDeleteConn)
 	api("GET", "/rows", p.apiRows)
@@ -438,6 +445,11 @@ func (p *Plugin) apiCreateDatabase(w http.ResponseWriter, r *http.Request) {
 func (p *Plugin) apiDropDatabase(w http.ResponseWriter, r *http.Request) {
 	path := strings.Trim(pluginPath(r), "/")
 	id, name := seg(path, 1), seg(path, 3) // /connections/<id>/databases/<name>
+	// 双保险：本路由尾通配会吞掉多余段；正常应由注册顺序（泛化靠后）避免嵌套 DELETE 进入这里
+	if len(strings.Split(path, "/")) != 4 || strings.Contains(path, "/tables/") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "路径不匹配删库语义（疑似嵌套路由未先命中）"})
+		return
+	}
 	if !validName(name) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "库名含非法字符"})
 		return
@@ -520,12 +532,26 @@ func (p *Plugin) apiSchema(w http.ResponseWriter, r *http.Request) {
 		}
 		columns = append(columns, m)
 	}
-	_, idxRows, err := queryRows(dbh, "SHOW INDEX FROM `"+table+"`")
+	// 索引：information_schema.STATISTICS 按列名取值（SHOW INDEX 返回裸数组，前端无法按名取列）
+	idxNames := []string{"Key_name", "Non_unique", "Index_type", "Column_name", "Seq_in_index"}
+	_, idxRows, err := queryRows(dbh,
+		`SELECT INDEX_NAME, NON_UNIQUE, INDEX_TYPE, COLUMN_NAME, SEQ_IN_INDEX
+		 FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+		 ORDER BY INDEX_NAME, SEQ_IN_INDEX`, db, table)
 	if err != nil {
-		writeJSON(w, http.StatusOK, ginH("error", err.Error()))
-		return
+		// 回退 SHOW INDEX（老版本 MySQL 兼容性无虞，仅失列名）
+		_, idxRows, _ = queryRows(dbh, "SHOW INDEX FROM `"+table+"`")
 	}
-	indexes := idxRows
+	indexes := make([]map[string]any, 0, len(idxRows))
+	for _, row := range idxRows {
+		m := map[string]any{}
+		for j, n := range idxNames {
+			if j < len(row) {
+				m[n] = row[j]
+			}
+		}
+		indexes = append(indexes, m)
+	}
 	var createSQL string
 	_, crRows, err := queryRows(dbh, "SHOW CREATE TABLE `"+table+"`")
 	if err == nil && len(crRows) > 0 && len(crRows[0]) > 1 {
@@ -565,6 +591,218 @@ func (p *Plugin) tableOp(w http.ResponseWriter, r *http.Request, verb string) {
 	writeJSON(w, http.StatusOK, ginH("ok", true))
 }
 
+// ---- 行级编辑（插入/更新/删除，主键校验） ----
+//
+// 值由 JSON 直接作为参数传给 driver（字符串/数字/null），MySQL 按列类型隐式转换；
+// 列名与主键列均做白名单校验，杜绝注入面。
+
+// tableCtx 解析嵌套路由 /connections/<id>/databases/<db>/tables/<table>。
+func (p *Plugin) tableCtx(r *http.Request) (id, db, table string) {
+	path := strings.Trim(pluginPath(r), "/")
+	return seg(path, 1), seg(path, 3), seg(path, 5)
+}
+
+// priCols 查表主键列（SHOW COLUMNS 第 4 列 Key == PRI）。
+func priCols(dbh *sql.DB, table string) ([]string, error) {
+	_, rows, err := queryRows(dbh, "SHOW COLUMNS FROM `"+table+"`")
+	if err != nil {
+		return nil, err
+	}
+	pk := []string{}
+	for _, row := range rows {
+		if len(row) < 4 {
+			continue
+		}
+		if key, _ := row[3].(string); key == "PRI" {
+			if f, _ := row[0].(string); f != "" {
+				pk = append(pk, f)
+			}
+		}
+	}
+	return pk, nil
+}
+
+// rowBody 行级操作请求体：key 仅更新/删除时需要（主键值对，null 走 NULL 安全比较）。
+type rowBody struct {
+	Key    map[string]any `json:"key"`
+	Values map[string]any `json:"values"`
+}
+
+// sortedCols 取列名有序列表（map 遍历随机，固定顺序才能与参数一一对应）。
+func sortedCols(m map[string]any) []string {
+	cols := make([]string, 0, len(m))
+	for c := range m {
+		cols = append(cols, c)
+	}
+	sort.Strings(cols)
+	return cols
+}
+
+// checkCols 校验列名合法性，返回错误消息（空串表示通过）。
+func checkCols(m map[string]any) string {
+	for col := range m {
+		if !validName(col) {
+			return "列名非法: " + col
+		}
+	}
+	return ""
+}
+
+// requirePK 查表主键并校验 key 列均属于主键。msg 非空表示校验失败。
+func requirePK(dbh *sql.DB, table string, key map[string]any) (msg string) {
+	pk, err := priCols(dbh, table)
+	if err != nil {
+		return err.Error()
+	}
+	if len(pk) == 0 {
+		return "表无主键，不可执行此操作（建议先定义主键）"
+	}
+	pkSet := map[string]bool{}
+	for _, c := range pk {
+		pkSet[c] = true
+	}
+	for c := range key {
+		if !pkSet[c] {
+			return "键列 " + c + " 不是主键列"
+		}
+	}
+	return ""
+}
+
+func (p *Plugin) apiInsertRow(w http.ResponseWriter, r *http.Request) {
+	id, db, table := p.tableCtx(r)
+	if !validName(db) || !validName(table) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "库名/表名含非法字符"})
+		return
+	}
+	var body rowBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Values) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少行数据"})
+		return
+	}
+	if msg := checkCols(body.Values); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		return
+	}
+	dbh, _, err := p.open(id, db)
+	if err != nil {
+		writeJSON(w, http.StatusOK, ginH("error", err.Error()))
+		return
+	}
+	defer dbh.Close()
+	cols := sortedCols(body.Values)
+	quoted, ph := make([]string, 0, len(cols)), make([]string, 0, len(cols))
+	args := make([]any, 0, len(cols))
+	for _, c := range cols {
+		quoted = append(quoted, "`"+c+"`")
+		args = append(args, body.Values[c])
+		ph = append(ph, "?")
+	}
+	q := fmt.Sprintf("INSERT INTO `%s` (%s) VALUES (%s)", table, strings.Join(quoted, ", "), strings.Join(ph, ", "))
+	if _, err := dbh.Exec(q, args...); err != nil {
+		writeJSON(w, http.StatusOK, ginH("error", err.Error()))
+		return
+	}
+	p.ctx.Logf("MySQL 插入行 %s.%s", db, table)
+	writeJSON(w, http.StatusOK, ginH("ok", true))
+}
+
+func (p *Plugin) apiUpdateRow(w http.ResponseWriter, r *http.Request) {
+	id, db, table := p.tableCtx(r)
+	if !validName(db) || !validName(table) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "库名/表名含非法字符"})
+		return
+	}
+	var body rowBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Key) == 0 || len(body.Values) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少主键或行数据"})
+		return
+	}
+	if msg := checkCols(body.Key); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		return
+	}
+	if msg := checkCols(body.Values); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		return
+	}
+	dbh, _, err := p.open(id, db)
+	if err != nil {
+		writeJSON(w, http.StatusOK, ginH("error", err.Error()))
+		return
+	}
+	defer dbh.Close()
+	if msg := requirePK(dbh, table, body.Key); msg != "" {
+		writeJSON(w, http.StatusOK, ginH("error", msg))
+		return
+	}
+	cols := sortedCols(body.Values)
+	sets := make([]string, 0, len(cols))
+	args := make([]any, 0, len(cols)+len(body.Key))
+	for _, c := range cols {
+		sets = append(sets, "`"+c+"`=?")
+		args = append(args, body.Values[c])
+	}
+	// 主键定位用 NULL 安全比较（<=>），支持主键值本身为 NULL 的极端场景
+	kcols := sortedCols(body.Key)
+	conds := make([]string, 0, len(kcols))
+	for _, c := range kcols {
+		conds = append(conds, "`"+c+"` <=> ?")
+		args = append(args, body.Key[c])
+	}
+	q := fmt.Sprintf("UPDATE `%s` SET %s WHERE %s", table, strings.Join(sets, ", "), strings.Join(conds, " AND "))
+	res, err := dbh.Exec(q, args...)
+	if err != nil {
+		writeJSON(w, http.StatusOK, ginH("error", err.Error()))
+		return
+	}
+	affected, _ := res.RowsAffected()
+	writeJSON(w, http.StatusOK, ginH("ok", true, "affected", affected))
+}
+
+func (p *Plugin) apiDeleteRow(w http.ResponseWriter, r *http.Request) {
+	id, db, table := p.tableCtx(r)
+	if !validName(db) || !validName(table) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "库名/表名含非法字符"})
+		return
+	}
+	var body rowBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || len(body.Key) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "缺少主键"})
+		return
+	}
+	if msg := checkCols(body.Key); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": msg})
+		return
+	}
+	dbh, _, err := p.open(id, db)
+	if err != nil {
+		writeJSON(w, http.StatusOK, ginH("error", err.Error()))
+		return
+	}
+	defer dbh.Close()
+	if msg := requirePK(dbh, table, body.Key); msg != "" {
+		writeJSON(w, http.StatusOK, ginH("error", msg))
+		return
+	}
+	kcols := sortedCols(body.Key)
+	conds := make([]string, 0, len(kcols))
+	args := make([]any, 0, len(kcols))
+	for _, c := range kcols {
+		conds = append(conds, "`"+c+"` <=> ?")
+		args = append(args, body.Key[c])
+	}
+	q := fmt.Sprintf("DELETE FROM `%s` WHERE %s", table, strings.Join(conds, " AND "))
+	res, err := dbh.Exec(q, args...)
+	if err != nil {
+		writeJSON(w, http.StatusOK, ginH("error", err.Error()))
+		return
+	}
+	affected, _ := res.RowsAffected()
+	p.ctx.Logf("MySQL 删除行 %s.%s (%d 行)", db, table, affected)
+	writeJSON(w, http.StatusOK, ginH("ok", true, "affected", affected))
+}
+
 // ---- 数据浏览（分页） ----
 
 func (p *Plugin) apiRows(w http.ResponseWriter, r *http.Request) {
@@ -573,9 +811,18 @@ func (p *Plugin) apiRows(w http.ResponseWriter, r *http.Request) {
 	page, _ := json.Number(q.Get("page")).Int64()
 	size, _ := json.Number(q.Get("size")).Int64()
 	where := strings.TrimSpace(q.Get("where"))
+	order := q.Get("order")
 	if connID == "" || !validName(db) || !validName(table) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "参数缺失或库名/表名非法"})
 		return
+	}
+	if order != "" && !validName(order) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "排序列名非法"})
+		return
+	}
+	dir := strings.ToUpper(strings.TrimSpace(q.Get("dir")))
+	if dir != "ASC" && dir != "DESC" {
+		dir = ""
 	}
 	if page < 1 {
 		page = 1
@@ -594,13 +841,20 @@ func (p *Plugin) apiRows(w http.ResponseWriter, r *http.Request) {
 	if where != "" {
 		cond = " WHERE " + where // 允许手写条件（面板登录态操作者可信；值参数化由调用方用 ? 传入）
 	}
+	orderSQL := ""
+	if order != "" {
+		if dir == "" {
+			dir = "ASC"
+		}
+		orderSQL = fmt.Sprintf(" ORDER BY `%s` %s", order, dir)
+	}
 	var total int64
 	if err := dbh.QueryRow("SELECT COUNT(*) FROM `"+table+"`"+cond, args...).Scan(&total); err != nil {
 		writeJSON(w, http.StatusOK, ginH("error", err.Error()))
 		return
 	}
 	offset := (page - 1) * size
-	cols, rows, err := queryRows(dbh, fmt.Sprintf("SELECT * FROM `%s`%s LIMIT %d OFFSET %d", table, cond, size, offset), args...)
+	cols, rows, err := queryRows(dbh, fmt.Sprintf("SELECT * FROM `%s`%s%s LIMIT %d OFFSET %d", table, cond, orderSQL, size, offset), args...)
 	if err != nil {
 		writeJSON(w, http.StatusOK, ginH("error", err.Error()))
 		return
@@ -661,6 +915,245 @@ func (p *Plugin) apiQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	h["ok"] = true
 	writeJSON(w, http.StatusOK, h)
+}
+
+// ---- SQL 文件导入执行 ----
+
+// isSpaceRune 手写空白判断（避免为单个字符引入 unicode 包）。
+func isSpaceRune(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\n' || r == '\r' || r == '\v' || r == '\f'
+}
+
+// atLineStart 判断 rs[i] 之前到行首只有空白。
+func atLineStart(rs []rune, i int) bool {
+	for j := i - 1; j >= 0; j-- {
+		if rs[j] == '\n' {
+			return true
+		}
+		if !isSpaceRune(rs[j]) {
+			return false
+		}
+	}
+	return true
+}
+
+// splitSQLFile 把 SQL 脚本拆成可逐条执行的语句。
+// 支持：'...'/"..."/`...`（反斜杠转义与双写引号）、-- 与 # 行注释、/* */ 块注释、
+// DELIMITER 指令（mysqldump 触发器/存储过程）、版本化注释 /*!...*/ 原样保留随语句执行。
+// 纯注释或空白片段不产生语句；文件不以分隔符结尾时最后一段也视为一条语句。
+func splitSQLFile(src string) []string {
+	rs := []rune(src)
+	n := len(rs)
+	out := []string{}
+	delim := []rune(";")
+	var cur strings.Builder
+	sawCode := false
+
+	flush := func() {
+		if sawCode {
+			if s := strings.TrimSpace(cur.String()); s != "" {
+				out = append(out, s)
+			}
+		}
+		cur.Reset()
+		sawCode = false
+	}
+
+	i := 0
+	for i < n {
+		c := rs[i]
+		// DELIMITER 指令：行首、当前语句尚无实际代码
+		if !sawCode && (c == 'd' || c == 'D') && atLineStart(rs, i) &&
+			strings.EqualFold(string(rs[i:min(i+9, n)]), "delimiter") {
+			j := i + 9
+			for j < n && (rs[j] == ' ' || rs[j] == '\t') {
+				j++
+			}
+			k := j
+			for k < n && rs[k] != '\n' {
+				k++
+			}
+			if d := strings.TrimSpace(string(rs[j:k])); d != "" {
+				delim = []rune(d)
+			}
+			cur.Reset()
+			i = k
+			continue
+		}
+		// 字符串字面量：反斜杠转义 + 同引号双写续行
+		if c == '\'' || c == '"' {
+			cur.WriteRune(c)
+			i++
+			for i < n {
+				cur.WriteRune(rs[i])
+				if rs[i] == '\\' && i+1 < n {
+					cur.WriteRune(rs[i+1])
+					i += 2
+					continue
+				}
+				if rs[i] == c {
+					if i+1 < n && rs[i+1] == c {
+						cur.WriteRune(c)
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+			continue
+		}
+		// 反引号标识符（内可含分号）
+		if c == '`' {
+			cur.WriteRune(c)
+			i++
+			for i < n {
+				cur.WriteRune(rs[i])
+				if rs[i] == '`' {
+					if i+1 < n && rs[i+1] == '`' {
+						cur.WriteRune('`')
+						i += 2
+						continue
+					}
+					i++
+					break
+				}
+				i++
+			}
+			continue
+		}
+		// 行注释 -- 与 #
+		if (c == '-' && i+1 < n && rs[i+1] == '-') || c == '#' {
+			for i < n && rs[i] != '\n' {
+				cur.WriteRune(rs[i])
+				i++
+			}
+			continue
+		}
+		// 块注释 /* */；/*! ... */ 为版本化可执行注释（mysqldump 常用），视为代码
+		if c == '/' && i+1 < n && rs[i+1] == '*' {
+			cur.WriteString("/*")
+			i += 2
+			if i < n && rs[i] == '!' {
+				sawCode = true
+			}
+			for i < n {
+				if rs[i] == '*' && i+1 < n && rs[i+1] == '/' {
+					cur.WriteString("*/")
+					i += 2
+					break
+				}
+				cur.WriteRune(rs[i])
+				i++
+			}
+			continue
+		}
+		// 命中当前分隔符 → 结束一条语句
+		if i+len(delim) <= n {
+			match := true
+			for j, d := range delim {
+				if rs[i+j] != d {
+					match = false
+					break
+				}
+			}
+			if match {
+				flush()
+				i += len(delim)
+				continue
+			}
+		}
+		if !isSpaceRune(c) {
+			sawCode = true
+		}
+		cur.WriteRune(c)
+		i++
+	}
+	flush()
+	return out
+}
+
+// openTimeout 打开连接并放宽网络超时（SQL 文件等长耗时操作使用）。
+func (p *Plugin) openTimeout(connID, db string, t time.Duration) (*sql.DB, *Connection, error) {
+	c := p.findConn(connID)
+	if c == nil {
+		return nil, nil, fmt.Errorf("连接不存在: %s", connID)
+	}
+	if db == "" {
+		db = "information_schema"
+	}
+	dbh, err := sql.Open("mysql", fmt.Sprintf(
+		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local&timeout=10s&readTimeout=%s&writeTimeout=%s",
+		c.User, p.openPassword(c), c.Host, c.Port, db, t, t))
+	if err != nil {
+		return nil, nil, err
+	}
+	dbh.SetMaxOpenConns(2)
+	dbh.SetConnMaxLifetime(30 * time.Minute)
+	return dbh, c, nil
+}
+
+// apiRunSQLFile POST /connections/<id>/sqlfile?db=<库>&cont=<0|1>
+// 请求体为 SQL 文件原文（text/plain，最大 512MB）；逐条执行并返回统计与错误清单。
+// db 为空时以 information_schema 作为默认库（脚本内的 USE 语句自行切换）。
+func (p *Plugin) apiRunSQLFile(w http.ResponseWriter, r *http.Request) {
+	path := strings.Trim(pluginPath(r), "/")
+	id := seg(path, 1)
+	q := r.URL.Query()
+	db := q.Get("db")
+	cont := q.Get("cont") == "1"
+	if db != "" && !validName(db) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "库名含非法字符"})
+		return
+	}
+	if p.findConn(id) == nil {
+		writeJSON(w, http.StatusOK, ginH("error", "连接不存在"))
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 512<<20))
+	if err != nil {
+		writeJSON(w, http.StatusOK, ginH("error", "读取文件失败（过大或传输中断）: "+err.Error()))
+		return
+	}
+	stmts := splitSQLFile(string(body))
+	if len(stmts) == 0 {
+		writeJSON(w, http.StatusOK, ginH("error", "文件中没有可执行的 SQL 语句"))
+		return
+	}
+	dbh, _, err := p.openTimeout(id, db, 5*time.Minute)
+	if err != nil {
+		writeJSON(w, http.StatusOK, ginH("error", err.Error()))
+		return
+	}
+	defer dbh.Close()
+	start := time.Now()
+	executed, failed := 0, 0
+	errs := make([]map[string]any, 0, 8)
+	for i, s := range stmts {
+		if _, err := dbh.Exec(s); err != nil {
+			failed++
+			if len(errs) < 50 {
+				stmt := s
+				if len(stmt) > 160 {
+					stmt = stmt[:160] + "…"
+				}
+				errs = append(errs, ginH("index", i+1, "stmt", stmt, "error", err.Error()))
+			}
+			if !cont {
+				break
+			}
+			continue
+		}
+		executed++
+	}
+	elapsed := time.Since(start).Round(time.Millisecond)
+	p.ctx.Logf("MySQL 执行 SQL 文件: conn=%s db=%s 共 %d 条，成功 %d，失败 %d（%s）", id, db, len(stmts), executed, failed, elapsed)
+	writeJSON(w, http.StatusOK, ginH(
+		"ok", failed == 0, "total", len(stmts), "executed", executed,
+		"failed", failed, "elapsed", elapsed.String(), "errors", errs,
+		"stoppedEarly", failed > 0 && !cont,
+	))
 }
 
 func (p *Plugin) recordHistory(body struct{ Conn, Database, SQL string }, ok bool, errMsg string, rows int, elapsed string, affected int64) {

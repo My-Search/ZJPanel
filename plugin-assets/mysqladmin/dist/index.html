@@ -22,185 +22,383 @@ try {
 </script>
 <style>
   :root {
-    --bg: #f5f7fa; --card: #ffffff; --border: #e5e7eb; --text: #1f1f1f;
-    --dim: #6b7280; --primary: #1677ff; --primary-weak: #e6f0ff;
-    --green: #52c41a; --red: #ff4d4f; --orange: #fa8c16; --radius: 10px;
+    --bg: #f0f2f5; --panel: #ffffff; --panel-2: #f7f8fa;
+    --border: #d9dde3; --border-weak: #e9ecf1;
+    --text: #24292e; --dim: #7a828c;
+    --primary: #3d7fd9; --primary-weak: #e8f1fb;
+    --sel: #cfe3f8; --hover: #eef3fa; --head: #f4f6f8;
+    --green: #2e9e5b; --red: #e5484d; --orange: #d97c1f;
+    --shadow: 0 4px 16px rgba(0,0,0,.14);
+    --radius: 8px;
   }
   html[data-theme='dark'] {
-    --bg: #141414; --card: #1f1f1f; --border: #333; --text: #e6e6e6;
-    --dim: #8c8c8c; --primary: #1677ff; --primary-weak: #16243f;
+    --bg: #17181a; --panel: #222326; --panel-2: #1d1e20;
+    --border: #3a3d42; --border-weak: #2c2e32;
+    --text: #d8dde3; --dim: #8b939d;
+    --primary: #5a9ce0; --primary-weak: #1c2b3d;
+    --sel: #28425c; --hover: #2a2d31; --head: #26282c;
+    --green: #57c26a; --red: #f16a6d; --orange: #e09a4a;
+    --shadow: 0 4px 16px rgba(0,0,0,.5);
   }
   * { box-sizing: border-box; }
-  /* 防白闪：首帧渲染前 JS 若已同步深色主题，直接以深色底渲染 */
-  html[data-theme='dark'] { background: #141414; color-scheme: dark; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
-  .wrap { max-width: 1180px; margin: 0 auto; padding: 16px; }
-  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
-  h1 { font-size: 17px; margin: 0; }
-  .btn { border: 1px solid var(--border); background: var(--card); color: var(--text); padding: 6px 14px; border-radius: 6px; cursor: pointer; font-size: 13px; }
-  .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
-  .btn.danger { color: var(--red); }
-  .btn.small { padding: 3px 10px; font-size: 12px; }
-  .btn:disabled { opacity: .5; cursor: not-allowed; }
-  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 12px; }
-  .conn-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .conn-id { font-weight: 600; font-size: 15px; }
-  .tag { font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--primary-weak); color: var(--primary); }
-  .tag.off { background: transparent; border: 1px solid var(--border); color: var(--dim); }
-  .tag.ok { background: rgba(82,196,26,.12); color: var(--green); }
-  .meta { color: var(--dim); font-size: 12px; margin-top: 6px; word-break: break-all; }
-  .layout { display: grid; grid-template-columns: 230px 1fr; gap: 12px; align-items: start; }
-  @media (max-width: 800px) { .layout { grid-template-columns: 1fr; } }
-  /* 左侧树：宽度可拖拽调整（localStorage 记忆），内容超宽水平滚动 */
-  .layout.has-resizer { grid-template-columns: var(--tree-w, 230px) 6px 1fr; }
-  .tree-resizer { cursor: col-resize; background: transparent; border-radius: 3px; min-height: 200px; }
-  .tree-resizer:hover, .tree-resizer.dragging { background: var(--primary-weak); }
-  .tree-card { min-width: 0; overflow: hidden; display: flex; flex-direction: column; }
-  .tree { max-height: 460px; overflow: auto; min-width: 0; }
-  /* 树节点文本单行省略（不换行），行动作改图标按钮 */
-  .tree .db, .tree .tb { white-space: nowrap; }
-  .tree .db .dbname, .tree .tb .tbname { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
-  .tree .tb .cnt { font-size: 11px; flex-shrink: 0; }
-  .icon-btn { border: 1px solid transparent; background: transparent; cursor: pointer; font-size: 12px; line-height: 1;
-    padding: 2px 5px; border-radius: 4px; color: var(--dim); flex-shrink: 0; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); overflow: hidden;
+    font: 13px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  #app { display: flex; flex-direction: column; height: 100vh; }
+  .icon { width: 16px; height: 16px; flex-shrink: 0; vertical-align: -3px; }
+  .icon.sm { width: 13px; height: 13px; }
+  .icon.lg { width: 22px; height: 22px; }
+  .icon.fill { fill: currentColor; stroke: none; }
+  .muted { color: var(--dim); }
+  button { font-family: inherit; }
+  ::-webkit-scrollbar { width: 9px; height: 9px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--dim); background-clip: content-box; }
+  ::-webkit-scrollbar-corner { background: transparent; }
+  input, select, textarea { font-family: inherit; }
+
+  /* ── 标题栏（仿 Navicat 窗口标题） ─────────────────────────── */
+  .titlebar { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px;
+    background: var(--panel-2); border-bottom: 1px solid var(--border-weak); flex-shrink: 0; }
+  .titlebar .tb-ic { color: var(--primary); display: flex; }
+  .titlebar .tb-text { font-size: 12.5px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .titlebar .tb-right { margin-left: auto; font-size: 11px; color: var(--dim); opacity: .7; }
+
+  /* ── 主工具栏（大图标 + 文字，仿 Navicat 顶部按钮组） ───────── */
+  .maintoolbar { display: flex; align-items: stretch; gap: 2px; padding: 4px 8px 3px;
+    background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0; overflow-x: auto; }
+  .tb-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    min-width: 58px; padding: 5px 8px 4px; border: none; background: transparent; color: var(--text);
+    border-radius: 6px; cursor: pointer; font-size: 11.5px; line-height: 1.2; }
+  .tb-btn .icon { width: 20px; height: 20px; color: var(--primary); }
+  .tb-btn:hover { background: var(--hover); }
+  .tb-btn:active { background: var(--primary-weak); }
+  .tb-btn.disabled { opacity: .38; cursor: default; }
+  .tb-btn.disabled:hover { background: transparent; }
+  .tb-btn.danger .icon { color: var(--red); }
+  .tb-sep { width: 1px; background: var(--border-weak); margin: 6px 6px; flex-shrink: 0; }
+
+  /* ── 主区域布局：树 | 内容 | 信息面板 ─────────────────────── */
+  .main { flex: 1; display: flex; min-height: 0; background: var(--panel); }
+  .sidebar { width: var(--tree-w, 240px); min-width: 160px; max-width: 560px; display: flex; flex-direction: column;
+    border-right: 1px solid var(--border); background: var(--panel); flex-shrink: 0; }
+  .tree { flex: 1; overflow: auto; padding: 6px 4px 10px; }
+  .tree-empty { color: var(--dim); text-align: center; padding: 40px 12px; font-size: 12.5px; }
+  .vresizer { width: 5px; cursor: col-resize; flex-shrink: 0; background: transparent; margin-left: -3px; z-index: 2; }
+  .vresizer:hover, .vresizer.dragging { background: var(--primary-weak); }
+
+  /* ── 连接树 ─────────────────────────────────────────────── */
+  .tnode { display: flex; align-items: center; gap: 5px; height: 25px; padding: 0 6px; border-radius: 5px;
+    cursor: default; white-space: nowrap; user-select: none; position: relative; }
+  .tnode:hover { background: var(--hover); }
+  .tnode.sel { background: var(--sel); }
+  .tnode .caret { width: 15px; height: 15px; display: flex; align-items: center; justify-content: center;
+    color: var(--dim); flex-shrink: 0; cursor: pointer; transition: transform .12s; }
+  .tnode .caret .icon { width: 12px; height: 12px; }
+  .tnode.open > .caret { transform: rotate(90deg); }
+  .tnode .caret.leaf { visibility: hidden; }
+  .tnode .nname { overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
+  .tnode .nic { display: flex; flex-shrink: 0; }
+  .tnode.lv0 .nic { color: var(--primary); }
+  .tnode.lv1 .nic { color: var(--primary); }
+  .tnode.lv2 .nic { color: #4a9aa8; }
+  .tnode .ncnt { font-size: 10.5px; color: var(--dim); flex-shrink: 0; }
+  .tnode.syslib .nname, .tnode.syslib .nic { opacity: .55; }
+  .tnode .nacts { margin-left: auto; display: none; gap: 1px; flex-shrink: 0; }
+  .tnode:hover .nacts { display: flex; }
+  .tnode.sel .nacts { display: flex; }
+  .nsub { margin-left: 17px; border-left: 1px solid var(--border-weak); padding-left: 2px; }
+  .icon-btn { border: none; background: transparent; cursor: pointer; display: flex; align-items: center;
+    padding: 2px; border-radius: 4px; color: var(--dim); }
+  .icon-btn .icon { width: 13px; height: 13px; }
   .icon-btn:hover { background: var(--primary-weak); color: var(--primary); }
-  .icon-btn.danger { color: var(--red); }
-  .icon-btn.danger:hover { background: rgba(255,77,79,.12); color: var(--red); }
-  .tree .db .db-actions { margin-left: auto; display: none; gap: 2px; flex-shrink: 0; }
-  .tree .db:hover .db-actions, .tree .db.active .db-actions { display: flex; }
-  .tree .tables { margin-left: 14px; border-left: 1px solid var(--border); padding-left: 8px; }
-  .tree .tb { padding: 3px 8px; cursor: pointer; border-radius: 6px; font-size: 13px; display: flex; align-items: center; gap: 6px; color: var(--dim); }
-  .tree .tb:hover, .tree .tb.active { background: var(--primary-weak); color: var(--primary); }
-  .tree .tb .tb-actions { margin-left: auto; display: none; gap: 2px; flex-shrink: 0; }
-  .tree .tb:hover .tb-actions { display: flex; }
-  table.grid { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; }
-  /* 列头/单元格单行水平排，超宽表格整体水平滚动（不再逐列竖排折行） */
-  table.grid th, table.grid td { border-bottom: 1px solid var(--border); border-right: 1px solid var(--border);
-    padding: 5px 10px; text-align: left; white-space: nowrap; }
-  table.grid td.wrap-cell { white-space: normal; word-break: break-all; min-width: 180px; max-width: 420px; }
-  table.grid th { background: var(--bg); position: sticky; top: 0; z-index: 1; }
-  table.grid tr td:last-child, table.grid tr th:last-child { border-right: none; }
-  table.grid thead tr:last-child th { border-bottom: 1px solid var(--border); }
-  .scroll { max-height: 380px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
-  /* 内嵌页面滚动条统一窄样式（含树/表格水平滚动条） */
-  ::-webkit-scrollbar { width: 8px; height: 8px; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-  ::-webkit-scrollbar-thumb:hover { background: var(--dim); }
-  ::-webkit-scrollbar-track { background: transparent; }
-  textarea.sql { width: 100%; min-height: 110px; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 6px; padding: 10px; font: 13px/1.5 ui-monospace, Consolas, monospace; resize: vertical; }
-  .sql-area { display: flex; flex-direction: column; gap: 8px; }
-  .sql-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  .err { color: var(--red); font-size: 12px; white-space: pre-wrap; word-break: break-all; }
-  .okmsg { color: var(--green); font-size: 12px; }
-  .tabs { display: flex; gap: 4px; margin-bottom: 10px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-  .tab { padding: 6px 14px; cursor: pointer; font-size: 13px; border-bottom: 2px solid transparent; color: var(--dim); }
-  .tab.active { color: var(--primary); border-bottom-color: var(--primary); }
-  .pager { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--dim); flex-wrap: wrap; }
+  .icon-btn.danger:hover { background: rgba(229,72,77,.12); color: var(--red); }
+  .tree-msg { color: var(--dim); font-size: 12px; padding: 3px 8px 3px 24px; }
+
+  /* ── 内容区：标签栏 + 标签体 + 记录条 + SQL 栏 ─────────────── */
+  .content { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .tabbar { display: flex; align-items: flex-end; background: var(--panel-2); border-bottom: 1px solid var(--border);
+    padding: 4px 6px 0; gap: 2px; flex-shrink: 0; overflow-x: auto; }
+  .tab { display: flex; align-items: center; gap: 6px; padding: 5px 8px 5px 10px; max-width: 230px;
+    border: 1px solid transparent; border-bottom: none; border-radius: 7px 7px 0 0; cursor: pointer;
+    font-size: 12.5px; color: var(--dim); flex-shrink: 0; }
+  .tab .tab-ic { display: flex; color: var(--dim); }
+  .tab.act { background: var(--panel); border-color: var(--border); color: var(--text); position: relative; }
+  .tab.act::after { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--primary); }
+  .tab.act .tab-ic { color: var(--primary); }
+  .tab .tab-tt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tab .tab-x { display: flex; border-radius: 4px; padding: 1px; color: var(--dim); }
+  .tab .tab-x:hover { background: rgba(229,72,77,.15); color: var(--red); }
+  .tabbar-right { margin-left: auto; display: flex; align-items: center; gap: 4px; padding: 0 2px 4px; flex-shrink: 0; }
+  .mini-btn { border: 1px solid var(--border); background: var(--panel); color: var(--dim); border-radius: 5px;
+    width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .mini-btn:hover { color: var(--primary); border-color: var(--primary); }
+  .mini-btn.on { color: var(--primary); background: var(--primary-weak); border-color: var(--primary); }
+
+  .tabbody { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .tabbody > .fill { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+  /* 视图切换条（数据 | 结构 | DDL）+ 筛选 */
+  .viewbar { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--border-weak);
+    background: var(--panel); flex-shrink: 0; flex-wrap: wrap; }
+  .seg { display: flex; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 2px; gap: 2px; }
+  .seg-item { padding: 2px 12px; border-radius: 5px; font-size: 12px; color: var(--dim); cursor: pointer; border: none; background: transparent; }
+  .seg-item:hover { color: var(--text); }
+  .seg-item.on { background: var(--panel); color: var(--primary); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  .filter-box { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 200px; max-width: 520px; }
+  .filter-box input { flex: 1; border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+    border-radius: 6px; padding: 4px 10px; font-size: 12.5px; font-family: ui-monospace, Consolas, monospace; }
+  .filter-box input:focus { outline: none; border-color: var(--primary); background: var(--panel); }
+  .viewbar .spacer { flex: 1; }
+
+  /* ── 数据网格（仿 Navicat 网格） ─────────────────────────── */
+  .gridwrap { flex: 1; overflow: auto; background: var(--panel); }
+  table.grid { border-collapse: separate; border-spacing: 0; font-size: 12.5px; min-width: 100%; }
+  table.grid th, table.grid td { border-bottom: 1px solid var(--border-weak); border-right: 1px solid var(--border-weak);
+    padding: 3px 9px; text-align: left; white-space: nowrap; height: 24px; }
+  table.grid thead th { background: var(--head); position: sticky; top: 0; z-index: 3; font-weight: 600;
+    font-size: 12px; color: var(--text); user-select: none; border-bottom: 1px solid var(--border); }
+  table.grid thead th[data-sort] { cursor: pointer; }
+  table.grid thead th[data-sort]:hover { background: var(--hover); }
+  table.grid th.rownum-h, table.grid td.rownum { position: sticky; left: 0; z-index: 2; background: var(--head);
+    color: var(--dim); text-align: center; cursor: pointer; min-width: 34px; width: 34px; padding: 3px 4px;
+    font-size: 11px; border-right: 1px solid var(--border); }
+  table.grid thead th.rownum-h { z-index: 4; cursor: default; }
+  td.rownum .arrow { color: var(--primary); visibility: hidden; display: inline-flex; }
+  tr.row-sel td.rownum .arrow { visibility: visible; }
+  tr.row-sel td.rownum { color: var(--primary); font-weight: 700; }
+  table.grid th .th-in { display: inline-flex; align-items: center; gap: 4px; max-width: 340px; overflow: hidden; }
+  table.grid th .th-in .nname { overflow: hidden; text-overflow: ellipsis; }
+  table.grid th .sort-ind { display: inline-flex; color: var(--primary); }
+  table.grid th .sort-ind .icon { width: 11px; height: 11px; }
+  table.grid th .sort-ind.desc { transform: rotate(90deg); }
+  table.grid td { max-width: 360px; overflow: hidden; text-overflow: ellipsis; cursor: default; }
+  table.grid td.keycell { color: var(--primary); }
+  table.grid tr:hover td { background: var(--hover); }
+  table.grid td.cell-sel { background: var(--sel) !important; box-shadow: inset 0 0 0 1.5px var(--primary); }
+  table.grid td .nullv { color: var(--dim); font-style: italic; font-size: 11.5px; opacity: .8; }
+  table.grid td input.cell-edit { width: 100%; min-width: 120px; border: none; outline: none; background: var(--panel);
+    color: var(--text); font: 12.5px ui-monospace, Consolas, monospace; padding: 0; margin: 0; }
+  table.grid tfoot td { border: none; }
+  .grid-empty { color: var(--dim); text-align: center; padding: 46px 0; font-size: 12.5px; }
+  .grid-err { color: var(--red); padding: 14px; font-size: 12.5px; white-space: pre-wrap; word-break: break-all; }
+
+  /* ── 记录导航条（仿 Navicat 底部 + − ↻ 与分页） ───────────── */
+  .recordbar { display: flex; align-items: center; height: 30px; padding: 0 10px; gap: 2px; flex-shrink: 0;
+    background: var(--panel); border-top: 1px solid var(--border); }
+  .rb-btn { border: none; background: transparent; color: var(--dim); width: 26px; height: 24px; border-radius: 5px;
+    display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .rb-btn .icon { width: 15px; height: 15px; }
+  .rb-btn:hover:not(:disabled) { background: var(--hover); color: var(--primary); }
+  .rb-btn:disabled { opacity: .35; cursor: default; }
+  .rb-btn.add .icon { color: var(--green); }
+  .rb-btn.del .icon { color: var(--red); }
+  .rb-sep { width: 1px; height: 16px; background: var(--border); margin: 0 6px; }
+  .rb-right { margin-left: auto; display: flex; align-items: center; gap: 2px; }
+  .rb-page { width: 44px; text-align: center; border: 1px solid var(--border); background: var(--panel-2);
+    color: var(--text); border-radius: 5px; height: 22px; font-size: 12px; }
+  .rb-size { border: 1px solid var(--border); background: var(--panel-2); color: var(--text); border-radius: 5px;
+    height: 22px; font-size: 12px; margin-left: 6px; }
+  .rb-info { color: var(--dim); font-size: 11.5px; margin-left: 10px; white-space: nowrap; }
+  .rb-ro { color: var(--orange); font-size: 11.5px; margin-left: 8px; }
+
+  /* ── SQL 预览栏（仿 Navicat 底部 SQL 条） ─────────────────── */
+  .sqlbar { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; flex-shrink: 0;
+    background: var(--panel-2); border-top: 1px solid var(--border-weak); font: 12px ui-monospace, Consolas, monospace; }
+  .sqlbar .sb-ic { color: var(--primary); display: flex; }
+  .sqlbar .sb-text { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .sqlbar .sb-copy { border: none; background: transparent; color: var(--dim); cursor: pointer; display: flex;
+    padding: 2px; border-radius: 4px; }
+  .sqlbar .sb-copy:hover { color: var(--primary); background: var(--hover); }
+
+  /* ── 信息面板（右侧字段属性，仿 Navicat 信息窗格） ─────────── */
+  .infopanel { width: 230px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--panel);
+    overflow: auto; padding: 12px 14px; }
+  .infopanel.hidden { display: none; }
+  .ip-title { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 13px; margin-bottom: 10px; }
+  .ip-title .icon { color: var(--primary); }
+  .ip-badge { font-size: 10px; padding: 0 6px; border-radius: 8px; background: var(--primary-weak); color: var(--primary); font-weight: 600; }
+  .ip-field { margin-bottom: 9px; }
+  .ip-label { font-size: 11px; color: var(--dim); margin-bottom: 1px; }
+  .ip-val { font-size: 12.5px; word-break: break-all; font-family: ui-monospace, Consolas, monospace; }
+  .ip-hint { color: var(--dim); font-size: 12px; padding: 8px 0; line-height: 1.7; }
+  .ip-cols { margin-top: 12px; border-top: 1px solid var(--border-weak); padding-top: 8px; }
+  .ip-col { display: flex; align-items: center; gap: 6px; padding: 2px 6px; border-radius: 4px; cursor: pointer;
+    font-size: 12px; font-family: ui-monospace, Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ip-col:hover { background: var(--hover); }
+  .ip-col.on { background: var(--sel); }
+  .ip-col .icon { width: 12px; height: 12px; color: var(--dim); }
+  .ip-col .t { color: var(--dim); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ── 查询标签（SQL 控制台） ──────────────────────────────── */
+  .qwrap { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+  .qbar { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--border-weak); flex-shrink: 0; flex-wrap: wrap; }
+  .qbar select { border: 1px solid var(--border); background: var(--panel-2); color: var(--text); border-radius: 6px;
+    padding: 4px 8px; font-size: 12.5px; min-width: 160px; }
+  .btn { border: 1px solid var(--border); background: var(--panel); color: var(--text); padding: 4px 14px;
+    border-radius: 6px; cursor: pointer; font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; }
+  .btn:hover { border-color: var(--primary); color: var(--primary); }
+  .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .btn.primary:hover { opacity: .9; color: #fff; }
+  .btn.danger { color: var(--red); }
+  .btn.danger:hover { border-color: var(--red); }
+  .btn.small { padding: 2px 10px; font-size: 12px; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .qeditor { border-bottom: 1px solid var(--border-weak); flex-shrink: 0; }
+  .qeditor textarea { width: 100%; height: 130px; border: none; background: var(--panel); color: var(--text);
+    padding: 10px 12px; font: 13px/1.6 ui-monospace, Consolas, monospace; resize: vertical; outline: none; }
+  .qresult { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+  .qmeta { padding: 4px 12px; font-size: 12px; color: var(--dim); border-bottom: 1px solid var(--border-weak);
+    display: flex; gap: 12px; align-items: center; flex-shrink: 0; }
+  .qmeta .okm { color: var(--green); }
+  .qmeta .errm { color: var(--red); white-space: pre-wrap; word-break: break-all; }
+  .qgrid { flex: 1; overflow: auto; }
+  .qhist { flex-shrink: 0; border-top: 1px solid var(--border-weak); max-height: 180px; overflow: auto; }
+  .qhist .hhead { display: flex; align-items: center; gap: 6px; padding: 4px 12px; font-size: 12px; color: var(--dim); cursor: pointer; user-select: none; }
+  .qhist .hhead:hover { color: var(--primary); }
+  .qhist .item { display: flex; gap: 8px; align-items: baseline; padding: 3px 12px; font-size: 12px; cursor: pointer; border-top: 1px solid var(--border-weak); }
+  .qhist .item:hover { background: var(--hover); }
+  .qhist .sql-txt { font-family: ui-monospace, Consolas, monospace; word-break: break-all; flex: 1;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qhist .st { flex-shrink: 0; }
+  .qhist .st.ok { color: var(--green); }
+  .qhist .st.bad { color: var(--red); }
+  .qhist .tm { color: var(--dim); font-size: 10.5px; flex-shrink: 0; }
+
+  /* ── 结构 / DDL 视图 ────────────────────────────────────── */
+  .structwrap { flex: 1; overflow: auto; padding: 12px 14px; }
+  .structwrap h4 { margin: 14px 0 6px; font-size: 13px; }
+  .structwrap h4:first-child { margin-top: 0; }
+  pre.ddl { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px;
+    font: 12px/1.7 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; margin: 0; }
+
+  /* ── 欢迎页（无标签时） ─────────────────────────────────── */
+  .welcome { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--dim); }
+  .welcome .icon { width: 52px; height: 52px; color: var(--border); margin-bottom: 6px; }
+  .welcome .w-actions { display: flex; gap: 10px; margin-top: 10px; }
+
+  /* ── 右键菜单（仿 Navicat 连接右键） ───────────────────────── */
+  .ctxmenu { position: fixed; z-index: 80; min-width: 190px; background: var(--panel); border: 1px solid var(--border);
+    border-radius: 8px; box-shadow: var(--shadow); padding: 5px; display: none; user-select: none; }
+  .ctxmenu.open { display: block; }
+  .ctxmenu .ci { display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 5px; cursor: pointer;
+    font-size: 12.5px; color: var(--text); white-space: nowrap; }
+  .ctxmenu .ci:hover { background: var(--hover); color: var(--primary); }
+  .ctxmenu .ci.danger { color: var(--red); }
+  .ctxmenu .ci.danger:hover { background: rgba(229,72,77,.12); color: var(--red); }
+  .ctxmenu .csep { height: 1px; background: var(--border-weak); margin: 4px 6px; }
+
+  /* ── 运行 SQL 文件弹窗 ──────────────────────────────────── */
+  .ckline { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text); margin-top: 2px; cursor: pointer; }
+  .sf-file { border: 1px dashed var(--border); border-radius: 8px; padding: 16px 14px; text-align: center; color: var(--dim);
+    cursor: pointer; font-size: 12.5px; display: block; transition: border-color .15s, color .15s; }
+  .sf-file:hover { border-color: var(--primary); color: var(--primary); }
+  .sf-file input { display: none; }
+  .sf-file.has { border-style: solid; border-color: var(--green); color: var(--green); }
+  .sf-res { margin-top: 12px; border-top: 1px solid var(--border-weak); padding-top: 10px; font-size: 12.5px; max-height: 210px; overflow: auto; }
+  .sf-res .sum { display: flex; gap: 14px; margin-bottom: 6px; flex-wrap: wrap; }
+  .sf-res .eitem { border-top: 1px solid var(--border-weak); padding: 5px 2px; }
+  .sf-res .eitem:first-child { border-top: none; }
+  .sf-res .estmt { font-family: ui-monospace, Consolas, monospace; color: var(--dim); word-break: break-all; }
+  .sf-res .eerr { color: var(--red); word-break: break-all; }
+
+  /* ── 弹窗 / Toast ──────────────────────────────────────── */
+  .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center;
+    justify-content: center; padding: 16px; z-index: 50; }
+  .modal-mask.open { display: flex; }
+  .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px;
+    width: 560px; max-width: 100%; max-height: 90vh; overflow: auto; box-shadow: var(--shadow); }
+  .modal.sm { width: 420px; }
+  .modal h3 { margin: 0 0 14px; font-size: 15px; }
+  .modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; align-items: center; }
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+  .form-grid.one { grid-template-columns: 1fr; }
   @media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } }
   label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 3px; }
-  input, select { width: 100%; border: 1px solid var(--border); background: var(--bg); color: var(--text); border-radius: 6px; padding: 7px 10px; font-size: 13px; }
-  .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center; justify-content: center; padding: 16px; z-index: 10; }
-  .modal-mask.open { display: flex; }
-  .modal { background: var(--card); border-radius: 12px; padding: 18px; width: 560px; max-width: 100%; max-height: 90vh; overflow: auto; }
-  .modal h3 { margin: 0 0 12px; font-size: 15px; }
-  .modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
-  .empty { text-align: center; color: var(--dim); padding: 40px 0; }
-  .toast { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); background: var(--card); border: 1px solid var(--border); color: var(--text); padding: 8px 18px; border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.15); display: none; z-index: 20; }
-  pre.create-sql { background: var(--bg); border: 1px solid var(--border); padding: 10px; border-radius: 6px; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
-  .hist { font-size: 12px; max-height: 220px; overflow: auto; }
-  .hist .item { border-top: 1px solid var(--border); padding: 6px 4px; display: flex; gap: 8px; align-items: baseline; }
-  .hist .sql-txt { font-family: ui-monospace, Consolas, monospace; word-break: break-all; flex: 1; }
-  .hist .st { flex-shrink: 0; }
+  .fld input[type=text], .fld input[type=password], .fld select {
+    width: 100%; border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+    border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+  .fld input:focus, .fld select:focus { outline: none; border-color: var(--primary); background: var(--panel); }
+  .rowfld { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; margin-bottom: 8px; }
+  .rowfld label { margin: 0; font-family: ui-monospace, Consolas, monospace; }
+  .rowfld label .t { color: var(--dim); font-size: 10.5px; margin-left: 6px; }
+  .rowfld .nullck { display: flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--dim); cursor: pointer; }
+  .rowfld input[type=text] { border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+    border-radius: 6px; padding: 5px 9px; font-size: 12.5px; width: 100%; }
+  .rowfld input[type=text]:disabled { opacity: .45; }
+  .toast { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); background: var(--panel);
+    border: 1px solid var(--border); color: var(--text); padding: 8px 18px; border-radius: 8px;
+    box-shadow: var(--shadow); display: none; z-index: 99; max-width: 70vw; word-break: break-all; font-size: 12.5px; }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="topbar">
-    <h1>MySQL 管理</h1>
-    <div style="display:flex;gap:8px">
-      <button class="btn" onclick="loadAll()">刷新</button>
-      <button class="btn primary" onclick="openConnEditor()">+ 新建连接</button>
-    </div>
+<div id="app">
+  <div class="titlebar">
+    <span class="tb-ic" id="tbIcon"></span>
+    <span class="tb-text" id="tbText">MySQL 管理</span>
+    <span class="tb-right">ZJPanel · MySQL</span>
   </div>
 
-  <div id="connList"></div>
+  <div class="maintoolbar" id="maintoolbar">
+    <button class="tb-btn" data-action="newconn"><span data-ic="plug"></span>新建连接</button>
+    <span class="tb-sep"></span>
+    <button class="tb-btn" data-action="opentable" id="btnOpenTable"><span data-ic="table"></span>打开表</button>
+    <button class="tb-btn" data-action="newquery" id="btnNewQuery"><span data-ic="query"></span>新建查询</button>
+    <button class="tb-btn" data-action="newdb" id="btnNewDb"><span data-ic="db-plus"></span>新建数据库</button>
+    <span class="tb-sep"></span>
+    <button class="tb-btn" data-action="refresh" id="btnRefresh"><span data-ic="refresh"></span>刷新</button>
+    <button class="tb-btn danger" data-action="delnode" id="btnDelete"><span data-ic="trash"></span>删除</button>
+  </div>
 
-  <div id="workspace" style="display:none">
-    <div class="layout has-resizer" id="wsLayout">
-      <div class="card tree-card">
-        <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
-          <b id="wsConnName" style="font-size:14px"></b>
-          <span class="tag" id="wsConnTag"></span>
-        </div>
-        <div class="tree" id="tree">加载中…</div>
-        <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap">
-          <button class="btn small" onclick="newDatabase()">建库</button>
-          <button class="btn small" onclick="loadTree(true)">刷新树</button>
-        </div>
-      </div>
-      <div class="tree-resizer" id="treeResizer" title="拖拽调整左侧宽度"></div>
-      <div>
-        <div class="card">
-          <div class="tabs">
-            <div class="tab active" data-tab="data" onclick="switchTab('data')">数据浏览</div>
-            <div class="tab" data-tab="schema" onclick="switchTab('schema')">表结构</div>
-            <div class="tab" data-tab="sql" onclick="switchTab('sql')">SQL 控制台</div>
-          </div>
-          <div id="pane-data"></div>
-          <div id="pane-schema" style="display:none"></div>
-          <div id="pane-sql" style="display:none">
-            <div class="sql-area">
-              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                <label style="margin:0">执行库：</label>
-                <select id="sqlDb" style="width:200px"></select>
-                <span style="color:var(--dim);font-size:12px">留空 = information_schema</span>
-              </div>
-              <textarea class="sql" id="sqlText" placeholder="SELECT * FROM tbl LIMIT 10"></textarea>
-              <div class="sql-foot">
-                <button class="btn primary" onclick="runSQL()">执行 (Ctrl+Enter)</button>
-                <span id="sqlMeta" style="color:var(--dim);font-size:12px"></span>
-              </div>
-              <div id="sqlResult"></div>
-            </div>
-          </div>
-        </div>
-        <div class="card" id="historyCard">
-          <b style="font-size:13px">执行历史（最近 50 条）</b>
-          <div class="hist" id="history"></div>
-        </div>
-      </div>
+  <div class="main">
+    <div class="sidebar" id="sidebar">
+      <div class="tree" id="tree"></div>
     </div>
+    <div class="vresizer" id="vresizer" title="拖拽调整宽度"></div>
+    <div class="content">
+      <div class="tabbar">
+        <div style="display:flex;gap:2px;align-items:stretch" id="tabs"></div>
+        <div class="tabbar-right">
+          <button class="mini-btn" data-action="toggle-info" id="btnInfo" title="字段信息面板"></button>
+        </div>
+      </div>
+      <div class="tabbody" id="tabBody"></div>
+      <div class="recordbar" id="recordbar" style="display:none"></div>
+      <div class="sqlbar" id="sqlbar" style="display:none"></div>
+    </div>
+    <div class="infopanel hidden" id="infopanel"></div>
   </div>
 </div>
 
+<!-- 新建/编辑连接 -->
 <div class="modal-mask" id="connMask">
   <div class="modal">
     <h3 id="connTitle">新建连接</h3>
     <div class="form-grid">
-      <div><label>标识（小写字母/数字/短横线）</label><input id="c_id" placeholder="local-mysql"></div>
-      <div><label>名称</label><input id="c_name" placeholder="本机 MySQL"></div>
-      <div><label>主机</label><input id="c_host" placeholder="127.0.0.1"></div>
-      <div><label>端口</label><input id="c_port" placeholder="3306"></div>
-      <div><label>用户名</label><input id="c_user" placeholder="root"></div>
-      <div><label>密码（编辑留空沿用旧密码）</label><input id="c_pass" type="password" placeholder=""></div>
-      <div style="grid-column:1/-1"><label>备注（可选）</label><input id="c_comment" placeholder=""></div>
+      <div class="fld"><label>标识（小写字母/数字/短横线）</label><input id="c_id" type="text" placeholder="local-mysql"></div>
+      <div class="fld"><label>名称</label><input id="c_name" type="text" placeholder="本机 MySQL"></div>
+      <div class="fld"><label>主机</label><input id="c_host" type="text" placeholder="127.0.0.1"></div>
+      <div class="fld"><label>端口</label><input id="c_port" type="text" placeholder="3306"></div>
+      <div class="fld"><label>用户名</label><input id="c_user" type="text" placeholder="root"></div>
+      <div class="fld"><label>密码（编辑留空沿用旧密码）</label><input id="c_pass" type="password"></div>
+      <div class="fld" style="grid-column:1/-1"><label>备注（可选）</label><input id="c_comment" type="text"></div>
     </div>
     <div class="modal-foot">
-      <button class="btn" onclick="testFormConn()">测试连接</button>
       <span id="testResult" style="font-size:12px;margin-right:auto"></span>
-      <button class="btn" onclick="closeModal('connMask')">取消</button>
-      <button class="btn primary" onclick="saveConn()">保存</button>
+      <button class="btn" data-action="testconn">测试连接</button>
+      <button class="btn" data-action="close-modal" data-modal="connMask">取消</button>
+      <button class="btn primary" data-action="saveconn">保存</button>
     </div>
   </div>
 </div>
 
+<!-- 新建数据库 -->
 <div class="modal-mask" id="dbMask">
-  <div class="modal" style="width:420px">
+  <div class="modal sm">
     <h3>新建数据库</h3>
-    <div class="form-grid" style="grid-template-columns:1fr">
-      <div><label>库名</label><input id="db_name" placeholder="my_database"></div>
-      <div><label>字符集</label>
+    <div class="form-grid one">
+      <div class="fld"><label>库名</label><input id="db_name" type="text" placeholder="my_database"></div>
+      <div class="fld"><label>字符集</label>
         <select id="db_charset">
           <option value="utf8mb4">utf8mb4（推荐）</option>
           <option value="utf8">utf8</option>
@@ -209,8 +407,59 @@ try {
       </div>
     </div>
     <div class="modal-foot">
-      <button class="btn" onclick="closeModal('dbMask')">取消</button>
-      <button class="btn primary" onclick="createDatabase()">创建</button>
+      <button class="btn" data-action="close-modal" data-modal="dbMask">取消</button>
+      <button class="btn primary" data-action="createdb">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新增行 -->
+<div class="modal-mask" id="rowMask">
+  <div class="modal">
+    <h3 id="rowTitle">新增行</h3>
+    <div id="rowFields"></div>
+    <div class="modal-foot">
+      <button class="btn" data-action="close-modal" data-modal="rowMask">取消</button>
+      <button class="btn primary" data-action="insertrow">插入</button>
+    </div>
+  </div>
+</div>
+
+<!-- 通用确认 -->
+<div class="modal-mask" id="confirmMask">
+  <div class="modal sm">
+    <h3 id="cfTitle">确认</h3>
+    <div id="cfBody" style="font-size:13px;color:var(--dim);line-height:1.7"></div>
+    <div class="modal-foot">
+      <button class="btn" data-action="close-modal" data-modal="confirmMask">取消</button>
+      <button class="btn primary" id="cfOk" style="background:var(--red);border-color:var(--red)">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 右键菜单（仿 Navicat） -->
+<div class="ctxmenu" id="ctxmenu"></div>
+
+<!-- 运行 SQL 文件 -->
+<div class="modal-mask" id="sqlFileMask">
+  <div class="modal">
+    <h3 id="sfTitle">运行 SQL 文件</h3>
+    <div class="form-grid one">
+      <div>
+        <label class="sf-file" id="sfDrop">点击选择 SQL 文件（支持 .sql / .txt / .gz 压缩）<input id="sf_file" type="file" accept=".sql,.txt,.gz"></label>
+        <div id="sfFileInfo" class="muted" style="font-size:12px;margin-top:4px"></div>
+      </div>
+      <div class="fld"><label>目标数据库（留空 = 由文件内 USE 语句决定）</label><select id="sf_db"></select></div>
+      <div class="fld"><label>文件编码</label>
+        <select id="sf_enc"><option value="utf-8">UTF-8</option><option value="gbk">GBK</option></select>
+      </div>
+      <label class="ckline"><input type="checkbox" id="sf_cont"> 遇到错误继续执行后面的语句</label>
+    </div>
+    <div class="sf-res" id="sfResult" style="display:none"></div>
+    <div class="modal-foot">
+      <span id="sfMeta" class="muted" style="font-size:12px;margin-right:auto"></span>
+      <button class="btn" data-action="close-modal" data-modal="sqlFileMask">关闭</button>
+      <button class="btn primary" id="sfRun" data-action="run-sqlfile">开始执行</button>
     </div>
   </div>
 </div>
@@ -218,43 +467,782 @@ try {
 <div class="toast" id="toast"></div>
 
 <script>
+'use strict';
+/* ================= 基础工具 ================= */
 const $ = (s) => document.querySelector(s);
-const api = (p, opt) => fetch('/api/plugin/mysqladmin' + p, opt).then(r => r.json());
-function toast(msg) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 2400); }
-function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-function closeModal(id) { $('#' + id).classList.remove('open'); }
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._tm); t._tm = setTimeout(() => t.style.display = 'none', 2400); }
+async function api(p, opt) {
+  try {
+    const r = await fetch('/api/plugin/mysqladmin' + p, opt);
+    return await r.json();
+  } catch (e) { return { error: '请求失败: ' + e.message }; }
+}
+const JSON_HDR = { 'Content-Type': 'application/json' };
+const API = (p, method, body) => api(p, body !== undefined ? { method, headers: JSON_HDR, body: JSON.stringify(body) } : { method });
 
-let conns = [], curConn = null, curDb = null, curTable = null, databases = [], tables = [];
-let rowsState = { page: 1, size: 50, total: 0, where: '' };
+/* ================= SVG 图标 ================= */
+const ICONS = {
+  caret: '<path d="M9 18l6-6-6-6"/>',
+  plug: '<path d="M9 7V3M15 7V3"/><path d="M7 7h10v4a5 5 0 0 1-10 0V7z"/><path d="M12 16v5"/>',
+  db: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/>',
+  'db-plus': '<ellipse cx="9" cy="5" rx="6.5" ry="2.6"/><path d="M2.5 5v12c0 1.44 2.9 2.6 6.5 2.6s6.5-1.16 6.5-2.6V5"/><path d="M2.5 11c0 1.44 2.9 2.6 6.5 2.6"/><path d="M18 13v8M14 17h8"/>',
+  table: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M10 10v10"/>',
+  query: '<path d="M4 17l6-5-6-5"/><path d="M12 19h8"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  minus: '<path d="M5 12h14"/>',
+  x: '<path d="M18 6L6 18M6 6l12 12"/>',
+  check: '<path d="M20 6L9 17l-5-5"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/>',
+  eraser: '<path d="M20 20H7L3 15.9a1 1 0 0 1 0-1.4L13.6 4a1 1 0 0 1 1.4 0l6 6a1 1 0 0 1 0 1.4L14 18.5"/>',
+  pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>',
+  filter: '<path d="M22 3H2l8 9.5V19l4 2v-8.5L22 3z"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M11 12l9-9M15 6l3 3"/>',
+  first: '<path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/>',
+  prev: '<path d="M15 18l-6-6 6-6"/>',
+  next: '<path d="M9 18l6-6-6-6"/>',
+  last: '<path d="M13 17l5-5-5-5M6 17l5-5-5-5"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 8h.01M12 12v5"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>',
+  code: '<path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  play: '<path d="M6 4l14 8-14 8V4z"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
+  doc: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+};
+function I(name, cls) {
+  return `<svg class="icon ${cls || ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[name] || ''}</svg>`;
+}
+// 渲染静态图标占位（HTML 里 <span data-ic="name">）
+document.querySelectorAll('[data-ic]').forEach(el => { el.innerHTML = I(el.dataset.ic); });
 
-async function loadAll() {
-  conns = await api('/connections') || [];
-  renderConns();
+/* ================= 状态 ================= */
+const SYS_DBS = new Set(['information_schema', 'performance_schema', 'sys', 'mysql']);
+const S = {
+  conns: [],                       // [{id,name,host,port,user,comment}]
+  tree: {},                        // connId -> {expanded, err, dbs:[{name,expanded,err,tables:[{name,rows,size,comment}],loaded}]}
+  tabs: [], active: null, seq: 0,
+  sel: null,                       // 树选中节点 {type:'conn'|'db'|'table', conn, db?, table?}
+  confirmFn: null,
+};
+const activeTab = () => S.tabs.find(t => t.id === S.active) || null;
+const connOf = (id) => S.conns.find(c => c.id === id);
+const connName = (id) => (connOf(id) && (connOf(id).name || id)) || id;
+
+/* ================= 渲染：标题 / 工具栏 ================= */
+function renderTitle() {
+  const t = activeTab();
+  const el = $('#tbText');
+  if (!t) { el.textContent = 'MySQL 管理'; return; }
+  $('#tbIcon').innerHTML = I(t.kind === 'table' ? 'table' : 'query');
+  el.textContent = t.kind === 'table'
+    ? `${t.table} @${t.db} (${connName(t.conn)}) - 表`
+    : `查询-${t.no} (${connName(t.conn)}) - 查询`;
+}
+// 工具栏按钮上下文可用性（无权限动作置灰）
+function renderToolbar() {
+  const s = S.sel;
+  $('#btnOpenTable').classList.toggle('disabled', !(s && s.type === 'table'));
+  $('#btnNewQuery').classList.toggle('disabled', !s);
+  $('#btnNewDb').classList.toggle('disabled', !(s && s.type === 'conn'));
+  $('#btnDelete').classList.toggle('disabled', !s);
 }
 
-function renderConns() {
-  const el = $('#connList');
-  if (!conns.length) {
-    el.innerHTML = '<div class="card empty">还没有连接，点右上角「新建连接」添加第一个 MySQL 实例</div>';
-    $('#workspace').style.display = 'none';
+/* ================= 渲染：连接树 ================= */
+function sortDbs(names) {
+  return [...names].sort((a, b) => (SYS_DBS.has(a) ? 1 : 0) - (SYS_DBS.has(b) ? 1 : 0) || a.localeCompare(b));
+}
+function nodeActs(type, ident) {
+  // ident 原始值，内部统一 esc 一次（嵌套路由用 | 分隔，库名/表名不允许含 |）
+  if (type === 'conn') return `<span class="nacts">
+      <button class="icon-btn" data-act="edit-conn" data-id="${esc(ident)}" title="编辑连接">${I('pencil')}</button>
+      <button class="icon-btn danger" data-act="del-conn" data-id="${esc(ident)}" title="删除连接">${I('trash')}</button></span>`;
+  if (type === 'table') return `<span class="nacts">
+      <button class="icon-btn danger" data-act="truncate" data-id="${esc(ident)}" title="清空表">${I('eraser')}</button>
+      <button class="icon-btn danger" data-act="drop-table" data-id="${esc(ident)}" title="删除表">${I('trash')}</button></span>`;
+  if (type === 'db') return `<span class="nacts">
+      <button class="icon-btn danger" data-act="drop-db" data-id="${esc(ident)}" title="删除数据库">${I('trash')}</button></span>`;
+  return '';
+}
+function renderTree() {
+  const el = $('#tree');
+  if (!S.conns.length) {
+    el.innerHTML = `<div class="tree-empty">${I('plug')}<br><br>还没有连接<br><button class="btn small" data-action="newconn" style="margin-top:8px">新建连接</button></div>`;
     return;
   }
-  el.innerHTML = '<div class="card"><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px"><b>连接</b></div><div class="form-grid">' +
-    conns.map(c => `
-      <div class="conn-head" style="border:1px solid var(--border);border-radius:8px;padding:8px 12px">
-        <span class="conn-id">${esc(c.name || c.id)}</span>
-        <span class="tag">${esc(c.id)}</span>
-        <div style="margin-left:auto;display:flex;gap:6px">
-          <button class="btn small ${curConn===c.id?'primary':''}" onclick="openWorkspace('${esc(c.id)}')">打开</button>
-          <button class="btn small" onclick="editConn('${esc(c.id)}')">编辑</button>
-          <button class="btn small danger" onclick="delConn('${esc(c.id)}')">删除</button>
-        </div>
-        <div class="meta" style="width:100%">${esc(c.host)}:${esc(c.port)} · ${esc(c.user)}${c.comment ? ' · ' + esc(c.comment) : ''}</div>
-      </div>`).join('') + '</div></div>';
+  let h = '';
+  for (const c of S.conns) {
+    const st = S.tree[c.id] || (S.tree[c.id] = { expanded: false });
+    const selCls = S.sel && S.sel.type === 'conn' && S.sel.conn === c.id ? ' sel' : '';
+    h += `<div class="tnode lv0${st.expanded ? ' open' : ''}${selCls}" data-node="conn" data-conn="${esc(c.id)}">
+      <span class="caret" data-caret="conn" data-conn="${esc(c.id)}">${I('caret')}</span>
+      <span class="nic">${I('plug')}</span><span class="nname" title="${esc(c.id)}">${esc(c.name || c.id)}</span>
+      ${nodeActs('conn', c.id)}</div>`;
+    if (!st.expanded) continue;
+    if (st.loading) { h += '<div class="tree-msg">加载中…</div>'; continue; }
+    if (st.err) { h += `<div class="tree-msg" style="color:var(--red)">${esc(st.err)}</div>`; continue; }
+    h += '<div class="nsub">';
+    for (const d of (st.dbs || [])) {
+      const sysCls = SYS_DBS.has(d.name) ? ' syslib' : '';
+      const selD = S.sel && S.sel.type === 'db' && S.sel.conn === c.id && S.sel.db === d.name ? ' sel' : '';
+      h += `<div class="tnode lv1${d.expanded ? ' open' : ''}${selD}${sysCls}" data-node="db" data-conn="${esc(c.id)}" data-db="${esc(d.name)}">
+        <span class="caret" data-caret="db" data-conn="${esc(c.id)}" data-db="${esc(d.name)}">${I('caret')}</span>
+        <span class="nic">${I('db')}</span><span class="nname" title="${esc(d.name)}">${esc(d.name)}</span>
+        ${nodeActs('db', c.id + '|' + d.name)}</div>`;
+      if (!d.expanded) continue;
+      if (d.loading) { h += '<div class="tree-msg">加载中…</div>'; continue; }
+      if (d.err) { h += `<div class="tree-msg" style="color:var(--red)">${esc(d.err)}</div>`; continue; }
+      h += '<div class="nsub">';
+      if (!(d.tables || []).length) h += '<div class="tree-msg">（空库）</div>';
+      for (const tb of (d.tables || [])) {
+        const selT = S.sel && S.sel.type === 'table' && S.sel.conn === c.id && S.sel.db === d.name && S.sel.table === tb.name ? ' sel' : '';
+        const sizeTxt = tb.sizeBytes ? fmtSize(tb.sizeBytes) : '';
+        h += `<div class="tnode lv2${selT}" data-node="table" data-conn="${esc(c.id)}" data-db="${esc(d.name)}" data-table="${esc(tb.name)}" title="${esc(tb.comment || tb.name)}${sizeTxt ? ' · ' + sizeTxt : ''}">
+          <span class="caret leaf">${I('caret')}</span>
+          <span class="nic">${I('table')}</span><span class="nname">${esc(tb.name)}</span>
+          <span class="ncnt">${tb.rows ?? ''}</span>
+          ${nodeActs('table', c.id + '|' + d.name + '|' + tb.name)}</div>`;
+      }
+      h += '</div>';
+    }
+    h += '</div>';
+  }
+  el.innerHTML = h;
+}
+function fmtSize(n) {
+  n = +n || 0;
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1048576).toFixed(1) + ' MB';
 }
 
+/* 树节点数据加载 */
+async function toggleConn(id, forceOpen) {
+  const st = S.tree[id] || (S.tree[id] = { expanded: false });
+  st.expanded = forceOpen ? true : !st.expanded;
+  if (st.expanded && !st.dbs && !st.loading) {
+    st.loading = true; renderTree();
+    const r = await api(`/connections/${id}/databases`);
+    st.loading = false;
+    if (r.error) st.err = '连接失败: ' + r.error;
+    else st.dbs = sortDbs(r.databases || []).map(n => ({ name: n, expanded: false, tables: null }));
+  }
+  renderTree();
+}
+async function toggleDb(conn, db, forceOpen) {
+  const st = S.tree[conn]; if (!st || !st.dbs) return;
+  const d = st.dbs.find(x => x.name === db); if (!d) return;
+  d.expanded = forceOpen ? true : !d.expanded;
+  if (d.expanded && !d.tables && !d.loading) {
+    d.loading = true; renderTree();
+    const r = await api(`/connections/${conn}/databases/${db}/tables`);
+    d.loading = false;
+    if (r.error) d.err = r.error;
+    else { d.tables = r.tables || []; d.loaded = true; }
+  }
+  renderTree();
+}
+async function refreshTree() {
+  // 保留展开状态重新拉取（库列表 + 已展开库的表清单）
+  const jobs = [];
+  for (const id of Object.keys(S.tree)) {
+    const st = S.tree[id];
+    if (!st.expanded) continue;
+    jobs.push((async () => {
+      const r = await api(`/connections/${id}/databases`);
+      if (r.error) { st.err = '连接失败: ' + r.error; return; }
+      st.err = '';
+      const old = st.dbs || [];
+      st.dbs = sortDbs(r.databases || []).map(n => {
+        const prev = old.find(x => x.name === n) || { expanded: false, tables: null };
+        return { name: n, expanded: prev.expanded, tables: prev.tables, loaded: prev.loaded };
+      });
+      for (const d of st.dbs) {
+        if (d.expanded) {
+          const r2 = await api(`/connections/${id}/databases/${d.name}/tables`);
+          if (!r2.error) { d.tables = r2.tables || []; d.loaded = true; d.err = ''; }
+        }
+      }
+    })());
+  }
+  renderTree();
+  await Promise.all(jobs);
+  renderTree();
+}
+
+/* ================= 渲染：标签栏 ================= */
+function tabTitle(t) {
+  return t.kind === 'table' ? `${t.table} @${t.db}` : `查询-${t.no}`;
+}
+function renderTabs() {
+  const el = $('#tabs');
+  el.innerHTML = S.tabs.map(t => `
+    <div class="tab ${t.id === S.active ? 'act' : ''}" data-tabid="${t.id}">
+      <span class="tab-ic">${I(t.kind === 'table' ? 'table' : 'query', 'sm')}</span>
+      <span class="tab-tt" title="${esc(tabTitle(t))}">${esc(tabTitle(t))}</span>
+      <span class="tab-x" data-close="${t.id}" title="关闭">${I('x', 'sm')}</span>
+    </div>`).join('');
+}
+function activateTab(id) {
+  S.active = id;
+  renderTabs(); renderTab(); renderTitle(); renderToolbar();
+}
+function closeTab(id) {
+  const i = S.tabs.findIndex(t => t.id === id);
+  if (i < 0) return;
+  S.tabs.splice(i, 1);
+  if (S.active === id) {
+    const next = S.tabs[Math.min(i, S.tabs.length - 1)];
+    S.active = next ? next.id : null;
+  }
+  renderTabs(); renderTab(); renderTitle(); renderToolbar();
+}
+function closeTabsWhere(fn) {
+  for (const t of S.tabs.filter(fn).map(t => t.id)) closeTab(t);
+}
+
+/* ================= 表标签 ================= */
+function openTableTab(conn, db, table) {
+  let t = S.tabs.find(x => x.kind === 'table' && x.conn === conn && x.db === db && x.table === table);
+  if (!t) {
+    t = {
+      id: 't' + (++S.seq), kind: 'table', no: S.seq, conn, db, table, view: 'data',
+      page: 1, size: +(localStorage.getItem('zjp_mysql_pagesize') || 50), total: 0,
+      where: '', order: '', dir: '',
+      columns: [], rows: [], colIdx: {}, schema: null, pkCols: [], editable: null,
+      selRow: -1, selCell: null, editing: null, err: '', loading: false, result: null,
+      sqlText: '', qdb: db, histOpen: false,
+    };
+    S.tabs.push(t);
+    loadSchema(t);
+  }
+  S.sel = { type: 'table', conn, db, table };
+  activateTab(t.id);
+  loadRows(t);
+}
+async function loadSchema(t) {
+  const r = await api(`/connections/${t.conn}/databases/${t.db}/tables/${t.table}/schema`);
+  if (r.error) { t.schemaErr = r.error; return; }
+  t.schema = r; t.schemaErr = '';
+  t.pkCols = (r.columns || []).filter(c => c.Key === 'PRI').map(c => c.Field);
+  t.editable = t.pkCols.length > 0;
+  if (t.id === S.active) { renderTab(); }
+}
+async function loadRows(t) {
+  t.loading = true; t.err = '';
+  if (t.id === S.active) renderTab();
+  const qs = `conn=${t.conn}&db=${t.db}&table=${t.table}&page=${t.page}&size=${t.size}` +
+    `&where=${encodeURIComponent(t.where)}&order=${encodeURIComponent(t.order)}&dir=${t.dir}`;
+  const r = await api('/rows?' + qs);
+  t.loading = false;
+  if (r.error) { t.err = r.error; }
+  else {
+    t.columns = r.columns || []; t.rows = r.rows || []; t.total = r.total || 0;
+    t.colIdx = {}; t.columns.forEach((c, i) => t.colIdx[c] = i);
+    t.selRow = -1; t.selCell = null; t.editing = null;
+    const pages = Math.max(1, Math.ceil(t.total / t.size));
+    if (t.page > pages) { t.page = pages; return loadRows(t); }
+  }
+  if (t.id === S.active) renderTab();
+}
+
+/* 行级编辑 */
+function rowKeyOf(t, r) {
+  const key = {};
+  for (const pk of t.pkCols) key[pk] = t.rows[r][t.colIdx[pk]];
+  return key;
+}
+async function commitEdit(t, r, c, val) {
+  const col = t.columns[c];
+  const oldV = t.rows[r][c];
+  const norm = (oldV === null && val === '') ? null : val;
+  if (norm === oldV) { t.editing = null; renderTab(); return; }
+  if (!t.pkCols.length) { toast('表无主键，不可编辑'); t.editing = null; renderTab(); return; }
+  const res = await API(`/connections/${t.conn}/databases/${t.db}/tables/${t.table}/rows`, 'PUT',
+    { key: rowKeyOf(t, r), values: { [col]: norm } });
+  if (res.error) {
+    toast('保存失败: ' + res.error);
+    const inp = document.querySelector('input.cell-edit');
+    if (inp) { inp.focus(); inp.select(); }
+    return;
+  }
+  t.rows[r][c] = norm;
+  t.editing = null;
+  renderTab();
+  toast('已保存');
+}
+function beginEdit(t, r, c) {
+  if (!t.editable) { toast('表无主键，不可编辑（仅浏览）'); return; }
+  t.editing = { r, c };
+  renderTab();
+  const inp = document.querySelector('input.cell-edit');
+  if (inp) { inp.focus(); inp.select(); }
+}
+async function deleteSelectedRow() {
+  const t = activeTab();
+  if (!t || t.kind !== 'table' || t.view !== 'data') return;
+  if (t.selRow < 0 || !t.rows[t.selRow]) return toast('请先点击行号选中一行');
+  if (!t.editable) return toast('表无主键，不可编辑');
+  confirmDialog('删除行', '确定删除选中的行？此操作立即生效且不可恢复。', async () => {
+    const res = await API(`/connections/${t.conn}/databases/${t.db}/tables/${t.table}/rows`, 'DELETE', { key: rowKeyOf(t, t.selRow) });
+    if (res.error) return toast(res.error);
+    toast(`已删除（影响 ${res.affected ?? '?'} 行）`);
+    loadRows(t);
+  });
+}
+function openAddRowModal() {
+  const t = activeTab();
+  if (!t || t.kind !== 'table' || t.view !== 'data') return;
+  if (!t.schema) { toast('表结构加载中，请稍候'); return; }
+  const cols = t.schema.columns || [];
+  if (!cols.length) return;
+  $('#rowTitle').textContent = `新增行 · ${t.table}`;
+  $('#rowFields').innerHTML = cols.map((c, i) => {
+    const isAuto = (c.Extra || '').includes('auto_increment');
+    const isPri = c.Key === 'PRI';
+    return `<div class="rowfld" data-fld="${esc(c.Field)}">
+      <label>${esc(c.Field)}${isPri ? ' <span class="ip-badge">PK</span>' : ''}<span class="t">${esc(c.Type)}</span></label>
+      <label class="nullck"><input type="checkbox" data-null="${i}"> NULL</label>
+      <input type="text" data-val="${i}" placeholder="${isAuto ? '自动增长' : (c.Default ?? '')}" ${isAuto ? 'disabled' : ''}>
+    </div>`;
+  }).join('');
+  $('#rowFields')._meta = { t, cols };
+  openModal('rowMask');
+}
+async function insertRow() {
+  const { t, cols } = $('#rowFields')._meta;
+  const values = {};
+  let missingPk = false;
+  cols.forEach((c, i) => {
+    if ((c.Extra || '').includes('auto_increment')) return;
+    const isNull = document.querySelector(`[data-null="${i}"]`).checked;
+    const raw = document.querySelector(`[data-val="${i}"]`).value;
+    if (isNull) { values[c.Field] = null; return; }
+    if (raw === '') {
+      if (c.Key === 'PRI') missingPk = true; // 非自增主键必须给值
+      return; // 空值走列默认值
+    }
+    values[c.Field] = raw;
+  });
+  if (missingPk) return toast('主键列为必填（该列非自增）');
+  if (!Object.keys(values).length) return toast('请至少填写一列');
+  const res = await API(`/connections/${t.conn}/databases/${t.db}/tables/${t.table}/rows`, 'POST', { values });
+  if (res.error) return toast(res.error);
+  closeModal('rowMask');
+  toast('已插入');
+  loadRows(t);
+}
+
+/* ================= 查询标签 ================= */
+function openQueryTab(conn, db) {
+  // 每次新建独立查询窗口（同 Navicat），编号全局递增
+  const t = {
+    id: 'q' + (++S.seq), kind: 'query', no: S.seq, conn, qdb: db || '', view: 'query',
+    sqlText: '', result: null, histOpen: false, running: false,
+  };
+  S.tabs.push(t);
+  activateTab(t.id);
+  loadHistory(t);
+  // 库下拉：树中未展开该连接时懒加载一次
+  const st = S.tree[conn];
+  if (st && !st.dbs && !st.loading) {
+    st.loading = true;
+    api(`/connections/${conn}/databases`).then(r => {
+      st.loading = false;
+      if (!r.error) st.dbs = sortDbs(r.databases || []).map(n => ({ name: n, expanded: false, tables: null }));
+      if (t.id === S.active) renderTab();
+    });
+  }
+}
+async function runQuery(t) {
+  const ta = $('#qtext');
+  if (!ta) return;
+  const sql = ta.value.trim();
+  if (!sql) return;
+  const db = $('#qdb') ? $('#qdb').value : '';
+  t.sqlText = ta.value; t.qdb = db;
+  t.running = true;
+  renderQueryResult(t, '<div class="grid-empty">执行中…</div>', '');
+  const r = await API('/query', 'POST', { conn: t.conn, database: db, sql });
+  t.running = false;
+  t.result = r;
+  renderQueryResult(t);
+  loadHistory(t);
+}
+function renderQueryResult(t, overrideHTML, overrideMeta) {
+  const box = $('#qresult'); if (!box) return;
+  const metaEl = $('#qmeta');
+  const r = t.result;
+  if (overrideHTML) { box.innerHTML = overrideHTML; if (metaEl) metaEl.innerHTML = overrideMeta || ''; return; }
+  if (!r) { box.innerHTML = '<div class="grid-empty">输入 SQL 后点击运行（Ctrl+Enter）</div>'; if (metaEl) metaEl.innerHTML = ''; return; }
+  if (r.error) {
+    box.innerHTML = `<div class="grid-err">${esc(r.error)}</div>`;
+    if (metaEl) metaEl.innerHTML = `<span class="errm">✗ 执行出错</span>`;
+    return;
+  }
+  if (r.columns) {
+    box.innerHTML = gridHTML(r.columns, r.rows, { rownum: true });
+    if (metaEl) metaEl.innerHTML = `<span class="okm">✓ ${(r.rows || []).length} 行返回</span><span>耗时 ${esc(r.elapsed || '')}</span>`;
+  } else {
+    box.innerHTML = '<div class="grid-empty">执行成功</div>';
+    if (metaEl) metaEl.innerHTML = `<span class="okm">✓ 影响 ${r.rowsAffected ?? 0} 行</span><span>耗时 ${esc(r.elapsed || '')}</span>`;
+  }
+}
+async function loadHistory(t) {
+  const h = await api('/history');
+  t.history = (Array.isArray(h) ? h : []).filter(x => x.connId === t.conn);
+  if (t.id === S.active) renderTab();
+}
+
+/* ================= 通用网格 HTML ================= */
+function cellText(v) {
+  return v === null ? '<span class="nullv">(Null)</span>' : esc(v);
+}
+function gridHTML(columns, rows, opts) {
+  if (!columns || !columns.length) return '<div class="grid-empty">无数据</div>';
+  const t = opts.tab;
+  const pkSet = t && t.schema ? new Set(t.pkCols) : new Set();
+  let h = '<table class="grid"><thead><tr><th class="rownum-h"></th>';
+  h += columns.map(c => {
+    const keyIc = pkSet.has(c) ? I('key', 'sm') : '';
+    if (opts.sortable) {
+      const sorted = t && t.order === c;
+      return `<th data-sort="${esc(c)}"><span class="th-in"><span class="nname">${esc(c)}</span>${keyIc}<span class="sort-ind ${sorted && t.dir === 'DESC' ? 'desc' : ''}" style="${sorted ? '' : 'visibility:hidden'}">${I('caret')}</span></span></th>`;
+    }
+    return `<th><span class="th-in"><span class="nname">${esc(c)}</span>${keyIc}</span></th>`;
+  }).join('');
+  h += '</tr></thead><tbody>';
+  rows.forEach((row, r) => {
+    const rowSel = t && t.selRow === r ? ' row-sel' : '';
+    h += `<tr class="${rowSel.trim()}"><td class="rownum" data-rownum="${r}"><span class="arrow">${I('caret')}</span>${r + 1}</td>`;
+    row.forEach((v, c) => {
+      const sel = t && t.selCell && t.selCell.r === r && t.selCell.c === c ? ' cell-sel' : '';
+      const isEditing = t && t.editing && t.editing.r === r && t.editing.c === c;
+      const keyCls = pkSet.has(columns[c]) ? ' keycell' : '';
+      if (isEditing) {
+        h += `<td class="cell-sel" data-cell="${r},${c}"><input class="cell-edit" data-r="${r}" data-c="${c}" value="${esc(v === null ? '' : v)}" placeholder="NULL"></td>`;
+      } else {
+        h += `<td class="${sel.trim()}${keyCls}" data-cell="${r},${c}" title="${v === null ? 'NULL' : esc(v)}">${cellText(v)}</td>`;
+      }
+    });
+    h += '</tr>';
+  });
+  h += '</tbody></table>';
+  if (!rows.length) h += '<div class="grid-empty">无数据</div>';
+  return h;
+}
+
+/* ================= 标签体渲染 ================= */
+function renderTab() {
+  const body = $('#tabBody');
+  const t = activeTab();
+  const rb = $('#recordbar'), sb = $('#sqlbar');
+  if (!t) {
+    rb.style.display = sb.style.display = 'none';
+    body.innerHTML = `<div class="welcome">${I('table')}
+      <div>在左侧选择连接与表，双击打开数据浏览</div>
+      <div class="w-actions">
+        <button class="btn" data-action="newconn">${I('plug', 'sm')} 新建连接</button>
+        <button class="btn" data-action="refresh">${I('refresh', 'sm')} 刷新</button>
+      </div></div>`;
+    return;
+  }
+  if (t.kind === 'query') {
+    rb.style.display = sb.style.display = 'none';
+    body.innerHTML = queryTabHTML(t);
+    renderQueryResult(t);
+    return;
+  }
+  // 表标签
+  if (t.view === 'data') {
+    body.innerHTML = `
+      <div class="viewbar">
+        <div class="seg">${segItem(t, 'data', '数据')}${segItem(t, 'struct', '结构')}${segItem(t, 'ddl', 'DDL')}</div>
+        <div class="filter-box">${I('filter', 'sm')}
+          <input id="filterInput" placeholder="WHERE 条件，如: status = 1（留空不过滤）" value="${esc(t.whereDraft ?? t.where)}">
+          <button class="btn small" data-action="apply-filter">应用</button>
+          ${t.where ? '<button class="btn small" data-action="clear-filter">清除</button>' : ''}
+        </div>
+        <span class="spacer"></span>
+        <button class="btn small" data-action="reload-table">${I('refresh', 'sm')} 刷新</button>
+      </div>
+      <div class="fill"><div class="gridwrap" id="gridWrap">${
+        t.err ? `<div class="grid-err">${esc(t.err)}</div>`
+          : t.loading ? '<div class="grid-empty">加载中…</div>'
+          : gridHTML(t.columns, t.rows, { tab: t, rownum: true, sortable: true })
+      }</div></div>`;
+    renderRecordbar(t);
+    renderSqlbar(t);
+  } else if (t.view === 'struct') {
+    rb.style.display = sb.style.display = 'none';
+    body.innerHTML = `
+      <div class="viewbar"><div class="seg">${segItem(t, 'data', '数据')}${segItem(t, 'struct', '结构')}${segItem(t, 'ddl', 'DDL')}</div></div>
+      <div class="structwrap">${structHTML(t)}</div>`;
+  } else {
+    rb.style.display = sb.style.display = 'none';
+    body.innerHTML = `
+      <div class="viewbar"><div class="seg">${segItem(t, 'data', '数据')}${segItem(t, 'struct', '结构')}${segItem(t, 'ddl', 'DDL')}</div></div>
+      <div class="structwrap"><h4>建表语句</h4><pre class="ddl">${t.schema && t.schema.createSQL ? esc(t.schema.createSQL) : (t.schemaErr ? esc(t.schemaErr) : '加载中…')}</pre></div>`;
+  }
+}
+function segItem(t, view, label) {
+  return `<button class="seg-item ${t.view === view ? 'on' : ''}" data-view="${view}">${label}</button>`;
+}
+function structHTML(t) {
+  if (t.schemaErr) return `<div class="grid-err">${esc(t.schemaErr)}</div>`;
+  const s = t.schema;
+  if (!s) return '<div class="grid-empty">加载中…</div>';
+  const idx = s.indexes || [];
+  // 索引按名称聚合（SHOW INDEX 一行一列）
+  const idxMap = {};
+  for (const i of idx) {
+    const k = i.Key_name;
+    if (!idxMap[k]) idxMap[k] = { cols: [], unique: i.Non_unique === 0 || i.Non_unique === '0', type: i.Index_type };
+    idxMap[k].cols.push(i.Column_name);
+  }
+  return `
+    <h4>字段（${(s.columns || []).length}）</h4>
+    <div class="gridwrap" style="max-height:340px;border:1px solid var(--border);border-radius:8px"><table class="grid">
+      <thead><tr><th>字段</th><th>类型</th><th>允许空</th><th>键</th><th>默认值</th><th>额外</th><th>注释</th></tr></thead>
+      <tbody>${(s.columns || []).map(c => `<tr>
+        <td class="${c.Key === 'PRI' ? 'keycell' : ''}">${c.Key === 'PRI' ? I('key', 'sm') + ' ' : ''}<b>${esc(c.Field)}</b></td>
+        <td>${esc(c.Type)}</td><td>${esc(c.Null === 'YES' ? '是' : '否')}</td><td>${esc(c.Key || '')}</td>
+        <td>${c.Default === null ? '<span class="nullv">(Null)</span>' : esc(c.Default)}</td>
+        <td>${esc(c.Extra || '')}</td><td>${esc(c.Comment || '')}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <h4>索引（${Object.keys(idxMap).length}）</h4>
+    <div class="gridwrap" style="max-height:200px;border:1px solid var(--border);border-radius:8px"><table class="grid">
+      <thead><tr><th>索引名</th><th>列</th><th>唯一</th><th>类型</th></tr></thead>
+      <tbody>${Object.entries(idxMap).map(([k, v]) => `<tr>
+        <td>${esc(k)}</td><td>${esc(v.cols.join(', '))}</td><td>${v.unique ? '是' : '否'}</td><td>${esc(v.type)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">无索引</td></tr>'}</tbody>
+    </table></div>`;
+}
+function renderRecordbar(t) {
+  const el = $('#recordbar');
+  el.style.display = '';
+  const pages = Math.max(1, Math.ceil(t.total / t.size));
+  const start = t.total ? (t.page - 1) * t.size + 1 : 0;
+  const end = Math.min(t.total, t.page * t.size);
+  el.innerHTML = `
+    <div style="display:flex;align-items:center">
+      <button class="rb-btn add" data-action="row-add" title="添加行">${I('plus')}</button>
+      <button class="rb-btn del" data-action="row-del" title="删除选中行">${I('minus')}</button>
+      <span class="rb-sep"></span>
+      <button class="rb-btn" data-action="rows-refresh" title="刷新">${I('refresh')}</button>
+      ${t.editable === false ? '<span class="rb-ro">只读（无主键）</span>' : ''}
+    </div>
+    <div class="rb-right">
+      <button class="rb-btn" data-page="first" ${t.page <= 1 ? 'disabled' : ''} title="首页">${I('first')}</button>
+      <button class="rb-btn" data-page="prev" ${t.page <= 1 ? 'disabled' : ''} title="上一页">${I('prev')}</button>
+      <input class="rb-page" id="pageInput" value="${t.page}" title="页码，回车跳转">
+      <button class="rb-btn" data-page="next" ${t.page >= pages ? 'disabled' : ''} title="下一页">${I('next')}</button>
+      <button class="rb-btn" data-page="last" ${t.page >= pages ? 'disabled' : ''} title="末页">${I('last')}</button>
+      <select class="rb-size" id="sizeSel">${[20, 50, 100, 200].map(n =>
+        `<option value="${n}" ${n === t.size ? 'selected' : ''}>${n} 行/页</option>`).join('')}</select>
+      <span class="rb-info">${t.total ? `第 ${start === end ? start : start + '-' + end} 条记录（共 ${t.total} 条）于第 ${t.page} 页` : '共 0 条记录'}</span>
+    </div>`;
+}
+function sqlPreview(t) {
+  let s = 'SELECT * FROM `' + t.db + '`.`' + t.table + '`';
+  if (t.where) s += ' WHERE ' + t.where;
+  if (t.order) s += ' ORDER BY `' + t.order + '`' + (t.dir ? ' ' + t.dir : '');
+  s += ' LIMIT ' + (t.page - 1) * t.size + ',' + t.size;
+  return s;
+}
+function renderSqlbar(t) {
+  const el = $('#sqlbar');
+  el.style.display = '';
+  el.innerHTML = `<span class="sb-ic">${I('query', 'sm')}</span>
+    <span class="sb-text" title="${esc(sqlPreview(t))}">${esc(sqlPreview(t))}</span>
+    <button class="sb-copy" data-action="copy-sql" title="复制 SQL">${I('copy', 'sm')}</button>`;
+}
+
+/* ================= 查询标签 HTML ================= */
+function queryTabHTML(t) {
+  const dbOpts = [];
+  const st = S.tree[t.conn];
+  if (st && st.dbs) for (const d of st.dbs) dbOpts.push(d.name);
+  return `
+    <div class="qwrap">
+      <div class="qbar">
+        <span class="muted" style="font-size:12px">执行库</span>
+        <select id="qdb"><option value="">（不指定）</option>${dbOpts.map(d =>
+          `<option value="${esc(d)}" ${d === t.qdb ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select>
+        <button class="btn primary" data-action="run-query">${I('play', 'sm fill')} 运行 <span class="muted" style="color:rgba(255,255,255,.75);font-size:11px">Ctrl+Enter</span></button>
+        <span class="spacer" style="flex:1"></span>
+        <button class="btn small" data-action="toggle-hist">${I('clock', 'sm')} 执行历史</button>
+      </div>
+      <div class="qeditor"><textarea id="qtext" placeholder="SELECT * FROM \`tbl\` LIMIT 100" spellcheck="false">${esc(t.sqlText)}</textarea></div>
+      <div class="qmeta" id="qmeta"></div>
+      <div class="qresult" id="qresult"></div>
+      ${t.histOpen ? `<div class="qhist">
+        <div class="hhead" data-action="toggle-hist">${I('clock', 'sm')} 最近执行（点击回填，共 ${(t.history || []).length} 条）</div>
+        ${(t.history || []).slice(0, 30).map(x => `
+          <div class="item" data-histsql="${esc(x.sql)}" data-histdb="${esc(x.database || '')}">
+            <span class="st ${x.ok ? 'ok' : 'bad'}">${x.ok ? '✓' : '✗'}</span>
+            <span class="sql-txt">${esc(x.sql)}</span>
+            <span class="tm">${esc(x.runAt)} · ${esc(x.elapsed)}</span>
+          </div>`).join('') || '<div class="hhead">暂无执行记录</div>'}
+      </div>` : ''}
+    </div>`;
+}
+
+/* ================= 信息面板（右侧字段属性） ================= */
+function renderInfoPanel() {
+  const el = $('#infopanel');
+  const t = activeTab();
+  const show = !!$('#btnInfo').classList.contains('on') && t && t.kind === 'table';
+  el.classList.toggle('hidden', !show);
+  if (!show) return;
+  if (!t.schema) {
+    el.innerHTML = `<div class="ip-hint">${t.schemaErr ? esc(t.schemaErr) : '表结构加载中…'}</div>`;
+    return;
+  }
+  const cols = t.schema.columns || [];
+  const selName = t.selCell ? t.columns[t.selCell.c] : null;
+  const meta = selName ? cols.find(c => c.Field === selName) : null;
+  if (!meta) {
+    el.innerHTML = `<div class="ip-hint">点击网格中的单元格查看字段属性。<br><br>表 <b>${esc(t.table)}</b> 共 ${cols.length} 个字段${t.pkCols.length ? '，主键 ' + esc(t.pkCols.join(', ')) : '，<span style="color:var(--orange)">无主键（只读）</span>'}</div>
+      <div class="ip-cols">${cols.map(c => `
+        <div class="ip-col" data-infocol="${esc(c.Field)}">${I(c.Key === 'PRI' ? 'key' : 'list', 'sm')}<span style="overflow:hidden;text-overflow:ellipsis">${esc(c.Field)}</span><span class="t">${esc(c.Type)}</span></div>`).join('')}</div>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="ip-title">${I('key')} ${esc(meta.Field)} ${meta.Key === 'PRI' ? '<span class="ip-badge">主键</span>' : ''}</div>
+    <div class="ip-field"><div class="ip-label">类型</div><div class="ip-val">${esc(meta.Type)}</div></div>
+    <div class="ip-field"><div class="ip-label">允许空</div><div class="ip-val">${meta.Null === 'YES' ? '是' : '否'}</div></div>
+    <div class="ip-field"><div class="ip-label">键</div><div class="ip-val">${esc(meta.Key || '—')}</div></div>
+    <div class="ip-field"><div class="ip-label">默认值</div><div class="ip-val">${meta.Default === null ? '—' : esc(meta.Default)}</div></div>
+    <div class="ip-field"><div class="ip-label">额外</div><div class="ip-val">${esc(meta.Extra || '—')}</div></div>
+    <div class="ip-field"><div class="ip-label">注释</div><div class="ip-val">${esc(meta.Comment || '—')}</div></div>
+    <div class="ip-cols">${cols.map(c => `
+      <div class="ip-col ${c.Field === meta.Field ? 'on' : ''}" data-infocol="${esc(c.Field)}">${I(c.Key === 'PRI' ? 'key' : 'list', 'sm')}<span style="overflow:hidden;text-overflow:ellipsis">${esc(c.Field)}</span><span class="t">${esc(c.Type)}</span></div>`).join('')}</div>`;
+}
+
+/* ================= 弹窗 ================= */
+function openModal(id) { $('#' + id).classList.add('open'); }
+function closeModal(id) { $('#' + id).classList.remove('open'); }
+function confirmDialog(title, body, fn) {
+  $('#cfTitle').textContent = title;
+  $('#cfBody').textContent = body;
+  S.confirmFn = fn;
+  openModal('confirmMask');
+}
+
+/* ================= 右键菜单（仿 Navicat） ================= */
+function openCtxMenu(x, y, type, conn, db, table) {
+  const A = (label, action, id, danger) =>
+    `<div class="ci ${danger ? 'danger' : ''}" data-action="${action}"${id ? ` data-id="${esc(id)}"` : ''}>${label}</div>`;
+  const sep = '<div class="csep"></div>';
+  const items = [];
+  if (type === 'conn') {
+    items.push(A('新建数据库…', 'newdb'), A('新建查询', 'newquery'), A('运行 SQL 文件…', 'open-sqlfile'), sep,
+      A('编辑连接…', 'edit-conn', conn), A('删除连接', 'del-conn', conn, true), sep, A('刷新', 'refresh'));
+  } else if (type === 'db') {
+    items.push(A('新建查询', 'newquery'), A('运行 SQL 文件…', 'open-sqlfile'), sep,
+      A('删除数据库', 'drop-db', conn + '|' + db, true), sep, A('刷新', 'refresh'));
+  } else {
+    items.push(A('打开表', 'opentable'), A('打开结构', 'open-struct'), sep,
+      A('清空表', 'truncate', conn + '|' + db + '|' + table, true),
+      A('删除表', 'drop-table', conn + '|' + db + '|' + table, true));
+  }
+  const el = $('#ctxmenu');
+  el.innerHTML = items.join('');
+  el.classList.add('open');
+  // 视口贴边翻转
+  const r = el.getBoundingClientRect();
+  el.style.left = Math.max(4, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
+  el.style.top = Math.max(4, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
+}
+function closeCtxMenu() { $('#ctxmenu').classList.remove('open'); }
+
+document.addEventListener('contextmenu', (e) => {
+  const node = e.target.closest('[data-node]');
+  if (!node) { closeCtxMenu(); return; }
+  e.preventDefault();
+  const { node: type, conn, db, table } = node.dataset;
+  // 先选中该节点（菜单动作依赖 S.sel 上下文），再弹菜单
+  S.sel = type === 'conn' ? { type: 'conn', conn } : type === 'db' ? { type: 'db', conn, db } : { type: 'table', conn, db, table };
+  renderTree(); renderToolbar();
+  openCtxMenu(e.clientX, e.clientY, type, conn, db, table);
+});
+document.addEventListener('click', (e) => { if (!e.target.closest('#ctxmenu')) closeCtxMenu(); }, true); // 捕获阶段：点外部即关
+document.addEventListener('wheel', closeCtxMenu, true);
+window.addEventListener('resize', closeCtxMenu);
+$('#ctxmenu').addEventListener('click', () => setTimeout(closeCtxMenu, 0)); // 点菜单项后关闭
+
+/* ================= 运行 SQL 文件 ================= */
+function openSqlFileDialog(conn, db) {
+  S.sf = { conn, db: db || '' };
+  $('#sfTitle').textContent = `运行 SQL 文件 · ${connName(conn)}`;
+  $('#sf_file').value = '';
+  $('#sfDrop').classList.remove('has');
+  $('#sfFileInfo').textContent = '';
+  $('#sfResult').style.display = 'none';
+  $('#sfResult').innerHTML = '';
+  $('#sfMeta').textContent = '';
+  $('#sfRun').disabled = false;
+  $('#sf_db').innerHTML = '<option value="">（不指定）</option>';
+  // 库列表：树中已加载优先，否则懒加载一次
+  const st = S.tree[conn];
+  const fill = (names) => {
+    $('#sf_db').innerHTML = '<option value="">（不指定）</option>' + sortDbs(names || []).map(n =>
+      `<option value="${esc(n)}" ${n === S.sf.db ? 'selected' : ''}>${esc(n)}</option>`).join('');
+  };
+  if (st && st.dbs) fill(st.dbs.map(d => d.name));
+  else api(`/connections/${conn}/databases`).then(r => { if (!r.error) fill(r.databases || []); });
+  openModal('sqlFileMask');
+}
+// 读取文件：按扩展名透明解压 .gz，按所选编码解码
+async function readSqlFile(file, enc) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let stream = new Blob([bytes]).stream();
+  if (/\.gz$/i.test(file.name)) stream = stream.pipeThrough(new DecompressionStream('gzip'));
+  return new TextDecoder(enc, { fatal: false }).decode(await new Response(stream).arrayBuffer());
+}
+async function runSqlFile() {
+  const sf = S.sf;
+  if (!sf) return;
+  const f = $('#sf_file').files && $('#sf_file').files[0];
+  if (!f) return toast('请先选择 SQL 文件');
+  const cont = $('#sf_cont').checked;
+  const enc = $('#sf_enc').value;
+  const db = $('#sf_db').value;
+  $('#sfRun').disabled = true;
+  const res = $('#sfResult');
+  res.style.display = '';
+  res.innerHTML = '<div class="muted">读取文件中…</div>';
+  try {
+    const text = await readSqlFile(f, enc);
+    res.innerHTML = '<div class="muted">上传并逐条执行中…（大文件可能需要较长时间）</div>';
+    const t0 = Date.now();
+    const r = await fetch(`/api/plugin/mysqladmin/connections/${sf.conn}/sqlfile?db=${encodeURIComponent(db)}&cont=${cont ? '1' : '0'}`, {
+      method: 'POST', headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: text,
+    }).then(x => x.json());
+    const secs = ((Date.now() - t0) / 1000).toFixed(1);
+    if (r.error) { res.innerHTML = `<div class="grid-err">${esc(r.error)}</div>`; $('#sfMeta').textContent = ''; return; }
+    res.innerHTML = `
+      <div class="sum">
+        <span>语句总数 <b>${r.total}</b></span>
+        <span style="color:var(--green)">成功 <b>${r.executed}</b></span>
+        <span style="color:${r.failed ? 'var(--red)' : 'inherit'}">失败 <b>${r.failed}</b></span>
+        <span class="muted">耗时 ${esc(r.elapsed)}（前端 ${secs}s）</span>
+        ${r.stoppedEarly ? '<span style="color:var(--orange)">已在出错处中止</span>' : ''}
+      </div>
+      ${(r.errors || []).length ? `<div>${r.errors.map(e => `
+        <div class="eitem"><div class="estmt">#${e.index} ${esc(e.stmt)}</div><div class="eerr">${esc(e.error)}</div></div>`).join('')}</div>` : ''}`;
+    if (r.failed) { $('#sfMeta').textContent = '执行完成（有失败）'; toast(`${r.executed} 成功 / ${r.failed} 失败`); }
+    else { $('#sfMeta').textContent = '执行完成'; toast('SQL 文件执行完成'); refreshTree(); }
+  } catch (e) {
+    res.innerHTML = `<div class="grid-err">读取文件失败: ${esc(String((e && e.message) || e))}</div>`;
+  }
+  $('#sfRun').disabled = false;
+}
+
+/* 连接编辑 */
 function openConnEditor(id) {
-  const c = conns.find(x => x.id === id) || {};
+  const c = connOf(id) || {};
   $('#connTitle').textContent = id ? '编辑连接 · ' + id : '新建连接';
   $('#c_id').value = c.id || ''; $('#c_id').disabled = !!id;
   $('#c_name').value = c.name || '';
@@ -264,10 +1252,8 @@ function openConnEditor(id) {
   $('#c_pass').value = '';
   $('#c_comment').value = c.comment || '';
   $('#testResult').textContent = '';
-  $('#connMask').classList.add('open');
+  openModal('connMask');
 }
-function editConn(id) { openConnEditor(id); }
-
 function formConn() {
   return {
     id: $('#c_id').value.trim(), name: $('#c_name').value.trim(),
@@ -277,247 +1263,417 @@ function formConn() {
   };
 }
 
-async function testFormConn() {
-  const c = formConn();
-  if (!c.host || !c.user) { toast('主机/用户名必填'); return; }
-  $('#testResult').textContent = '测试中…';
-  const r = await api('/connections/test', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(c) });
-  $('#testResult').innerHTML = r.ok ? '<span class="okmsg">✓ 连接成功</span>' : '<span class="err">✗ ' + esc(r.error || '失败') + '</span>';
-}
-
-async function saveConn() {
-  const c = formConn();
-  if (!c.id || !c.host || !c.user) { toast('标识/主机/用户名必填'); return; }
-  const r = await api('/connections', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(c) });
-  if (r.error) { toast(r.error); return; }
-  toast('已保存'); closeModal('connMask'); loadAll();
-}
-
-async function delConn(id) {
-  if (!confirm('删除连接 ' + id + '？（不影响 MySQL 本身）')) return;
-  await api('/connections/' + id, { method: 'DELETE' });
-  if (curConn === id) { curConn = null; $('#workspace').style.display = 'none'; }
-  toast('已删除'); loadAll();
-}
-
-async function openWorkspace(id) {
-  curConn = id; curDb = null; curTable = null;
-  const c = conns.find(x => x.id === id);
-  $('#wsConnName').textContent = (c && (c.name || c.id)) || id;
-  $('#wsConnTag').textContent = id;
-  $('#workspace').style.display = 'block';
-  renderConns();
-  await loadTree();
-  loadHistory();
-}
-
-async function loadTree(force) {
-  const el = $('#tree');
-  el.innerHTML = '<div style="color:var(--dim);font-size:12px">加载中…</div>';
-  const r = await api(`/connections/${curConn}/databases`);
-  if (r.error) { el.innerHTML = `<div class="err">连接失败: ${esc(r.error)}</div>`; return; }
-  databases = (r.databases || []).filter(d => !['information_schema','performance_schema','sys','mysql'].includes(d) || d === 'mysql');
-  // 系统库折叠展示：全部列出但系统库排后面
-  const sys = new Set(['information_schema','performance_schema','sys','mysql']);
-  databases.sort((a, b) => (sys.has(a) ? 1 : 0) - (sys.has(b) ? 1 : 0) || a.localeCompare(b));
-  el.innerHTML = databases.map(d => `
-    <div class="db ${curDb===d?'active':''}" data-db="${esc(d)}" onclick="openDb('${esc(d)}')">
-      🗄 <span class="dbname" title="${esc(d)}">${esc(d)}</span>
-      <div class="db-actions">${sys.has(d) ? '' : `<button class="icon-btn danger" title="删除数据库 ${esc(d)}" onclick="event.stopPropagation();dropDb('${esc(d)}')">🗑</button>`}</div>
-    </div>
-    <div class="tables" id="tables-${esc(d)}" style="display:${curDb===d?'block':'none'}">${curDb===d?'<div style="color:var(--dim);font-size:12px">加载中…</div>':''}</div>`).join('');
-  if (curDb && force !== 'keep') renderTables((await api(`/connections/${curConn}/databases/${curDb}/tables`)).tables || []);
-}
-
-async function openDb(db) {
-  curDb = db; curTable = null;
-  document.querySelectorAll('.tree .db').forEach(e => e.classList.toggle('active', e.dataset.db === db));
-  document.querySelectorAll('.tree .tables').forEach(e => e.style.display = 'none');
-  const box = $('#tables-' + CSS.escape(db));
-  box.style.display = 'block';
-  box.innerHTML = '<div style="color:var(--dim);font-size:12px">加载中…</div>';
-  const r = await api(`/connections/${curConn}/databases/${db}/tables`);
-  if (r.error) { box.innerHTML = `<div class="err">${esc(r.error)}</div>`; return; }
-  renderTables(r.tables || []);
-  // SQL 控制台库下拉
-  $('#sqlDb').innerHTML = '<option value=""></option>' + databases.map(d => `<option value="${esc(d)}" ${d===db?'selected':''}>${esc(d)}</option>`).join('');
-  switchTab('data');
-}
-
-function renderTables(list) {
-  tables = list;
-  const box = $('#tables-' + CSS.escape(curDb));
-  if (!box) return;
-  if (!list.length) { box.innerHTML = '<div style="color:var(--dim);font-size:12px;padding:4px 8px">（空库）</div>'; return; }
-  box.innerHTML = list.map(t => `
-    <div class="tb ${curTable===t.name?'active':''}" data-tb="${esc(t.name)}" onclick="openTable('${esc(t.name)}')">
-      📋 <span class="tbname" title="${esc(t.name)}">${esc(t.name)}</span> <span class="cnt">${t.rows ?? ''}</span>
-      <div class="tb-actions">
-        <button class="icon-btn danger" title="清空表 ${esc(t.name)}" onclick="event.stopPropagation();truncateTable('${esc(t.name)}')">⌫</button>
-        <button class="icon-btn danger" title="删除表 ${esc(t.name)}" onclick="event.stopPropagation();dropTable('${esc(t.name)}')">🗑</button>
-      </div>
-    </div>`).join('');
-}
-
-async function openTable(name) {
-  curTable = name;
-  document.querySelectorAll('.tree .tb').forEach(e => e.classList.toggle('active', e.dataset.tb === name));
-  rowsState = { page: 1, size: 50, total: 0, where: '' };
-  switchTab('data');
-  loadRows();
-}
-
-function switchTab(tab) {
-  document.querySelectorAll('.tab').forEach(e => e.classList.toggle('active', e.dataset.tab === tab));
-  $('#pane-data').style.display = tab === 'data' ? '' : 'none';
-  $('#pane-schema').style.display = tab === 'schema' ? '' : 'none';
-  $('#pane-sql').style.display = tab === 'sql' ? '' : 'none';
-  if (tab === 'schema' && curDb && curTable) loadSchema();
-}
-
-async function loadRows() {
-  if (!curDb || !curTable) { $('#pane-data').innerHTML = '<div class="empty">先在左侧选择库与表</div>'; return; }
-  const s = rowsState;
-  const qs = `conn=${curConn}&db=${curDb}&table=${curTable}&page=${s.page}&size=${s.size}&where=${encodeURIComponent(s.where)}`;
-  $('#pane-data').innerHTML = '<div style="color:var(--dim);font-size:12px">加载中…</div>';
-  const r = await api('/rows?' + qs);
-  if (r.error) { $('#pane-data').innerHTML = `<div class="err">${esc(r.error)}</div>`; return; }
-  s.total = r.total || 0;
-  const pages = Math.max(1, Math.ceil(s.total / s.size));
-  const fmtCell = v => v === null ? '<i style="color:var(--dim)">NULL</i>'
-    : (String(v).length > 60 ? `<div class="wrap-cell">${esc(v)}</div>` : esc(v));
-  $('#pane-data').innerHTML = `
-    <div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap;align-items:center">
-      <input id="whereInput" placeholder="WHERE 条件，如: status = 1（可留空）" style="flex:1;min-width:200px" value="${esc(s.where)}">
-      <button class="btn small" onclick="applyWhere()">筛选</button>
-      <span style="color:var(--dim);font-size:12px">共 ${s.total} 行</span>
-    </div>
-    ${r.columns && r.columns.length ? `<div class="scroll"><table class="grid">
-      <tr>${r.columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr>
-      ${(r.rows||[]).map(row => `<tr>${row.map(v => `<td>${fmtCell(v)}</td>`).join('')}</tr>`).join('')}
-    </table></div>` : '<div class="empty">无数据</div>'}
-    <div class="pager">
-      <button class="btn small" ${s.page<=1?'disabled':''} onclick="rowsState.page--;loadRows()">上一页</button>
-      <span>第 ${s.page} / ${pages} 页 · 每页 ${s.size} 行</span>
-      <button class="btn small" ${s.page>=pages?'disabled':''} onclick="rowsState.page++;loadRows()">下一页</button>
-      <select onchange="rowsState.size=+this.value;rowsState.page=1;loadRows()" style="width:90px">
-        ${[20,50,100,200].map(n => `<option value="${n}" ${n===s.size?'selected':''}>${n} 行/页</option>`).join('')}
-      </select>
-    </div>`;
-}
-
-function applyWhere() {
-  rowsState.where = ($('#whereInput') || {}).value || '';
-  rowsState.page = 1;
-  loadRows();
-}
-
-async function loadSchema() {
-  const el = $('#pane-schema');
-  el.innerHTML = '<div style="color:var(--dim);font-size:12px">加载中…</div>';
-  const r = await api(`/connections/${curConn}/databases/${curDb}/tables/${curTable}/schema`);
-  if (r.error) { el.innerHTML = `<div class="err">${esc(r.error)}</div>`; return; }
-  const idx = r.indexes || [];
-  el.innerHTML = `
-    <div style="margin-bottom:8px"><b>${esc(curTable)}</b> <span style="color:var(--dim);font-size:12px">· ${esc(curDb)}</span></div>
-    <div class="scroll" style="max-height:260px;margin-bottom:10px"><table class="grid">
-      <tr><th>字段</th><th>类型</th><th>空</th><th>键</th><th>默认</th><th>额外</th><th>注释</th></tr>
-      ${(r.columns||[]).map(c => `<tr>
-        <td><b>${esc(c.Field)}</b></td><td>${esc(c.Type)}</td><td>${esc(c.Null)}</td>
-        <td>${esc(c.Key||'')}</td><td>${esc(c.Default??'')}</td><td>${esc(c.Extra||'')}</td><td>${esc(c.Comment||'')}</td>
-      </tr>`).join('')}
-    </table></div>
-    <div class="scroll" style="max-height:160px;margin-bottom:10px"><table class="grid">
-      <tr><th>索引名</th><th>列</th><th>非唯一</th><th>类型</th></tr>
-      ${idx.map(i => `<tr><td>${esc(i.Key_name)}</td><td>${esc(i.Column_name)}</td><td>${esc(i.Non_unique)}</td><td>${esc(i.Index_type)}</td></tr>`).join('')}
-    </table></div>
-    ${r.createSQL ? `<pre class="create-sql">${esc(r.createSQL)}</pre>` : ''}`;
-}
-
-async function runSQL() {
-  const sqlText = $('#sqlText').value.trim();
-  if (!sqlText) return;
-  $('#sqlResult').innerHTML = '<div style="color:var(--dim);font-size:12px">执行中…</div>';
-  const r = await api('/query', { method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ conn: curConn, database: $('#sqlDb').value || '', sql: sqlText }) });
-  if (r.error) {
-    $('#sqlResult').innerHTML = `<div class="err">${esc(r.error)}</div>`;
-    $('#sqlMeta').textContent = '';
-    loadHistory(); return;
+/* ================= 动作分发 ================= */
+async function handleAction(action, el) {
+  const t = activeTab();
+  const s = S.sel;
+  switch (action) {
+    case 'newconn': openConnEditor(); break;
+    case 'testconn': {
+      const c = formConn();
+      if (!c.host || !c.user) { toast('主机/用户名必填'); break; }
+      $('#testResult').innerHTML = '<span class="muted">测试中…</span>';
+      const r = await API('/connections/test', 'POST', c);
+      $('#testResult').innerHTML = r.ok ? '<span style="color:var(--green)">✓ 连接成功</span>' : `<span style="color:var(--red)">✗ ${esc(r.error || '失败')}</span>`;
+      break;
+    }
+    case 'saveconn': {
+      const c = formConn();
+      if (!c.id || !c.host || !c.user) { toast('标识/主机/用户名必填'); break; }
+      const r = await API('/connections', 'POST', c);
+      if (r.error) { toast(r.error); break; }
+      closeModal('connMask'); toast('已保存');
+      await loadConns(); renderTree();
+      break;
+    }
+    case 'close-modal': closeModal(el.dataset.modal); break;
+    case 'opentable':
+      if (s && s.type === 'table') openTableTab(s.conn, s.db, s.table);
+      break;
+    case 'newquery':
+      if (!s) break;
+      openQueryTab(s.conn, s.type === 'conn' ? '' : s.db);
+      break;
+    case 'open-sqlfile':
+      if (s) openSqlFileDialog(s.conn, s.type === 'conn' ? '' : s.db);
+      break;
+    case 'open-struct':
+      if (s && s.type === 'table') {
+        openTableTab(s.conn, s.db, s.table);
+        const ts = activeTab();
+        if (ts && ts.kind === 'table') { ts.view = 'struct'; renderTab(); }
+      }
+      break;
+    case 'run-sqlfile': runSqlFile(); break;
+    case 'newdb':
+      if (s && s.type === 'conn') { $('#db_name').value = ''; openModal('dbMask'); }
+      break;
+    case 'createdb': {
+      if (!s || s.type !== 'conn') break;
+      const name = $('#db_name').value.trim();
+      if (!name) { toast('库名必填'); break; }
+      const r = await API(`/connections/${s.conn}/databases`, 'POST', { name, charset: $('#db_charset').value });
+      if (r.error) { toast(r.error); break; }
+      closeModal('dbMask'); toast('已创建 ' + name);
+      S.tree[s.conn] = { expanded: true }; // 强制重载库列表
+      await toggleConn(s.conn, true);
+      break;
+    }
+    case 'refresh': refreshTree(); break;
+    case 'delnode': {
+      if (!s) break;
+      if (s.type === 'conn') {
+        confirmDialog('删除连接', `删除连接 ${s.conn}？（仅移除面板中的配置，不影响 MySQL 本身）`, async () => {
+          const r = await API('/connections/' + s.conn, 'DELETE');
+          if (r.error) return toast(r.error);
+          closeTabsWhere(x => x.conn === s.conn);
+          delete S.tree[s.conn];
+          if (S.sel && S.sel.conn === s.conn) S.sel = null;
+          await loadConns(); renderTree(); renderToolbar();
+          toast('已删除连接');
+        });
+      } else if (s.type === 'db') {
+        confirmDialog('删除数据库', `删除数据库 ${s.db}？库内全部数据将丢失！`, async () => {
+          const r = await API(`/connections/${s.conn}/databases/${s.db}`, 'DELETE');
+          if (r.error) return toast(r.error);
+          closeTabsWhere(x => x.conn === s.conn && x.db === s.db);
+          if (S.sel && S.sel.db === s.db) S.sel = { type: 'conn', conn: s.conn };
+          const st = S.tree[s.conn];
+          if (st && st.dbs) st.dbs = st.dbs.filter(x => x.name !== s.db);
+          renderTree(); toast('已删除 ' + s.db);
+        });
+      } else if (s.type === 'table') {
+        confirmDialog('删除表', `删除表 ${s.db}.${s.table}？表结构与数据将全部删除！`, async () => {
+          const r = await API(`/connections/${s.conn}/databases/${s.db}/tables/${s.table}/drop`, 'POST');
+          if (r.error) return toast(r.error);
+          closeTabsWhere(x => x.conn === s.conn && x.db === s.db && x.table === s.table);
+          if (S.sel && S.sel.table === s.table) S.sel = { type: 'db', conn: s.conn, db: s.db };
+          await toggleDb(s.conn, s.db, true);
+          renderToolbar(); toast('已删除 ' + s.table);
+        });
+      }
+      break;
+    }
+    case 'toggle-info': {
+      const btn = $('#btnInfo');
+      btn.classList.toggle('on');
+      localStorage.setItem('zjp_mysql_info', btn.classList.contains('on') ? '1' : '0');
+      renderInfoPanel();
+      break;
+    }
+    case 'apply-filter': {
+      if (!t || t.kind !== 'table') break;
+      t.where = ($('#filterInput') || {}).value || '';
+      t.whereDraft = '';
+      t.page = 1; loadRows(t);
+      break;
+    }
+    case 'clear-filter': {
+      if (!t) break;
+      t.where = ''; t.whereDraft = ''; t.page = 1; loadRows(t);
+      break;
+    }
+    case 'reload-table': {
+      if (!t || t.kind !== 'table') break;
+      loadSchema(t); loadRows(t);
+      break;
+    }
+    case 'rows-refresh': if (t) loadRows(t); break;
+    case 'row-add': openAddRowModal(); break;
+    case 'row-del': deleteSelectedRow(); break;
+    case 'insertrow': insertRow(); break;
+    case 'copy-sql': {
+      if (!t || t.kind !== 'table') break;
+      try { await navigator.clipboard.writeText(sqlPreview(t)); toast('SQL 已复制'); }
+      catch (e) { toast('复制失败'); }
+      break;
+    }
+    case 'run-query': if (t && t.kind === 'query') runQuery(t); break;
+    case 'toggle-hist': {
+      if (!t || t.kind !== 'query') break;
+      t.histOpen = !t.histOpen;
+      if (t.histOpen && !t.history) loadHistory(t); else renderTab();
+      break;
+    }
+    // 树节点 hover 动作
+    case 'edit-conn': openConnEditor(el.dataset.id); break;
+    case 'del-conn': {
+      const id = el.dataset.id;
+      confirmDialog('删除连接', `删除连接 ${id}？（仅移除面板中的配置，不影响 MySQL 本身）`, async () => {
+        const r = await API('/connections/' + id, 'DELETE');
+        if (r.error) return toast(r.error);
+        closeTabsWhere(x => x.conn === id);
+        delete S.tree[id];
+        if (S.sel && S.sel.conn === id) S.sel = null;
+        await loadConns(); renderTree(); renderToolbar();
+        toast('已删除连接');
+      });
+      break;
+    }
+    case 'drop-db': {
+      const [conn, db] = el.dataset.id.split('|');
+      confirmDialog('删除数据库', `删除数据库 ${db}？库内全部数据将丢失！`, async () => {
+        const r = await API(`/connections/${conn}/databases/${db}`, 'DELETE');
+        if (r.error) return toast(r.error);
+        closeTabsWhere(x => x.conn === conn && x.db === db);
+        if (S.sel && S.sel.db === db) S.sel = { type: 'conn', conn };
+        const st = S.tree[conn];
+        if (st && st.dbs) st.dbs = st.dbs.filter(x => x.name !== db);
+        renderTree(); toast('已删除 ' + db);
+      });
+      break;
+    }
+    case 'truncate': {
+      const [conn, db, table] = el.dataset.id.split('|');
+      confirmDialog('清空表', `清空表 ${db}.${table}？全部行将删除且不可恢复！`, async () => {
+        const r = await API(`/connections/${conn}/databases/${db}/tables/${table}/truncate`, 'POST');
+        if (r.error) return toast(r.error);
+        toast('已清空 ' + table);
+        const at = activeTab();
+        if (at && at.kind === 'table' && at.conn === conn && at.db === db && at.table === table) loadRows(at);
+      });
+      break;
+    }
+    case 'drop-table': {
+      const [conn, db, table] = el.dataset.id.split('|');
+      confirmDialog('删除表', `删除表 ${db}.${table}？表结构与数据将全部删除！`, async () => {
+        const r = await API(`/connections/${conn}/databases/${db}/tables/${table}/drop`, 'POST');
+        if (r.error) return toast(r.error);
+        closeTabsWhere(x => x.conn === conn && x.db === db && x.table === table);
+        if (S.sel && S.sel.table === table) S.sel = { type: 'db', conn, db };
+        await toggleDb(conn, db, true);
+        renderToolbar(); toast('已删除 ' + table);
+      });
+      break;
+    }
   }
-  let html = '';
-  if (r.columns) {
-    const fmtCell = v => v === null ? '<i style="color:var(--dim)">NULL</i>'
-      : (String(v).length > 60 ? `<div class="wrap-cell">${esc(v)}</div>` : esc(v));
-    html = `<div class="scroll" style="max-height:340px"><table class="grid">
-      <tr>${r.columns.map(c => `<th>${esc(c)}</th>`).join('')}</tr>
-      ${(r.rows||[]).map(row => `<tr>${row.map(v => `<td>${fmtCell(v)}</td>`).join('')}</tr>`).join('')}
-    </table></div>`;
-    $('#sqlMeta').textContent = `${(r.rows||[]).length} 行 · ${r.elapsed}`;
-  } else {
-    html = `<div class="okmsg">✓ 执行成功，影响 ${r.rowsAffected} 行</div>`;
-    $('#sqlMeta').textContent = r.elapsed;
+}
+
+/* ================= 事件绑定（事件委托） ================= */
+document.addEventListener('click', async (e) => {
+  // 编辑中的单元格：点击外部先提交
+  const at = activeTab();
+  if (at && at.editing) {
+    const inp = document.querySelector('input.cell-edit');
+    if (inp && !inp.contains(e.target) && !e.target.closest('.modal-mask')) {
+      commitEdit(at, at.editing.r, at.editing.c, inp.value);
+      return; // 本次点击先用于结束编辑
+    }
   }
-  $('#sqlResult').innerHTML = html;
-  loadHistory();
-}
+  const act = e.target.closest('[data-action]');
+  if (act) { handleAction(act.dataset.action, act); return; }
 
-async function loadHistory() {
-  const h = await api('/history') || [];
-  $('#history').innerHTML = h.length ? h.map(x => `
-    <div class="item">
-      <span class="st ${x.ok?'okmsg':'err'}">${x.ok?'✓':'✗'}</span>
-      <span class="sql-txt" style="cursor:pointer" onclick="useHist(this.textContent)" title="点击填入 SQL 控制台">${esc(x.sql)}</span>
-      <span style="color:var(--dim);font-size:11px;flex-shrink:0">${esc(x.runAt)} · ${esc(x.elapsed)}</span>
-    </div>`).join('') : '<div style="color:var(--dim);font-size:12px">暂无执行记录</div>';
-}
-function useHist(sql) { switchTab('sql'); $('#sqlText').value = sql; if (curDb) $('#sqlDb').value = curDb; }
+  const closeBtn = e.target.closest('[data-close]');
+  if (closeBtn) { closeTab(closeBtn.dataset.close); return; }
 
-// ---- 库/表操作 ----
-function newDatabase() { $('#db_name').value = ''; $('#dbMask').classList.add('open'); }
-async function createDatabase() {
-  const name = $('#db_name').value.trim();
-  if (!name) { toast('库名必填'); return; }
-  const r = await api(`/connections/${curConn}/databases`, { method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ name, charset: $('#db_charset').value }) });
-  if (r.error) { toast(r.error); return; }
-  toast('已创建 ' + name); closeModal('dbMask'); curDb = name; loadTree();
-}
-async function dropDb(name) {
-  if (!confirm(`删除数据库 ${name}？库内全部数据将丢失！`)) return;
-  const r = await api(`/connections/${curConn}/databases/${name}`, { method: 'DELETE' });
-  r.error ? toast(r.error) : toast('已删除 ' + name);
-  if (curDb === name) { curDb = null; curTable = null; }
-  loadTree();
-}
-async function truncateTable(name) {
-  if (!confirm(`清空表 ${name}？全部行将删除且不可恢复！`)) return;
-  const r = await api(`/connections/${curConn}/databases/${curDb}/tables/${name}/truncate`, { method: 'POST' });
-  r.error ? toast(r.error) : toast('已清空 ' + name);
-  loadRows();
-}
-async function dropTable(name) {
-  if (!confirm(`删除表 ${name}？表结构与数据将全部删除！`)) return;
-  const r = await api(`/connections/${curConn}/databases/${curDb}/tables/${name}/drop`, { method: 'POST' });
-  r.error ? toast(r.error) : toast('已删除 ' + name);
-  if (curTable === name) { curTable = null; }
-  loadTree(true);
-}
+  const tabEl = e.target.closest('[data-tabid]');
+  if (tabEl) { activateTab(tabEl.dataset.tabid); return; }
 
-document.addEventListener('keydown', e => {
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); runSQL(); }
+  const pg = e.target.closest('[data-page]');
+  if (pg) {
+    const t = activeTab();
+    if (t && t.kind === 'table' && !pg.disabled) {
+      const pages = Math.max(1, Math.ceil(t.total / t.size));
+      if (pg.dataset.page === 'first') t.page = 1;
+      else if (pg.dataset.page === 'prev') t.page = Math.max(1, t.page - 1);
+      else if (pg.dataset.page === 'next') t.page = Math.min(pages, t.page + 1);
+      else if (pg.dataset.page === 'last') t.page = pages;
+      loadRows(t);
+    }
+    return;
+  }
+
+  const cfOk = e.target.closest('#cfOk');
+  if (cfOk) { const fn = S.confirmFn; S.confirmFn = null; closeModal('confirmMask'); if (fn) fn(); return; }
+
+  const hi = e.target.closest('[data-histsql]');
+  if (hi) {
+    const t2 = activeTab();
+    if (t2 && t2.kind === 'query') {
+      t2.sqlText = hi.dataset.histsql;
+      if (hi.dataset.histdb) t2.qdb = hi.dataset.histdb;
+      renderTab();
+    }
+    return;
+  }
+
+  const ic = e.target.closest('[data-infocol]');
+  if (ic) {
+    const t3 = activeTab();
+    if (t3 && t3.kind === 'table') {
+      const i = t3.columns.indexOf(ic.dataset.infocol);
+      if (i >= 0) { t3.selCell = { r: -1, c: i }; renderInfoPanel(); }
+    }
+    return;
+  }
+
+  // 视图切换（数据 | 结构 | DDL）
+  const seg = e.target.closest('.seg-item[data-view]');
+  if (seg) {
+    const t9 = activeTab();
+    if (t9 && t9.kind === 'table' && t9.view !== seg.dataset.view) {
+      t9.view = seg.dataset.view;
+      renderTab();
+    }
+    return;
+  }
+
+  // 树：caret 展开 / 节点动作 / 节点选择
+  const caret = e.target.closest('[data-caret]');
+  if (caret) {
+    e.stopPropagation();
+    if (caret.dataset.caret === 'conn') toggleConn(caret.dataset.conn);
+    else toggleDb(caret.dataset.conn, caret.dataset.db);
+    return;
+  }
+  const nodeAct = e.target.closest('[data-act]');
+  if (nodeAct) {
+    e.stopPropagation();
+    // 树内动作走 handleAction 的树分支
+    handleAction(nodeAct.dataset.act, nodeAct);
+    return;
+  }
+  const node = e.target.closest('[data-node]');
+  if (node) {
+    const { node: type, conn, db, table } = node.dataset;
+    if (type === 'conn') { S.sel = { type: 'conn', conn }; toggleConn(conn); }
+    else if (type === 'db') { S.sel = { type: 'db', conn, db }; toggleDb(conn, db); }
+    else { S.sel = { type: 'table', conn, db, table }; openTableTab(conn, db, table); }
+    renderTree(); renderToolbar();
+    return;
+  }
+
+  // 排序
+  const th = e.target.closest('th[data-sort]');
+  if (th) {
+    const t4 = activeTab();
+    if (t4 && t4.kind === 'table') {
+      const col = th.dataset.sort;
+      if (t4.order !== col) { t4.order = col; t4.dir = 'ASC'; }
+      else if (t4.dir === 'ASC') t4.dir = 'DESC';
+      else { t4.order = ''; t4.dir = ''; }
+      t4.page = 1;
+      loadRows(t4);
+    }
+    return;
+  }
+  // 行号选中
+  const rn = e.target.closest('td[data-rownum]');
+  if (rn) {
+    const t5 = activeTab();
+    if (t5 && t5.kind === 'table' && t5.view === 'data') {
+      const r = +rn.dataset.rownum;
+      t5.selRow = t5.selRow === r ? -1 : r;
+      renderTab();
+    }
+    return;
+  }
+  // 单元格选中
+  const cell = e.target.closest('td[data-cell]');
+  if (cell) {
+    const t6 = activeTab();
+    if (t6 && t6.kind === 'table' && !t6.editing) {
+      const [r, c] = cell.dataset.cell.split(',').map(Number);
+      t6.selCell = { r, c };
+      t6.selRow = r;
+      renderTab();
+    }
+    return;
+  }
 });
 
-// ---- 左栏拖拽调宽（记忆到 localStorage）----
+document.addEventListener('dblclick', (e) => {
+  const cell = e.target.closest('td[data-cell]');
+  if (!cell) return;
+  const t = activeTab();
+  if (t && t.kind === 'table' && t.view === 'data' && !t.loading && !t.editing) {
+    const [r, c] = cell.dataset.cell.split(',').map(Number);
+    if (t.rows[r] && t.columns[c]) beginEdit(t, r, c);
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  // Esc：取消编辑 / 关闭右键菜单 / 关闭弹窗
+  if (e.key === 'Escape') {
+    closeCtxMenu();
+    const t = activeTab();
+    if (t && t.editing) { t.editing = null; renderTab(); return; }
+    const open = document.querySelector('.modal-mask.open');
+    if (open) { open.classList.remove('open'); }
+    return;
+  }
+  // Ctrl+Enter 运行查询
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    const t = activeTab();
+    if (t && t.kind === 'query') { e.preventDefault(); runQuery(t); }
+    return;
+  }
+  if (e.key !== 'Enter') return;
+  const el = e.target;
+  if (el.classList && el.classList.contains('cell-edit')) {
+    e.preventDefault();
+    const t = activeTab();
+    if (t && t.editing) commitEdit(t, t.editing.r, t.editing.c, el.value);
+  } else if (el.id === 'filterInput') {
+    e.preventDefault();
+    handleAction('apply-filter');
+  } else if (el.id === 'pageInput') {
+    e.preventDefault();
+    const t = activeTab();
+    if (t && t.kind === 'table') {
+      const pages = Math.max(1, Math.ceil(t.total / t.size));
+      const p = Math.max(1, Math.min(pages, parseInt(el.value, 10) || 1));
+      t.page = p;
+      loadRows(t);
+    }
+  } else if (el.closest && el.closest('#rowFields')) {
+    e.preventDefault();
+    insertRow();
+  }
+});
+
+document.addEventListener('change', (e) => {
+  const el = e.target;
+  if (el.id === 'sizeSel') {
+    const t = activeTab();
+    if (t && t.kind === 'table') {
+      t.size = +el.value; t.page = 1;
+      localStorage.setItem('zjp_mysql_pagesize', String(t.size));
+      loadRows(t);
+    }
+  } else if (el.id === 'qdb') {
+    const t = activeTab();
+    if (t && t.kind === 'query') t.qdb = el.value;
+  } else if (el.matches && el.matches('[data-null]')) {
+    const i = el.dataset.null;
+    const valInput = document.querySelector(`[data-val="${i}"]`);
+    if (valInput) valInput.disabled = el.checked;
+  } else if (el.id === 'sf_file') {
+    const f = el.files && el.files[0];
+    $('#sfFileInfo').textContent = f ? `${f.name} · ${fmtSize(f.size)}` : '';
+    $('#sfDrop').classList.toggle('has', !!f);
+    $('#sfResult').style.display = 'none';
+  }
+});
+
+// 输入过程实时保存草稿：切标签 / 表格重渲染不丢已敲内容
+document.addEventListener('input', (e) => {
+  const el = e.target;
+  const t = activeTab();
+  if (!t) return;
+  if (el.id === 'qtext') t.sqlText = el.value;
+  else if (el.id === 'filterInput' && t.kind === 'table') t.whereDraft = el.value;
+});
+
+/* ================= 左栏拖拽调宽（记忆到 localStorage） ================= */
 (function initTreeResizer() {
-  const layout = $('#wsLayout'), resizer = $('#treeResizer');
-  if (!layout || !resizer) return;
+  const sidebar = $('#sidebar'), resizer = $('#vresizer');
   const saved = +localStorage.getItem('zjp_mysql_tree_w') || 0;
-  if (saved >= 160 && saved <= 560) layout.style.setProperty('--tree-w', saved + 'px');
+  if (saved >= 160 && saved <= 560) sidebar.style.setProperty('--tree-w', saved + 'px');
   let dragging = false, startX = 0, startW = 0;
   resizer.addEventListener('pointerdown', (e) => {
     dragging = true; startX = e.clientX;
-    startW = document.querySelector('.tree-card').getBoundingClientRect().width;
+    startW = sidebar.getBoundingClientRect().width;
     resizer.classList.add('dragging');
     document.body.style.userSelect = 'none';
     resizer.setPointerCapture(e.pointerId);
@@ -525,21 +1681,35 @@ document.addEventListener('keydown', e => {
   resizer.addEventListener('pointermove', (e) => {
     if (!dragging) return;
     const w = Math.min(560, Math.max(160, Math.round(startW + e.clientX - startX)));
-    layout.style.setProperty('--tree-w', w + 'px');
+    sidebar.style.setProperty('--tree-w', w + 'px');
+    sidebar.style.width = w + 'px';
   });
   const done = () => {
     if (!dragging) return;
     dragging = false;
     resizer.classList.remove('dragging');
     document.body.style.userSelect = '';
-    const w = Math.round(document.querySelector('.tree-card').getBoundingClientRect().width);
+    const w = Math.round(sidebar.getBoundingClientRect().width);
+    sidebar.style.width = '';
     localStorage.setItem('zjp_mysql_tree_w', String(w));
   };
   resizer.addEventListener('pointerup', done);
   resizer.addEventListener('pointercancel', done);
 })();
 
-loadAll();
+/* ================= 启动 ================= */
+async function loadConns() {
+  S.conns = await api('/connections') || [];
+  if (!Array.isArray(S.conns)) S.conns = [];
+}
+async function boot() {
+  // 信息面板开关状态
+  if (localStorage.getItem('zjp_mysql_info') !== '0') $('#btnInfo').classList.add('on');
+  $('#btnInfo').innerHTML = I('info');
+  await loadConns();
+  renderTree(); renderTab(); renderTitle(); renderToolbar(); renderInfoPanel();
+}
+boot();
 </script>
 </body>
 </html>
