@@ -146,9 +146,11 @@ const serverPoint = ref<[number, number]>(
 
 const realtime = ref(true)
 const liveCount = ref(0)
-// 实时流向：一次请求 = 一条「来源黄点 → 服务器」的飞线。
-// 记录城市（无则国家）、坐标与时间戳；同城市短时间内多次请求合并计数，用线的宽度/亮度体现请求量。
-const liveFlows = ref<{ key: string; label: string; coords: [number, number][]; ts: number; count: number }[]>([])
+// 实时流向：一次请求 = 一条「来源黄点 → 服务器」的流星（飞一次后消散）。
+// 请求频率用「流星出现的频率」表达：请求越密集，同一城市流出的流星越频繁；
+// 不做合并计数，也不按次数缩放线宽/光点大小。总量上限防高 QPS 爆量。
+const liveFlows = ref<{ label: string; coords: [number, number][]; ts: number }[]>([])
+const LIVE_FLOW_CAP = 120
 
 const handleEntries = (list: any[]) => {
   if (!realtime.value) return
@@ -158,18 +160,13 @@ const handleEntries = (list: any[]) => {
     const c: [number, number] | undefined = (e.lat || e.lon) ? [e.lon, e.lat] : centroids[e.country]
     if (!c) continue
     changed = true
-    const key = e.city || e.country
     const label = e.city ? `${e.city}, ${countryName(e.country)}` : countryName(e.country)
-    // 同城市 5s 内的多次请求合并为一条飞线（count 累加 → 线更粗更亮）
-    const cur = liveFlows.value.find(f => f.key === key)
-    if (cur && Date.now() - cur.ts < 5000) {
-      cur.count++
-      cur.ts = Date.now()
-    } else {
-      liveFlows.value = liveFlows.value.filter(f => f.key !== key)
-      liveFlows.value.push({ key, label, coords: [c, serverPoint.value] as [number, number][], ts: Date.now(), count: 1 })
-    }
+    liveFlows.value.push({ label, coords: [c, serverPoint.value] as [number, number][], ts: Date.now() })
     summary.value.recent = [e, ...(summary.value.recent || [])].slice(0, 100)
+  }
+  // 超出上限时丢弃最早的流星（高 QPS 下视觉密度封顶，避免渲染爆炸）
+  if (liveFlows.value.length > LIVE_FLOW_CAP) {
+    liveFlows.value = liveFlows.value.slice(-LIVE_FLOW_CAP)
   }
   if (changed) renderMap()
 }
@@ -222,29 +219,20 @@ const renderMap = async () => {
   const maxCount = Math.max(1, ...countries.map((c: any) => c.count))
   const shades = ['#dbe9ff', '#9dbdff', '#5c8dff', '#2f5fe0', '#1c3fd6']
   const colorFor = (n: number) => shades[Math.min(shades.length - 1, Math.floor((n / maxCount) * shades.length))]
-  // 实时流向：来源黄点 + 数据流点（沿线流动的光点带拖尾，请求量越大点越大、流动越快），方向 = 来源 → 服务器
-  const maxFlow = Math.max(1, ...liveFlows.value.map(f => f.count))
+  // 实时流向：统一线宽/亮度，频率感来自「流星出现的密集程度」本身（一次请求一条流星）
   const flows = realtime.value
-    ? liveFlows.value.map(f => {
-        const k = f.count / maxFlow
-        return {
-          coords: f.coords,
-          lineStyle: { width: 1 + k * 2, opacity: 0.3 + k * 0.4 },
-          effect: { period: 4 - k * 1.8, symbolSize: 6 + k * 5 },
-        }
-      })
+    ? liveFlows.value.map(f => ({ coords: f.coords }))
     : []
   const srcPoints = realtime.value
     ? liveFlows.value.map(f => ({
         value: f.coords[0],
         name: f.label,
-        symbolSize: 7,
+        symbolSize: 6,
         itemStyle: { color: '#ffd54d' },
       }))
     : []
-  // 城市级聚合点（统计窗口内）：静态圆点，大小 = 请求数平方根缩放；City 库无记录的城市为空时显示国家名
+  // 城市级聚合点（统计窗口内）：统一尺寸的标记点（数量信息放 tooltip，不用大小表达）
   const cities = (summary.value.cities || []).filter((c: any) => (c.lat || c.lon))
-  const maxCity = Math.max(1, ...cities.map((c: any) => c.count))
   const cityLabel = (c: any) => c.city ? `${c.city}, ${countryName(c.country)}` : countryName(c.country)
   const cityPoints = cities.map((c: any) => ({
     value: [c.lon, c.lat],
@@ -252,7 +240,7 @@ const renderMap = async () => {
     cityLabel: cityLabel(c),
     count: c.count,
     bytes: c.bytes,
-    symbolSize: 5 + Math.sqrt(c.count / maxCity) * 13,
+    symbolSize: 7,
     itemStyle: { color: '#5c8dff', opacity: 0.85, borderColor: 'rgba(255,255,255,.7)', borderWidth: 1 },
   }))
   chart.setOption({
