@@ -24,9 +24,25 @@
     <a-collapse v-model:activeKey="detailsOpen" :bordered="false" class="details-collapse">
       <a-collapse-panel key="details">
         <template #header>
-          <span class="details-title">详细信息 · 国家分布 / 站点分布 / 状态码</span>
+          <span class="details-title">详细信息 · 城市分布 / 国家分布 / 站点分布 / 状态码</span>
           <span class="dim details-hint">{{ detailsOpen.length ? '点击收起' : '点击展开' }}</span>
         </template>
+        <a-row :gutter="12" style="margin-bottom: 12px">
+          <a-col :span="24">
+            <a-card title="城市分布" size="small">
+              <a-table :data-source="summary.cities" :columns="cityCols" size="small" :row-key="(r: any) => r.country + '|' + r.city + '|' + r.lat + ',' + r.lon" :pagination="false" :scroll="{ x: 520, y: 240 }">
+                <template #bodyCell="{ column, record }">
+                  <template v-if="column.key === 'city'">
+                    <template v-if="record.city">{{ record.city }}</template>
+                    <span class="dim" v-else>（国家级：库中无城市记录）</span>
+                  </template>
+                  <template v-else-if="column.key === 'country'">{{ countryName(record.country) }} ({{ record.country }})</template>
+                  <template v-else-if="column.key === 'bytes'">{{ fmtBytes(record.bytes) }}</template>
+                </template>
+              </a-table>
+            </a-card>
+          </a-col>
+        </a-row>
         <a-row :gutter="12">
           <a-col :span="8">
             <a-card title="国家分布" size="small">
@@ -100,6 +116,12 @@ const countryCols = [
   { title: '占比', dataIndex: 'percent', key: 'percent', width: 70, customRender: (o: any) => o.value?.toFixed(1) + '%' },
   { title: '流量', key: 'bytes', width: 90 },
 ]
+const cityCols = [
+  { title: '城市', key: 'city' },
+  { title: '国家', key: 'country', width: 150 },
+  { title: '请求数', dataIndex: 'count', key: 'count', width: 80 },
+  { title: '流量', key: 'bytes', width: 100 },
+]
 const siteCols = [
   { title: '站点', dataIndex: 'site', key: 'site' },
   { title: '请求数', dataIndex: 'count', key: 'count', width: 80 },
@@ -107,7 +129,7 @@ const siteCols = [
 ]
 
 const names: Record<string, string> = { CN: '中国', US: '美国', JP: '日本', KR: '韩国', SG: '新加坡', HK: '香港', TW: '台湾', DE: '德国', GB: '英国', FR: '法国', RU: '俄罗斯', IN: '印度', CA: '加拿大', AU: '澳大利亚', BR: '巴西', NL: '荷兰', unknown: '未知' }
-const countryName = (c: string) => names[c] || c
+const countryName = (c: string) => names[c] || (c || '未知')
 
 // 国家质心（与后端 Centroids 一致的主要国家）：GeoIP 缺坐标时回退
 const centroids: Record<string, [number, number]> = {
@@ -125,8 +147,8 @@ const serverPoint = ref<[number, number]>(
 const realtime = ref(true)
 const liveCount = ref(0)
 // 实时流向：一次请求 = 一条「来源黄点 → 服务器」的飞线。
-// 记录国家、坐标与时间戳；同一国家短时间内多次请求合并计数，用线的宽度/亮度体现请求量。
-const liveFlows = ref<{ country: string; coords: [number, number][]; ts: number; count: number }[]>([])
+// 记录城市（无则国家）、坐标与时间戳；同城市短时间内多次请求合并计数，用线的宽度/亮度体现请求量。
+const liveFlows = ref<{ key: string; label: string; coords: [number, number][]; ts: number; count: number }[]>([])
 
 const handleEntries = (list: any[]) => {
   if (!realtime.value) return
@@ -136,14 +158,16 @@ const handleEntries = (list: any[]) => {
     const c: [number, number] | undefined = (e.lat || e.lon) ? [e.lon, e.lat] : centroids[e.country]
     if (!c) continue
     changed = true
-    // 同一国家 5s 内的多次请求合并为一条飞线（count 累加 → 线更粗更亮）
-    const cur = liveFlows.value.find(f => f.country === e.country)
+    const key = e.city || e.country
+    const label = e.city ? `${e.city}, ${countryName(e.country)}` : countryName(e.country)
+    // 同城市 5s 内的多次请求合并为一条飞线（count 累加 → 线更粗更亮）
+    const cur = liveFlows.value.find(f => f.key === key)
     if (cur && Date.now() - cur.ts < 5000) {
       cur.count++
       cur.ts = Date.now()
     } else {
-      liveFlows.value = liveFlows.value.filter(f => f.country !== e.country)
-      liveFlows.value.push({ country: e.country, coords: [c, serverPoint.value] as [number, number][], ts: Date.now(), count: 1 })
+      liveFlows.value = liveFlows.value.filter(f => f.key !== key)
+      liveFlows.value.push({ key, label, coords: [c, serverPoint.value] as [number, number][], ts: Date.now(), count: 1 })
     }
     summary.value.recent = [e, ...(summary.value.recent || [])].slice(0, 100)
   }
@@ -213,13 +237,34 @@ const renderMap = async () => {
   const srcPoints = realtime.value
     ? liveFlows.value.map(f => ({
         value: f.coords[0],
-        name: mapName(f.country),
+        name: f.label,
         symbolSize: 7,
         itemStyle: { color: '#ffd54d' },
       }))
     : []
+  // 城市级聚合点（统计窗口内）：静态圆点，大小 = 请求数平方根缩放；City 库无记录的城市为空时显示国家名
+  const cities = (summary.value.cities || []).filter((c: any) => (c.lat || c.lon))
+  const maxCity = Math.max(1, ...cities.map((c: any) => c.count))
+  const cityLabel = (c: any) => c.city ? `${c.city}, ${countryName(c.country)}` : countryName(c.country)
+  const cityPoints = cities.map((c: any) => ({
+    value: [c.lon, c.lat],
+    name: cityLabel(c),
+    cityLabel: cityLabel(c),
+    count: c.count,
+    bytes: c.bytes,
+    symbolSize: 5 + Math.sqrt(c.count / maxCity) * 13,
+    itemStyle: { color: '#5c8dff', opacity: 0.85, borderColor: 'rgba(255,255,255,.7)', borderWidth: 1 },
+  }))
   chart.setOption({
-    tooltip: { show: true, formatter: (p: any) => p.name || '' },
+    tooltip: {
+      show: true,
+      formatter: (p: any) => {
+        if (p.data?.cityLabel !== undefined) {
+          return `${p.data.cityLabel}<br/>${p.data.count} 次请求 · ${fmtBytes(p.data.bytes)}`
+        }
+        return p.name || ''
+      },
+    },
     // 深浅主题各自适配的底图配色
     geo: {
       map: 'world', roam: true,
@@ -234,6 +279,11 @@ const renderMap = async () => {
         effect: { show: true, period: 4, trailLength: 0.2, symbol: 'circle', symbolSize: 6, color: '#ffd54d' },
         lineStyle: { color: '#4f7cff', width: 1.2, opacity: 0.35, curveness: 0.35 },
         data: flows,
+      },
+      {
+        // 城市级聚合点：统计窗口内各城市请求量（静态蓝点，大小 = 请求量）
+        type: 'scatter', coordinateSystem: 'geo', zlevel: 2,
+        data: cityPoints,
       },
       {
         // 请求来源点：黄色小数据点（实时请求落点）

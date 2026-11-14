@@ -12,9 +12,9 @@ import (
 // GeoIP GeoLite2-Country 查询器（mmdb 缺失时全部返回 unknown）。
 
 type GeoIP struct {
-	mu    sync.RWMutex
-	db    *maxminddb.Reader
-	path  string
+	mu   sync.RWMutex
+	db   *maxminddb.Reader
+	path string
 }
 
 type mmdbCountry struct {
@@ -23,11 +23,21 @@ type mmdbCountry struct {
 	} `maxminddb:"country"`
 }
 
-// mmdbLoc 国家库中的位置记录（GeoLite2-Country 部分记录含经纬度）。
+// mmdbLoc City 库中的位置记录（Country 库缺 city/location 字段时为零值，调用方自行回退）。
 type mmdbLoc struct {
 	Country struct {
 		ISOCode string `maxminddb:"iso_code"`
 	} `maxminddb:"country"`
+	City struct {
+		Names struct {
+			En string `maxminddb:"en"`
+		} `maxminddb:"names"`
+	} `maxminddb:"city"`
+	Subdivisions []struct {
+		Names struct {
+			En string `maxminddb:"en"`
+		} `maxminddb:"names"`
+	} `maxminddb:"subdivisions"`
 	Location struct {
 		Latitude  float64 `maxminddb:"latitude"`
 		Longitude float64 `maxminddb:"longitude"`
@@ -80,23 +90,27 @@ func (g *GeoIP) LookupCountry(ipStr string) string {
 	return rec.Country.ISOCode
 }
 
-// LookupLocation 查询 IP 的国家与经纬度（国家库部分记录无 location，返回 country 与 zero 坐标）。
-func (g *GeoIP) LookupLocation(ipStr string) (string, [2]float64) {
+// LookupLocation 查询 IP 的国家、城市与经纬度（Country 库或库中无记录时 city 为空、坐标为零值）。
+func (g *GeoIP) LookupLocation(ipStr string) (string, string, [2]float64) {
 	g.mu.RLock()
 	db := g.db
 	g.mu.RUnlock()
 	if db == nil {
-		return "unknown", [2]float64{}
+		return "unknown", "", [2]float64{}
 	}
 	ip := net.ParseIP(ipStr)
 	if ip == nil {
-		return "unknown", [2]float64{}
+		return "unknown", "", [2]float64{}
 	}
 	var rec mmdbLoc
 	if err := db.Lookup(ip, &rec); err != nil {
-		return "unknown", [2]float64{}
+		return "unknown", "", [2]float64{}
 	}
-	return rec.Country.ISOCode, [2]float64{rec.Location.Latitude, rec.Location.Longitude}
+	city := rec.City.Names.En
+	if city == "" && len(rec.Subdivisions) > 0 {
+		city = rec.Subdivisions[0].Names.En // 城市名缺失时退到一级行政区
+	}
+	return rec.Country.ISOCode, city, [2]float64{rec.Location.Latitude, rec.Location.Longitude}
 }
 
 // OutboundIP 探测本机对外出口 IP（UDP dial 不实际发包，仅取路由源地址）。

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,15 +23,16 @@ import (
 // GeoIP 聚合国家/站点维度，环形窗口保存最近请求，WS 推送增量。
 
 type Entry struct {
-	IP      string `json:"ip"`
-	Country string `json:"country"`
-	Lat     float64 `json:"lat,omitempty"`
-	Lon     float64 `json:"lon,omitempty"`
-	Site    string `json:"site"`
-	Status  int    `json:"status"`
-	Bytes   uint64 `json:"bytes"`
-	Method  string `json:"method"`
-	Path    string `json:"path"`
+	IP      string    `json:"ip"`
+	Country string    `json:"country"`
+	City    string    `json:"city,omitempty"` // 城市英文名（City 库有记录时；Country 库为空）
+	Lat     float64   `json:"lat,omitempty"`
+	Lon     float64   `json:"lon,omitempty"`
+	Site    string    `json:"site"`
+	Status  int       `json:"status"`
+	Bytes   uint64    `json:"bytes"`
+	Method  string    `json:"method"`
+	Path    string    `json:"path"`
 	Time    time.Time `json:"time"`
 }
 
@@ -42,22 +44,33 @@ type CountryAgg struct {
 }
 
 type Summary struct {
-	Minutes     int          `json:"minutes"`
-	Total       int64        `json:"total"`
-	Bytes       uint64       `json:"bytes"`
-	Errors      int64        `json:"errors"`
-	Countries   []CountryAgg `json:"countries"`
-	Sites       []SiteAgg    `json:"sites"`
-	Statuses    map[string]int64 `json:"statuses"`
-	Recent      []Entry      `json:"recent"`
-	GeoLoaded   bool         `json:"geoLoaded"`
-	ServerLoc   *[2]float64  `json:"serverLoc,omitempty"` // 服务器真实位置（出口 IP 经 GeoIP 反查）
+	Minutes   int              `json:"minutes"`
+	Total     int64            `json:"total"`
+	Bytes     uint64           `json:"bytes"`
+	Errors    int64            `json:"errors"`
+	Countries []CountryAgg     `json:"countries"`
+	Cities    []CityAgg        `json:"cities"` // 城市级聚合（City 库有数据时）
+	Sites     []SiteAgg        `json:"sites"`
+	Statuses  map[string]int64 `json:"statuses"`
+	Recent    []Entry          `json:"recent"`
+	GeoLoaded bool             `json:"geoLoaded"`
+	ServerLoc *[2]float64      `json:"serverLoc,omitempty"` // 服务器真实位置（出口 IP 经 GeoIP 反查）
 }
 
 type SiteAgg struct {
 	Site  string `json:"site"`
 	Count int64  `json:"count"`
 	Bytes uint64 `json:"bytes"`
+}
+
+// CityAgg 城市级聚合（bucket = 国家|城市|坐标 2 位小数；City 库同城坐标一致，质心回退城市为空）。
+type CityAgg struct {
+	City    string  `json:"city"` // en 名；空 = 国家质心（City 库无记录）
+	Country string  `json:"country"`
+	Lat     float64 `json:"lat"`
+	Lon     float64 `json:"lon"`
+	Count   int64   `json:"count"`
+	Bytes   uint64  `json:"bytes"`
 }
 
 // zjp 格式：ip - user [time] "request" status bytes "referer" "ua" srv=site
@@ -196,7 +209,7 @@ func (s *Service) tailFile(path string) {
 		line := sc.Text()
 		newOff += int64(len(line)) + 1
 		if e, ok := parseLine(line); ok {
-			e.Country, e.Lat, e.Lon = s.lookupGeo(e.IP)
+			e.Country, e.City, e.Lat, e.Lon = s.lookupGeo(e.IP)
 			s.push(e)
 		}
 	}
@@ -236,19 +249,20 @@ func parseLine(line string) (Entry, bool) {
 }
 
 // Summary 窗口聚合（minutes 分钟内；recent 条数）。
-// lookupGeo 一次性查国家与经纬度（国家库无 location 时回退国家质心，保证飞线始终有起点）。
-func (s *Service) lookupGeo(ip string) (string, float64, float64) {
-	country, ll := s.geo.LookupLocation(ip)
+// lookupGeo 一次性查国家/城市/经纬度（Country 库无 location 时回退国家质心，保证飞线始终有起点；
+// 无 city 记录时城市为空串，前端按国家名展示）。
+func (s *Service) lookupGeo(ip string) (string, string, float64, float64) {
+	country, city, ll := s.geo.LookupLocation(ip)
 	if country == "unknown" {
-		return country, 0, 0
+		return country, "", 0, 0
 	}
 	if ll[0] != 0 || ll[1] != 0 {
-		return country, ll[0], ll[1]
+		return country, city, ll[0], ll[1]
 	}
 	if c, ok := Centroids[country]; ok {
-		return country, c[0], c[1]
+		return country, "", c[0], c[1] // 质心回退不带城市名，避免误导
 	}
-	return country, 0, 0
+	return country, "", 0, 0
 }
 
 func (s *Service) Summary(minutes, recent int) *Summary {
@@ -272,18 +286,19 @@ func (s *Service) Summary(minutes, recent int) *Summary {
 	s.mu.Unlock()
 
 	sum := &Summary{
-		Minutes: minutes, Countries: []CountryAgg{}, Sites: []SiteAgg{},
+		Minutes: minutes, Countries: []CountryAgg{}, Cities: []CityAgg{}, Sites: []SiteAgg{},
 		Statuses: map[string]int64{}, Recent: []Entry{}, GeoLoaded: s.geo.Loaded(),
 	}
 	// 服务器真实位置：出口 IP 经 GeoIP 反查。数组按 [经度, 纬度] 输出（GeoJSON/echarts 惯例，
 	// 前端 serverPoint 直接消费；LookupLocation 返回的是 [纬度, 经度]，此处必须对调）
 	if out := OutboundIP(); out != "" {
-		if _, ll := s.geo.LookupLocation(out); ll[0] != 0 || ll[1] != 0 {
+		if _, _, ll := s.geo.LookupLocation(out); ll[0] != 0 || ll[1] != 0 {
 			sum.ServerLoc = &[2]float64{ll[1], ll[0]}
 		}
 	}
 	countries := map[string]*CountryAgg{}
 	sites := map[string]*SiteAgg{}
+	cities := map[string]*CityAgg{}
 	for _, e := range entries {
 		sum.Total++
 		sum.Bytes += e.Bytes
@@ -306,12 +321,28 @@ func (s *Service) Summary(minutes, recent int) *Summary {
 		}
 		sa.Count++
 		sa.Bytes += e.Bytes
+		// 城市级：坐标 2 位小数做 bucket（同城 IP 在 City 库中质心一致）
+		ck := fmt.Sprintf("%s|%s|%.2f,%.2f", e.Country, e.City, e.Lat, e.Lon)
+		cia := cities[ck]
+		if cia == nil {
+			cia = &CityAgg{City: e.City, Country: e.Country, Lat: e.Lat, Lon: e.Lon}
+			cities[ck] = cia
+		}
+		cia.Count++
+		cia.Bytes += e.Bytes
 	}
 	for _, ca := range countries {
 		if sum.Total > 0 {
 			ca.Percent = float64(ca.Count) / float64(sum.Total) * 100
 		}
 		sum.Countries = append(sum.Countries, *ca)
+	}
+	for _, cia := range cities {
+		sum.Cities = append(sum.Cities, *cia)
+	}
+	sort.Slice(sum.Cities, func(i, j int) bool { return sum.Cities[i].Count > sum.Cities[j].Count })
+	if len(sum.Cities) > 500 {
+		sum.Cities = sum.Cities[:500]
 	}
 	for _, sa := range sites {
 		sum.Sites = append(sum.Sites, *sa)
