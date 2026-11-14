@@ -12,9 +12,11 @@ import (
 // 端口 465 走隐式 TLS（smtps）；其他端口先尝试 STARTTLS（服务器支持时）。
 // user 为空则不做认证（本地中继场景）；非 TLS 连接下 PlainAuth 会被拒绝，
 // 因此仅 TLS 已建立或目标是本机时才尝试认证。
-func SendMail(host string, port int, user, pass, from, to, subject, body string) error {
+// fromAlias 为发件人显示别名（收件箱中发件人位置显示的名字，可中文）；
+// fromAddr 为信封发件地址（通常等于 SMTP 用户）。
+func SendMail(host string, port int, user, pass, fromAlias, fromAddr, to, subject, body string) error {
 	addr := fmt.Sprintf("%s:%d", host, port)
-	msg := buildMessage(from, to, subject, body)
+	msg := buildMessage(fromAlias, fromAddr, to, subject, body)
 
 	if port == 465 {
 		conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: host})
@@ -26,7 +28,7 @@ func SendMail(host string, port int, user, pass, from, to, subject, body string)
 			return fmt.Errorf("SMTP 握手失败: %w", err)
 		}
 		defer c.Close()
-		return sendWithClient(c, host, user, pass, from, to, msg)
+		return sendWithClient(c, host, user, pass, fromAddr, to, msg)
 	}
 
 	c, err := smtp.Dial(addr)
@@ -39,7 +41,7 @@ func SendMail(host string, port int, user, pass, from, to, subject, body string)
 			return fmt.Errorf("STARTTLS 失败: %w", err)
 		}
 	}
-	return sendWithClient(c, host, user, pass, from, to, msg)
+	return sendWithClient(c, host, user, pass, fromAddr, to, msg)
 }
 
 func sendWithClient(c *smtp.Client, host, user, pass, from, to, msg string) error {
@@ -72,12 +74,20 @@ func sendWithClient(c *smtp.Client, host, user, pass, from, to, msg string) erro
 	return c.Quit()
 }
 
-// buildMessage 组装邮件原文：主题按 RFC 2047 Base64 编码（中文安全），
+// buildMessage 组装邮件原文：别名/主题按 RFC 2047 Base64 编码（中文安全，ASCII 别名原样），
 // 正文整体 Base64，规避 8-bit 传输与行首点号问题。
-func buildMessage(from, to, subject, body string) string {
+func buildMessage(fromAlias, fromAddr, to, subject, body string) string {
 	sub := base64.StdEncoding.EncodeToString([]byte(subject))
+	fromLine := fromAddr
+	if fromAlias != "" {
+		alias := fromAlias
+		if !isAllASCII(alias) {
+			alias = "=?UTF-8?B?" + base64.StdEncoding.EncodeToString([]byte(alias)) + "?="
+		}
+		fromLine = alias + " <" + fromAddr + ">"
+	}
 	return strings.Join([]string{
-		"From: " + from,
+		"From: " + fromLine,
 		"To: " + to,
 		"Subject: =?UTF-8?B?" + sub + "?=",
 		"MIME-Version: 1.0",
@@ -86,4 +96,13 @@ func buildMessage(from, to, subject, body string) string {
 		"",
 		base64.StdEncoding.EncodeToString([]byte(body)),
 	}, "\r\n") + "\r\n"
+}
+
+func isAllASCII(s string) bool {
+	for _, r := range s {
+		if r > 127 {
+			return false
+		}
+	}
+	return true
 }

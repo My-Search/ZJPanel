@@ -57,7 +57,7 @@
         <a-row :gutter="8">
           <a-col :span="16">
             <a-form-item label="SMTP 服务器">
-              <a-input v-model:value="st.smtpHost" placeholder="smtp.example.com" />
+              <a-input v-model:value="st.smtpHost" placeholder="smtp.gmail.com" />
             </a-form-item>
           </a-col>
           <a-col :span="8">
@@ -80,16 +80,19 @@
         </a-row>
         <a-row :gutter="8">
           <a-col :span="12">
-            <a-form-item label="发件人（默认用 SMTP 用户）">
-              <a-input v-model:value="st.smtpFrom" placeholder="panel@example.com" />
+            <a-form-item label="发件人别名（收件箱里显示的发件人名）">
+              <a-input v-model:value="st.smtpFromAlias" placeholder="ZJPanel" />
             </a-form-item>
           </a-col>
           <a-col :span="12">
-            <a-form-item label="收件邮箱（订阅通知发送到）">
-              <a-input v-model:value="st.rcpt" placeholder="me@example.com" />
+            <a-form-item label="发件邮箱（留空用 SMTP 用户）">
+              <a-input v-model:value="st.smtpFrom" placeholder="默认用 SMTP 用户" />
             </a-form-item>
           </a-col>
         </a-row>
+        <a-form-item label="收件邮箱（订阅通知发送到）">
+          <a-input v-model:value="st.rcpt" placeholder="me@example.com" />
+        </a-form-item>
         <a-space>
           <a-button :loading="testing" @click="doTest">发送测试邮件</a-button>
           <a-button type="primary" :loading="saving" @click="doSave">保存设置</a-button>
@@ -106,9 +109,6 @@
             @change="(v: any) => (st!.subs[t] = !!v)"
           />
         </div>
-      </div>
-      <div style="margin-top: 12px">
-        <a-button type="primary" :loading="saving" @click="doSave(true)">保存订阅</a-button>
       </div>
     </template>
   </a-drawer>
@@ -157,20 +157,29 @@ const openSettings = async () => {
   setOpen.value = true
   passInput.value = ''
   await notify.loadSettings()
+  // 默认值：Gmail SMTP / ZJPanel 别名（仅在未保存过配置时预填，保存后以用户数据为准）
+  const s = notify.settings
+  if (s) {
+    if (!s.smtpHost && !s.hasPass) {
+      s.smtpHost = 'smtp.gmail.com'
+      s.smtpPort = s.smtpPort || 465
+    }
+    if (!s.smtpFromAlias) s.smtpFromAlias = 'ZJPanel'
+  }
 }
-const doSave = async (keepOpen = false) => {
+const doSave = async () => {
   if (!st.value) return
   saving.value = true
   try {
     await notify.saveSettings({
       smtpHost: st.value.smtpHost, smtpPort: st.value.smtpPort, smtpUser: st.value.smtpUser,
-      smtpPass: passInput.value, smtpFrom: st.value.smtpFrom, rcpt: st.value.rcpt,
-      subs: st.value.subs,
+      smtpPass: passInput.value, smtpFrom: st.value.smtpFrom, smtpFromAlias: st.value.smtpFromAlias,
+      rcpt: st.value.rcpt, subs: st.value.subs,
     })
     passInput.value = ''
     await notify.loadSettings()
+    if (!notify.settings?.smtpFromAlias) notify.settings!.smtpFromAlias = 'ZJPanel'
     message.success('已保存')
-    if (!keepOpen) setOpen.value = false
   } catch (e: any) {
     message.error(e?.response?.data?.error || '保存失败')
   } finally {

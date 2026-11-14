@@ -80,7 +80,7 @@ func TestSendMailPlain(t *testing.T) {
 	getBody, done := fakeSMTPSink(t, ln, false)
 
 	err = SendMail("127.0.0.1", ln.Addr().(*net.TCPAddr).Port, "", "",
-		"panel@zj.local", "admin@example.com", "测试主题", "通知正文第一行\n第二行")
+		"", "panel@zj.local", "admin@example.com", "测试主题", "通知正文第一行\n第二行")
 	if err != nil {
 		t.Fatalf("SendMail: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestSendMailWithAuth(t *testing.T) {
 	getBody, done := fakeSMTPSink(t, ln, true)
 
 	err = SendMail("localhost", ln.Addr().(*net.TCPAddr).Port, "panel", "secret",
-		"panel@zj.local", "admin@example.com", "hello", "body")
+		"ZJPanel", "panel@zj.local", "admin@example.com", "hello", "body")
 	if err != nil {
 		t.Fatalf("SendMail: %v", err)
 	}
@@ -128,7 +128,39 @@ func TestSendMailWithAuth(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("SMTP 会话超时")
 	}
-	if b := getBody(); !strings.Contains(b, "Subject: =?UTF-8?B?aGVsbG8=?=") {
+	b := getBody()
+	if !strings.Contains(b, "Subject: =?UTF-8?B?aGVsbG8=?=") {
 		t.Errorf("主题编码异常:\n%s", b)
+	}
+	if !strings.Contains(b, "From: ZJPanel <panel@zj.local>") {
+		t.Errorf("发件人别名未生效:\n%s", b)
+	}
+}
+
+func TestSendMailAliasCJK(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	getBody, done := fakeSMTPSink(t, ln, false)
+
+	// 中文别名 → RFC 2047 编码
+	err = SendMail("127.0.0.1", ln.Addr().(*net.TCPAddr).Port, "", "",
+		"统一通知", "panel@zj.local", "admin@example.com", "hi", "body")
+	if err != nil {
+		t.Fatalf("SendMail: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("SMTP 会话超时")
+	}
+	b := getBody()
+	if !strings.Contains(b, "From: =?UTF-8?B?") {
+		t.Errorf("中文别名未按 RFC 2047 编码:\n%s", b)
+	}
+	if !strings.Contains(b, "<panel@zj.local>") {
+		t.Errorf("别名行缺地址:\n%s", b)
 	}
 }

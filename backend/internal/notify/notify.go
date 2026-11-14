@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,13 +22,15 @@ import (
 
 // model.Setting 中的键（全局 KV 表）
 const (
-	keySMTPHost = "notify.smtp.host"
-	keySMTPPort = "notify.smtp.port"
-	keySMTPUser = "notify.smtp.user"
-	keySMTPPass = "notify.smtp.pass" // SecretBox 密文
-	keySMTPFrom = "notify.smtp.from"
-	keyRcpt     = "notify.rcpt" // 订阅收件邮箱
-	keySubs     = "notify.subs" // JSON: map[type]bool，邮件订阅开关
+	keySMTPHost      = "notify.smtp.host"
+	keySMTPPort      = "notify.smtp.port"
+	keySMTPUser      = "notify.smtp.user"
+	keySMTPPass      = "notify.smtp.pass"      // SecretBox 密文
+	keySMTPFromAddr  = "notify.smtp.from_addr" // 发件信封地址（留空回落 SMTP 用户）
+	keySMTPFromAlias = "notify.smtp.alias"     // 发件人显示别名（默认 ZJPanel）
+	keySMTPFrom      = "notify.smtp.from"      // 旧版键：兼容迁移（邮箱→地址，非邮箱→别名）
+	keyRcpt          = "notify.rcpt"           // 订阅收件邮箱
+	keySubs          = "notify.subs"           // JSON: map[type]bool，邮件订阅开关
 )
 
 // BuiltinTypes 内置消息类型（订阅设置 UI 展示；插件可自定义类型，出现后由 DISTINCT 补充进列表）。
@@ -167,12 +170,14 @@ func (s *Service) dedup(key string) bool {
 // ---- 邮件渠道 ----
 
 type mailConfig struct {
-	host, user, pass, from, rcpt string
-	port                         int
-	subs                         map[string]bool
+	host, user, pass, fromAddr, fromAlias, rcpt string
+	port                                        int
+	subs                                        map[string]bool
 }
 
 // loadMailConfig 现读 Setting 表；未配 SMTP 或收件人时返回 nil（邮件渠道静默关闭）。
+// fromAddr：发件信封地址（留空回落 SMTP 用户）；fromAlias：发件人显示别名（默认 ZJPanel）。
+// 兼容旧数据：旧 notify.smtp.from 若为邮箱 → 当作发件地址；非邮箱（如旧误填的别名）→ 当作别名。
 func (s *Service) loadMailConfig() *mailConfig {
 	get := func(k string) string {
 		var v model.Setting
@@ -190,9 +195,25 @@ func (s *Service) loadMailConfig() *mailConfig {
 	pass, _ := s.box.Open(get(keySMTPPass))
 	var subs map[string]bool
 	_ = json.Unmarshal([]byte(get(keySubs)), &subs)
+
+	user := get(keySMTPUser)
+	legacyFrom := get(keySMTPFrom)
+	fromAddr, fromAlias := get(keySMTPFromAddr), get(keySMTPFromAlias)
+	if fromAddr == "" && strings.Contains(legacyFrom, "@") {
+		fromAddr = legacyFrom // 旧数据是邮箱
+	}
+	if fromAlias == "" && legacyFrom != "" && !strings.Contains(legacyFrom, "@") {
+		fromAlias = legacyFrom // 旧数据是别名
+	}
+	if fromAlias == "" {
+		fromAlias = "ZJPanel"
+	}
+	if fromAddr == "" {
+		fromAddr = user
+	}
 	return &mailConfig{
-		host: host, port: port, user: get(keySMTPUser), pass: pass,
-		from: get(keySMTPFrom), rcpt: rcpt, subs: subs,
+		host: host, port: port, user: user, pass: pass,
+		fromAddr: fromAddr, fromAlias: fromAlias, rcpt: rcpt, subs: subs,
 	}
 }
 
@@ -202,7 +223,7 @@ func (s *Service) emailIfSubscribed(nType, title, body string) {
 		return
 	}
 	go func() {
-		if err := pkg.SendMail(cfg.host, cfg.port, cfg.user, cfg.pass, cfg.from, cfg.rcpt,
+		if err := pkg.SendMail(cfg.host, cfg.port, cfg.user, cfg.pass, cfg.fromAlias, cfg.fromAddr, cfg.rcpt,
 			"[ZJPanel] "+title, body); err != nil {
 			slog.Error("通知邮件发送失败", "type", nType, "err", err)
 		}
@@ -213,14 +234,15 @@ func (s *Service) emailIfSubscribed(nType, title, body string) {
 
 // SettingsDTO 设置视图：pass 只回是否已配置（明文/密文均不出接口）。
 type SettingsDTO struct {
-	SMTPHost string          `json:"smtpHost"`
-	SMTPPort int             `json:"smtpPort"`
-	SMTPUser string          `json:"smtpUser"`
-	HasPass  bool            `json:"hasPass"`
-	SMTPFrom string          `json:"smtpFrom"`
-	Rcpt     string          `json:"rcpt"`
-	Subs     map[string]bool `json:"subs"`
-	Types    []string        `json:"types"`
+	SMTPHost      string          `json:"smtpHost"`
+	SMTPPort      int             `json:"smtpPort"`
+	SMTPUser      string          `json:"smtpUser"`
+	HasPass       bool            `json:"hasPass"`
+	SMTPFrom      string          `json:"smtpFrom"`      // 发件信封地址
+	SMTPFromAlias string          `json:"smtpFromAlias"` // 发件人显示别名
+	Rcpt          string          `json:"rcpt"`
+	Subs          map[string]bool `json:"subs"`
+	Types         []string        `json:"types"`
 }
 
 // Settings 读当前配置与订阅（类型 = 内置 ∪ 库中出现过）。
@@ -259,13 +281,23 @@ func (s *Service) Settings() SettingsDTO {
 	}
 	return SettingsDTO{
 		SMTPHost: get(keySMTPHost), SMTPPort: port, SMTPUser: get(keySMTPUser),
-		HasPass: get(keySMTPPass) != "", SMTPFrom: get(keySMTPFrom),
+		HasPass:  get(keySMTPPass) != "",
+		SMTPFrom: get(keySMTPFromAddr), SMTPFromAlias: func() string {
+			if v := get(keySMTPFromAlias); v != "" {
+				return v
+			}
+			if legacy := get(keySMTPFrom); legacy != "" && !strings.Contains(legacy, "@") {
+				return legacy // 旧数据别名迁移
+			}
+			return "ZJPanel"
+		}(),
 		Rcpt: get(keyRcpt), Subs: subs, Types: types,
 	}
 }
 
-// SaveSettings 保存配置；pass 为空沿用旧密码（SecretBox 加密落库）。
-func (s *Service) SaveSettings(host string, port int, user, pass, from, rcpt string, subs map[string]bool) error {
+// SaveSettings 保存配置；pass 为空沿用旧密码（SecretBox 加密落库）；
+// fromAddr 为空回落 SMTP 用户；fromAlias 为空默认 ZJPanel。
+func (s *Service) SaveSettings(host string, port int, user, pass, fromAddr, fromAlias, rcpt string, subs map[string]bool) error {
 	set := func(k, v string) error {
 		var rec model.Setting
 		if err := s.db.Where("key = ?", k).First(&rec).Error; err != nil {
@@ -295,7 +327,10 @@ func (s *Service) SaveSettings(host string, port int, user, pass, from, rcpt str
 			return err
 		}
 	}
-	if err := set(keySMTPFrom, from); err != nil {
+	if err := set(keySMTPFromAddr, fromAddr); err != nil {
+		return err
+	}
+	if err := set(keySMTPFromAlias, fromAlias); err != nil {
 		return err
 	}
 	if err := set(keyRcpt, rcpt); err != nil {
@@ -311,6 +346,6 @@ func (s *Service) SendTest() error {
 	if cfg == nil {
 		return fmt.Errorf("请先填写 SMTP 服务器与收件邮箱")
 	}
-	return pkg.SendMail(cfg.host, cfg.port, cfg.user, cfg.pass, cfg.from, cfg.rcpt,
+	return pkg.SendMail(cfg.host, cfg.port, cfg.user, cfg.pass, cfg.fromAlias, cfg.fromAddr, cfg.rcpt,
 		"[ZJPanel] 测试邮件", "这是一封来自 ZJPanel 统一通知的测试邮件。收到它说明 SMTP 配置正确。")
 }

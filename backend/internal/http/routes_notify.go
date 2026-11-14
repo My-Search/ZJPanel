@@ -42,20 +42,21 @@ func (s *Server) registerNotifyRoutes() {
 
 	g.PUT("/settings", func(c *gin.Context) {
 		var req struct {
-			SMTPHost string          `json:"smtpHost"`
-			SMTPPort int             `json:"smtpPort"`
-			SMTPUser string          `json:"smtpUser"`
-			SMTPPass string          `json:"smtpPass"` // 留空沿用旧密码
-			SMTPFrom string          `json:"smtpFrom"`
-			Rcpt     string          `json:"rcpt"`
-			Subs     map[string]bool `json:"subs"`
+			SMTPHost      string          `json:"smtpHost"`
+			SMTPPort      int             `json:"smtpPort"`
+			SMTPUser      string          `json:"smtpUser"`
+			SMTPPass      string          `json:"smtpPass"`      // 留空沿用旧密码
+			SMTPFrom      string          `json:"smtpFrom"`      // 发件邮箱（留空回落 SMTP 用户）
+			SMTPFromAlias string          `json:"smtpFromAlias"` // 发件人别名（留空默认 ZJPanel）
+			Rcpt          string          `json:"rcpt"`
+			Subs          map[string]bool `json:"subs"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 			return
 		}
 		if err := s.Notify.SaveSettings(req.SMTPHost, req.SMTPPort, req.SMTPUser, req.SMTPPass,
-			req.SMTPFrom, req.Rcpt, req.Subs); err != nil {
+			req.SMTPFrom, req.SMTPFromAlias, req.Rcpt, req.Subs); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}

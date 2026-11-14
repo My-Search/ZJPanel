@@ -19,6 +19,7 @@ export interface NotifySettings {
   smtpUser: string
   hasPass: boolean
   smtpFrom: string
+  smtpFromAlias: string
   rcpt: string
   subs: Record<string, boolean>
   types: string[]
