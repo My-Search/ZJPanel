@@ -68,7 +68,7 @@ func semverLess(cur, latest string) bool {
 	}
 	c := splitSemver(cur)
 	l := splitSemver(latest)
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		if l[i] > c[i] {
 			return true
 		}
@@ -79,11 +79,14 @@ func semverLess(cur, latest string) bool {
 	return false
 }
 
-func splitSemver(v string) [3]int {
+// splitSemver 解析版本号为最多 4 段整数（x.y.z.w，面板 tag 为 4 段；
+// 此前 SplitN 3 段导致第 4 位补丁号被丢弃，0.1.8.0 与 0.1.8.1 判等、检查更新永远"已是最新"）。
+// 缺失段按 0 处理（"1.8" 等价 "1.8.0.0"）。
+func splitSemver(v string) [4]int {
 	v = strings.TrimPrefix(v, "v")
-	var out [3]int
-	for i, part := range strings.SplitN(v, ".", 3) {
-		if i > 2 {
+	var out [4]int
+	for i, part := range strings.Split(v, ".") {
+		if i > 3 {
 			break
 		}
 		n := 0
