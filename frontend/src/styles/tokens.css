@@ -1,0 +1,57 @@
+/*
+ * 企业简洁风设计令牌（Design Tokens）
+ * 参考风格指南：克制的商务蓝 + 浅灰蓝画布 + 白卡描边，一切为可读性与信任感让路。
+ * 深色模式保留原面板观感，仅主色与浅色保持同源（亮一档保证对比度）。
+ */
+:root {
+  /* Colors */
+  --color-corporate-blue: #1e40af; /* 主行动按钮、链接与关键图标：全站只用这一种蓝 */
+  --color-corporate-blue-deep: #1e3a8a; /* 主按钮 hover 的更深填充 */
+  --color-action-blue: #3b82f6; /* 焦点环、选中态与数据高亮，不做大面积填充 */
+  --color-slate-mist: #f8fafc; /* 页面画布 */
+  --color-slate: #64748b; /* 次要文字、说明与图标描边 */
+  --color-ink: #0f172a; /* 正文主色 */
+  --color-confirm-green: #10b981; /* 成功状态与正向指标 */
+  --color-hint-violet: #c559f0; /* 极少使用的第四强调（新产品标签/实验性功能） */
+
+  /* Surfaces */
+  --surface-canvas: #f8fafc;
+  --surface-card: #ffffff;
+  --border-card: #e5e7eb;
+  --border-input: #d1d5db;
+  --bg-selected: #eff6ff; /* 选中态浅蓝底（列表项/卡片选中） */
+
+  /* Elevation */
+  --shadow-rest: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-hover: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --focus-ring: 0 0 0 2px var(--color-slate-mist), 0 0 0 4px var(--color-action-blue);
+
+  /* Radius */
+  --radius-cards: 12px;
+  --radius-buttons: 8px;
+  --radius-inputs: 8px;
+
+  /* Motion：一切动效不超过 200ms，ease-out */
+  --motion-fast: 150ms ease-out;
+
+  /* Typography — Inter 全站唯一字体（离线面板不外联字体，缺省回落系统字体） */
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+/* 深色模式：沿用原面板深色底，主色提亮一档保持对比度，阴影加深 */
+html[data-theme='dark'] {
+  --color-corporate-blue: #3b82f6;
+  --color-corporate-blue-deep: #2563eb;
+  --color-action-blue: #60a5fa;
+  --color-slate-mist: #141414;
+  --color-slate: #94a3b8;
+  --color-ink: #e6e6e6;
+  --surface-canvas: #141414;
+  --surface-card: #1f1f1f;
+  --border-card: #333333;
+  --border-input: #434343;
+  --bg-selected: #16243f;
+  --shadow-rest: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.55);
+}

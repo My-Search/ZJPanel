@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="zjp-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0.0" stop-color="#1e40af"/>
+      <stop offset="0.52" stop-color="#2563eb"/>
+      <stop offset="1.0" stop-color="#0ea5e9"/>
+    </linearGradient>
+    <linearGradient id="zjp-mark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dbeafe"/>
+    </linearGradient>
+    <linearGradient id="zjp-gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#zjp-bg)"/>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#zjp-gloss)"/>
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="1.4"/>
+  <path d="M19 21 H45 L19 43 H45" fill="none" stroke="url(#zjp-mark)" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

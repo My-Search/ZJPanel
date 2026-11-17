@@ -1,0 +1,13 @@
+# 构建上下文瘦身
+backend/dev-data/
+backend/zjpanel
+backend/zjpanel.exe
+backend/internal/http/dist/assets/
+backend/internal/http/dist/map/
+**/node_modules/
+frontend/dist/
+frontend/node_modules/
+三方源码参考/
+.zcode/
+*.log
+.git/
