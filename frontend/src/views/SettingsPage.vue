@@ -25,7 +25,7 @@
           </a-space>
           <a-alert v-if="restarting" type="info" show-icon
             :message="info?.mode === 'container'
-              ? '已更新 compose 镜像标签，正在重建容器并拉取新镜像（站点会短暂中断），等待恢复后自动刷新页面 ...'
+              ? '已固定 compose 镜像版本并清理本地旧镜像，正在重建容器并拉取新镜像（站点会短暂中断），等待恢复后自动刷新页面 ...'
               : '新版本已就位，面板正在重启，等待恢复后自动刷新页面 ...'" />
           <a-alert v-if="info" :type="info.updateAvailable ? 'warning' : 'success'" show-icon
             :message="info.updateAvailable ? `发现新版本 ${info.latest}（当前 ${info.current}）` : `已是最新版本 ${info.current}`" />

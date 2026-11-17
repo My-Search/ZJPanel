@@ -32,9 +32,10 @@ services:
       # - ZJPANEL_TRUSTED_PROXIES=none
       # 面板「检查更新」读取的版本清单（GitHub Release）
       - ZJPANEL_UPDATE_URL=https://api.github.com/repos/My-Search/ZJPanel/releases/latest
-      # 一键更新（容器部署）：改写本 compose 的 image → 清理残留镜像 → 重建时自动拉取，
-      # 版本固化进镜像，之后 down/up 不再回退；ZJPANEL_DEPLOY_DIR 须指向本文件所在目录，
-      # 该目录需挂载进容器（默认 /opt:/opt 已覆盖 /opt/zjpanel）。未设置时按 compose 标签自动反查。
+      # 一键更新（容器部署）：把本 compose 的 image 固定为具体版本 tag → 清理本地旧镜像（含 :latest
+      # 缓存）→ 重建时拉取新镜像；面板每次启动也会自愈固化，之后 down/up 不再回退。
+      # ZJPANEL_DEPLOY_DIR 须指向本文件所在目录并挂载进容器（默认 /opt:/opt 已覆盖 /opt/zjpanel）；
+      # 未设置时按 compose 标签反查，再兜底用 /opt/zjpanel 默认路径。
       - ZJPANEL_DEPLOY_DIR=/opt/zjpanel
       # 非容器直跑时的二进制更新才用到下载加速；容器更新走 docker pull，无需此项。
       # - ZJPANEL_GH_MIRROR=https://ghfast.top

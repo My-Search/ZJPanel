@@ -22,9 +22,10 @@ import (
 // Service 版本检查与一键更新：
 // 检查 = 拉取版本清单（GitHub releases/latest 或自定义 {version,url} JSON），semver 对比；
 // 应用 = 按运行环境分两条路径（见 docker.go 的 detectContainer）：
-//   - compose 容器：镜像式更新（docker.go）。改写宿主机 compose 的 image → 清理同名残留镜像 →
-//     用一次性容器延迟重建，由 compose up 按需拉取新镜像。版本固化进镜像，down/up 后不再回退；
-//     改写失败即时反馈界面，拉取交给 compose（失败则保留旧容器，服务不中断）。
+//   - compose 容器：镜像式更新（docker.go）。把宿主机 compose 的 image 固化为具体版本 tag →
+//     清理本地旧镜像（含 :latest 缓存）→ 用一次性容器延迟重建，由 compose up 拉取新镜像。
+//     版本固化 + 旧缓存清理双管齐下，down/up 后不再回退；另外每次启动执行 SelfHeal 自愈，
+//     即使是被二进制热更上来的环境，也会在启动后把 compose 固化、清掉旧镜像。
 //   - 非容器/本地：二进制式更新。从 GitHub Release 下载当前平台二进制，校验后原子替换自身并重启，
 //     dist 内嵌一并生效；重启方式见 restart_*.go（Linux syscall.Exec 原位替换，PID 不变）。
 
@@ -38,6 +39,30 @@ type Service struct {
 func New(cfg *pkg.Config) *Service { return &Service{cfg: cfg, container: detectContainer(cfg)} }
 
 func CurrentVersion() string { return buildinfo.Version }
+
+// SelfHeal 启动自愈：容器环境下把 compose 的 image 固化到当前二进制版本，并清理本地旧镜像。
+//
+// 这是"面板二进制热更 / 旧镜像升级上来后，down/up 又回退"的根治补丁：
+// 老逻辑只在用户点"一键更新"时才固化 compose，而二进制热更把版本号推到最新后，
+// 检查更新显示"已是最新"，用户再无机会触发固化。改为进程每次启动即自愈，
+// 不依赖用户操作；本地直跑（非容器）或版本不可固化时安全跳过。
+func (s *Service) SelfHeal() {
+	if s.container == nil {
+		return
+	}
+	// dev / 空版本不固化（本地开发构建不应写 compose）。
+	v := CurrentVersion()
+	if v == "" || strings.Contains(v, "dev") || strings.Contains(v, "v0.0.0") {
+		return
+	}
+	tag := "v" + strings.TrimPrefix(v, "v")
+	target := s.container.imageRepo + ":" + tag
+	if _, err := s.container.pinComposeImage(target); err != nil {
+		slog.Warn("面板更新：启动自愈固化 compose 失败", "target", target, "err", err)
+		return
+	}
+	slog.Info("面板更新：启动自愈已固化镜像并清理本地旧缓存", "image", target)
+}
 
 // releaseInfo 版本清单解析结果。
 type releaseInfo struct {
@@ -147,8 +172,8 @@ func (s *Service) Apply() (string, error) {
 		return "", err
 	}
 
-	// compose 容器环境：走镜像式更新（改 compose → 清理残留 → 重建时由 compose 拉取），
-	// 版本固化进镜像，down/up 之后不再回退。
+	// compose 容器环境：走镜像式更新（固化 compose tag → 清理本地旧镜像 → 重建时由 compose 拉取），
+	// 版本固化 + 旧缓存清理，down/up 之后不再回退。
 	if s.container != nil {
 		tag := info.Tag
 		if tag == "" {

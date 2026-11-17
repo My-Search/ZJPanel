@@ -146,6 +146,9 @@ func Run() {
 	pluginMgr.StartAll()
 
 	updater := update.New(cfg)
+	// 启动自愈：容器环境固化 compose 镜像 tag + 清理本地旧镜像缓存，
+	// 根治"面板更新后 down/up 回退旧版本"（异步，不阻塞启动）。
+	go updater.SelfHeal()
 
 	// 更新检查：每日 09:00 检查新版本，有更新即发统一通知
 	cronSvc.AddFunc("0 9 * * *", func() {

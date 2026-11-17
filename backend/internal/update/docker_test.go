@@ -35,6 +35,50 @@ func TestFirstPath(t *testing.T) {
 	}
 }
 
+func TestParseContainerID(t *testing.T) {
+	id := strings.Repeat("ab", 32) // 64 位小写十六进制，动态构造避免手写长度出错
+	cases := []struct{ name, cgroup string }{
+		{"cgroup v2 scope", "0::/system.slice/docker-" + id + ".scope\n"},
+		{"cgroup v1 docker path", "11:name=systemd:/docker/" + id + "\n"},
+		{"cgroup v2 root (no id)", "0::/\n"}, // 取不到应返回空，不应崩
+		{"empty", ""},
+	}
+	for _, c := range cases {
+		got := parseContainerID(c.cgroup)
+		want := ""
+		if c.name != "cgroup v2 root (no id)" && c.name != "empty" {
+			want = id
+		}
+		if got != want {
+			t.Errorf("parseContainerID(%s) = %q, want %q", c.name, got, want)
+		}
+	}
+}
+
+func TestImageRefFromCompose(t *testing.T) {
+	content := `services:
+  zjpanel:
+    image: ghcr.io/my-search/zjpanel:latest
+    container_name: zjpanel
+  other:
+    image: nginx:alpine
+`
+	dir := t.TempDir()
+	file := filepath.Join(dir, "docker-compose.yml")
+	if err := os.WriteFile(file, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := imageRefFromCompose(file); got != "ghcr.io/my-search/zjpanel:latest" {
+		t.Errorf("imageRefFromCompose = %q, want latest ref", got)
+	}
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	if got := imageRefFromCompose(file); got != "" {
+		t.Errorf("imageRefFromCompose(不存在) = %q, want empty", got)
+	}
+}
+
 func TestRewriteComposeImage(t *testing.T) {
 	const repo = "ghcr.io/my-search/zjpanel"
 	original := `services:
