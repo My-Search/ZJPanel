@@ -301,7 +301,8 @@ func (s *Server) registerCertRoutes() {
 	g.POST("/tasks/:id/run", func(c *gin.Context) {
 		var req struct{ Force bool `json:"force"` }
 		_ = c.ShouldBindJSON(&req)
-		runID, err := s.Cert.RunTask(idParam(c), req.Force)
+		// 异步执行：立即返回 runId，前端据此订阅实时日志
+		runID, err := s.Cert.StartTaskRun(idParam(c), req.Force)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "runId": runID})
 			return

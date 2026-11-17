@@ -128,7 +128,7 @@
             <a-input v-model:value="wiz.name" placeholder="如：主站证书" />
           </a-form-item>
           <a-form-item label="域名（回车添加，支持通配符 *.example.com）" required>
-            <a-select v-model:value="wiz.domains" mode="tags" placeholder="example.com" :token-separators="[',', ' ']" />
+            <DomainInput v-model="wiz.domains" placeholder="example.com（回车添加，支持逗号/空格分隔多段）" />
           </a-form-item>
           <a-row :gutter="8">
             <a-col :span="12">
@@ -289,17 +289,18 @@
       </a-table>
       <div v-if="runLog" style="margin-top: 12px">
         <a-divider style="margin: 8px 0">节点日志 #{{ viewRunId }}</a-divider>
-        <pre class="runlog">{{ runLog }}</pre>
+        <pre ref="logBox" class="runlog">{{ runLog }}</pre>
       </div>
     </a-drawer>
   </a-card>
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post, del, wsTopic, fmtTime } from '../api'
 import { PlusOutlined } from '@ant-design/icons-vue'
+import DomainInput from '../components/DomainInput.vue'
 
 const tab = ref('tasks')
 const step = ref(0)
@@ -436,10 +437,16 @@ const saveWizard = async () => {
 // ---- 任务操作 ----
 const runTask = async (t: any) => {
   const r = await post(`/api/cert/tasks/${t.id}/run`, { force: false })
-  if (r.error) message.error(`执行失败：${r.error}`)
-  else message.success(`已提交（runId=${r.runId}）`)
-  setTimeout(() => { loadAll(); if (runsOpen.value && runsTask.value?.id === t.id) loadTaskRuns(t) }, 1000)
-  openRuns(t)
+  if (r.error) { message.error(`执行失败：${r.error}`); return }
+  message.success('已开始执行，正在实时输出日志…')
+  // 后端异步执行：立即拿到 runId，先拉一次已有日志（覆盖提交瞬间的输出），随后由 WS 追加
+  await openRuns(t)
+  viewRunId.value = r.runId
+  try {
+    const d = await get(`/api/cert/runs/${r.runId}`)
+    runLog.value = d.log || ''
+  } catch { /* 运行记录可能尚未可见，忽略 */ }
+  watchRun(r.runId, t)
 }
 const delTask = async (t: any) => { await del(`/api/cert/tasks/${t.id}`); loadAll() }
 
@@ -457,6 +464,24 @@ const viewRun = async (r: any) => {
   viewRunId.value = r.id
   const d = await get(`/api/cert/runs/${r.id}`)
   runLog.value = d.log || '(暂无日志)'
+}
+
+// 运行中轮询兜底：WS 断线/丢帧时按 runId 补齐日志；结束后停止轮询并刷新列表
+let runPollTimer: any = null
+const stopRunPoll = () => { if (runPollTimer) { clearInterval(runPollTimer); runPollTimer = null } }
+const watchRun = (runId: number, t: any) => {
+  stopRunPoll()
+  runPollTimer = setInterval(async () => {
+    try {
+      const d = await get(`/api/cert/runs/${runId}`)
+      if (viewRunId.value === runId && d?.log && d.log !== runLog.value) runLog.value = d.log
+      if (d?.status && d.status !== 'running') {
+        stopRunPoll()
+        loadAll()
+        if (runsOpen.value && runsTask.value?.id === t.id) loadTaskRuns(t)
+      }
+    } catch { stopRunPoll() }
+  }, 2000)
 }
 
 // ---- 账户 / 凭证 ----
@@ -494,6 +519,8 @@ const viewCert = async (r: any, kind: string) => {
 }
 
 let stopRunWs: (() => void) | null = null
+const logBox = ref<HTMLElement | null>(null)
+const scrollLogBottom = () => { nextTick(() => { const el = logBox.value; if (el) el.scrollTop = el.scrollHeight }) }
 onMounted(loadAll)
 
 // 保活生命周期：激活重连证书签发日志流；切走时断开（签发进度通过周期任务与下次激活补偿）
@@ -501,13 +528,16 @@ onActivated(() => {
   loadAll()
   stopRunWs = wsTopic('cert-run', (m) => {
     if (m.type === 'log') {
-      if (m.runId === viewRunId.value) runLog.value += m.line + '\n'
+      if (m.runId === viewRunId.value) {
+        runLog.value += m.line + '\n'
+        scrollLogBottom()
+      }
       if (runsOpen.value) loadTaskRuns(runsTask.value)
     }
   })
 })
-onDeactivated(() => { stopRunWs?.(); stopRunWs = null })
-onUnmounted(() => stopRunWs?.())
+onDeactivated(() => { stopRunWs?.(); stopRunWs = null; stopRunPoll() })
+onUnmounted(() => { stopRunWs?.(); stopRunPoll() })
 </script>
 
 <style scoped>

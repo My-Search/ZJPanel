@@ -62,7 +62,7 @@
                 </template>
                 <a-alert v-if="orphanList.length" type="warning" show-icon style="margin-bottom: 8px"
                   :message="`面板存在但声明文件未包含：${orphanList.join('、')}（点击「按声明同步」或「立即写出声明文件」可修复）`" />
-                <a-table :data-source="projSites" :columns="siteCols" size="small" row-key="id" :pagination="false" :scroll="{ x: 700 }"
+                <a-table :data-source="projSites" :columns="siteCols" size="small" row-key="id" :pagination="false" :scroll="{ x: 820 }"
                   :expanded-row-keys="expandedKeys" :show-expand-column="false" :expand-icon="() => null" @expandedRowsChange="onExpandedRowsChange">
                   <template #emptyText>
                     <a-empty :description="runningCount(selected) === 0 ? '项目未运行，暂无关联网站数据（点上方「up」启动）' : '该项目还没有关联网站'" style="margin: 24px 0" />
@@ -104,13 +104,8 @@
                       <a-tag v-else color="blue">运行</a-tag>
                     </template>
                     <template v-else-if="column.key === 'action'">
-                      <a-space>
-                        <a-button v-if="!record.maintenance" size="small" @click="setState(record, 'maintenance')">维护</a-button>
-                        <a-button v-else size="small" type="primary" ghost @click="setState(record, 'enable')">恢复</a-button>
-                        <a-popconfirm title="删除该网站？（zjpanel.json 将同步更新）" @confirm="delSite(record)">
-                          <a-button size="small" danger>删除</a-button>
-                        </a-popconfirm>
-                      </a-space>
+                      <!-- 与「全部网站」页同一套操作（维护/停用/编辑/配置/删除），由 SiteActions 组件提供 -->
+                      <SiteActions :site="record" @changed="scan" />
                     </template>
                   </template>
                 </a-table>
@@ -262,10 +257,11 @@
 <script setup lang="ts">
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
 import { message } from 'ant-design-vue'
-import { get, post, del, fmtBytes, wsTopic } from '../api'
+import { get, post, fmtBytes, wsTopic } from '../api'
 import { useTermTheme } from '../utils/termTheme'
 import { wsMessageToText } from '../utils/wsMessage'
 import Sites from './Sites.vue'
+import SiteActions from '../components/SiteActions.vue'
 import DockerPage from './DockerPage.vue'
 import { PlusOutlined, SyncOutlined, DownOutlined, FolderOutlined, CaretRightOutlined, LoadingOutlined } from '@ant-design/icons-vue'
 
@@ -401,7 +397,7 @@ const siteCols = [
   { title: '目标', dataIndex: 'upstream', key: 'upstream', width: 160 },
   { title: 'SSL', key: 'ssl', width: 90 },
   { title: '状态', key: 'maint', width: 90 },
-  { title: '操作', key: 'action', width: 180 },
+  { title: '操作', key: 'action', width: 300 },
 ]
 const containerCols = [
   { title: '名称', key: 'name', width: 200 },
@@ -639,16 +635,6 @@ const doAddSite = async () => {
   })
   message.success('已添加网站（nginx 已重载，zjpanel.json 已写出）')
   addOpen.value = false
-  scan()
-}
-const setState = async (r: any, state: string) => {
-  await post(`/api/sites/${r.id}/state`, { state })
-  message.success('状态已切换')
-  scan()
-}
-const delSite = async (r: any) => {
-  await del(`/api/sites/${r.id}`)
-  message.success('已删除')
   scan()
 }
 

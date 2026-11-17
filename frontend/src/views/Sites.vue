@@ -24,29 +24,19 @@
           <span v-if="record.composeProjectId">Compose #{{ record.composeProjectId }}</span><span v-else class="dim">-</span>
         </template>
         <template v-else-if="column.key === 'action'">
-          <a-space>
-            <a-button v-if="record.enabled !== false && !record.maintenance" size="small" @click="setState(record, 'maintenance')">维护</a-button>
-            <a-button v-if="record.maintenance" size="small" type="primary" ghost @click="setState(record, 'enable')">恢复</a-button>
-            <a-button v-else-if="record.enabled !== false" size="small" @click="setState(record, 'disable')">停用</a-button>
-            <a-button v-else size="small" type="primary" ghost @click="setState(record, 'enable')">启用</a-button>
-            <a-button size="small" @click="editSite(record)">编辑</a-button>
-            <a-button size="small" @click="editConf(record)">配置</a-button>
-            <a-popconfirm title="确认删除该站点？" @confirm="removeSite(record)">
-              <a-button size="small" danger>删除</a-button>
-            </a-popconfirm>
-          </a-space>
+          <SiteActions :site="record" delete-title="确认删除该站点？" @changed="load" />
         </template>
       </template>
     </a-table>
 
-    <!-- 新建/编辑 -->
-    <a-modal v-model:open="editOpen" :title="form.id ? '编辑站点' : '新建站点'" @ok="saveSite" :width="560">
+    <!-- 新建站点（编辑/配置等行内操作见 SiteActions 组件） -->
+    <a-modal v-model:open="editOpen" title="新建站点" @ok="saveSite" :width="560">
       <a-form layout="vertical">
         <a-form-item label="域名">
-          <a-input v-model:value="form.domain" :disabled="!!form.id" placeholder="panel.example.com" />
+          <a-input v-model:value="form.domain" placeholder="panel.example.com" />
         </a-form-item>
         <a-form-item label="类型">
-          <a-radio-group v-model:value="form.type" :disabled="!!form.id">
+          <a-radio-group v-model:value="form.type">
             <a-radio value="proxy">反向代理</a-radio>
             <a-radio value="static">静态目录</a-radio>
           </a-radio-group>
@@ -55,24 +45,14 @@
           <a-input v-model:value="form.upstream" placeholder="127.0.0.1:8080" />
         </a-form-item>
         <a-form-item v-if="form.type === 'static'" label="静态目录">
-          <a-input v-model:value="form.root" :placeholder="form.id ? form.root : '留空则自动创建 /usr/share/nginx/html/sites/<域名>'" />
+          <a-input v-model:value="form.root" placeholder="留空则自动创建 /usr/share/nginx/html/sites/<域名>" />
         </a-form-item>
         <a-form-item label="HTTPS">
           <a-switch v-model:checked="form.ssl" />
           <span class="dim" style="margin-left: 8px">证书可在「证书」页申请后自动部署</span>
         </a-form-item>
         <a-form-item label="备注"><a-input v-model:value="form.remark" /></a-form-item>
-        <a-form-item v-if="form.id" label="站点维护页 HTML（留空使用全局模板）">
-          <a-textarea v-model:value="form.maintenanceHtml" :rows="4" placeholder="自定义维护页（支持 {{domain}} {{time}} {{message}} 变量）" />
-        </a-form-item>
       </a-form>
-    </a-modal>
-
-    <!-- 配置编辑 -->
-    <a-modal v-model:open="confOpen" title="站点配置（高级模式）" :width="900" @ok="saveConf" ok-text="保存并重载">
-      <div style="height: 480px">
-        <AceEditor v-model="confContent" mode="nginx" />
-      </div>
     </a-modal>
   </a-card>
 </template>
@@ -80,15 +60,12 @@
 <script setup lang="ts">
 import { onActivated, onMounted, computed, ref } from 'vue'
 import { message } from 'ant-design-vue'
-import { get, post, put, del } from '../api'
+import { get, post } from '../api'
 import { sortSites } from '../utils/siteOrder'
-import AceEditor from '../components/AceEditor.vue'
+import SiteActions from '../components/SiteActions.vue'
 
 const sites = ref<any[]>([])
 const editOpen = ref(false)
-const confOpen = ref(false)
-const confContent = ref('')
-const confSiteId = ref(0)
 const form = ref<any>({})
 
 const cols = [
@@ -110,37 +87,13 @@ const openCreate = () => {
   form.value = { domain: '', type: 'proxy', upstream: '', root: '', ssl: false, remark: '' }
   editOpen.value = true
 }
-const editSite = (r: any) => {
-  form.value = { id: r.id, domain: r.domain, type: r.type, upstream: r.upstream, root: r.root, ssl: r.ssl, remark: r.remark, maintenanceHtml: r.maintenanceHtml || '' }
-  editOpen.value = true
-}
 const saveSite = async () => {
-  if (form.value.id) await put(`/api/sites/${form.value.id}`, form.value)
-  else await post('/api/sites', form.value)
-  message.success('已保存（nginx 已重载）')
-  editOpen.value = false
-  load()
-}
-const setState = async (r: any, state: string) => {
-  await post(`/api/sites/${r.id}/state`, { state })
-  message.success('状态已切换')
-  load()
-}
-const removeSite = async (r: any) => {
-  await del(`/api/sites/${r.id}`)
-  message.success('已删除')
-  load()
-}
-const editConf = async (r: any) => {
-  const d = await get(`/api/sites/${r.id}/conf`)
-  confContent.value = d.content
-  confSiteId.value = r.id
-  confOpen.value = true
-}
-const saveConf = async () => {
-  await put(`/api/sites/${confSiteId.value}/conf`, { content: confContent.value })
-  message.success('配置已保存并重载')
-  confOpen.value = false
+  try {
+    await post('/api/sites', form.value)
+    message.success('已保存（nginx 已重载）')
+    editOpen.value = false
+    load()
+  } catch { /* 失败提示已由 axios 拦截器输出 */ }
 }
 
 onMounted(load)

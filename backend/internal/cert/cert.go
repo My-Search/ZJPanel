@@ -319,8 +319,47 @@ func (s *Service) LatestCert(taskID uint) *model.CertInfo {
 	return &info
 }
 
-// RunTask 管线执行：skip 检查 → ACME 申请 → 保存 → 部署目标（并行）。
+// RunTask 阻塞执行管线（cron / MCP 内部调用）：skip 检查 → ACME 申请 → 保存 → 部署目标（并行）。
 func (s *Service) RunTask(taskID uint, force bool) (uint, error) {
+	run, err := s.createRun(taskID)
+	if err != nil {
+		return 0, err
+	}
+	return s.execRun(run.ID, taskID, force)
+}
+
+// StartTaskRun 异步执行：立即返回 runID，实际执行在后台 goroutine 进行。
+// HTTP 手动触发走这里——前端拿到 runID 即可订阅 cert-run 主题实时查看执行日志，
+// 不必等整个签发流程结束。
+func (s *Service) StartTaskRun(taskID uint, force bool) (uint, error) {
+	run, err := s.createRun(taskID)
+	if err != nil {
+		return 0, err
+	}
+	go func() {
+		if _, err := s.execRun(run.ID, taskID, force); err != nil {
+			slog.Error("证书任务执行失败", "runId", run.ID, "err", err)
+		}
+	}()
+	return run.ID, nil
+}
+
+// createRun 创建运行记录（状态 running）并回填任务 last_run_id。
+func (s *Service) createRun(taskID uint) (*model.CertRun, error) {
+	var task model.CertTask
+	if err := s.db.First(&task, taskID).Error; err != nil {
+		return nil, fmt.Errorf("任务不存在")
+	}
+	run := &model.CertRun{TaskID: taskID, Status: "running", StartedAt: time.Now(), Log: ""}
+	if err := s.db.Create(run).Error; err != nil {
+		return nil, err
+	}
+	s.db.Model(&task).Update("last_run_id", run.ID)
+	return run, nil
+}
+
+// execRun 管线主体：持有 issueMu 串行化签发；日志经 runLogger 实时广播到 WS 并增量落库。
+func (s *Service) execRun(runID, taskID uint, force bool) (uint, error) {
 	s.issueMu.Lock()
 	defer s.issueMu.Unlock()
 
@@ -328,11 +367,7 @@ func (s *Service) RunTask(taskID uint, force bool) (uint, error) {
 	if err := s.db.First(&task, taskID).Error; err != nil {
 		return 0, fmt.Errorf("任务不存在")
 	}
-	run := &model.CertRun{TaskID: taskID, Status: "running", StartedAt: time.Now(), Log: ""}
-	if err := s.db.Create(run).Error; err != nil {
-		return 0, err
-	}
-	s.db.Model(&task).Update("last_run_id", run.ID)
+	run := &model.CertRun{ID: runID, TaskID: taskID, Status: "running", StartedAt: time.Now()}
 	lg := &runLogger{svc: s, run: run, mu: &sync.Mutex{}}
 	defer lg.flush()
 

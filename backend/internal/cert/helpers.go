@@ -71,6 +71,8 @@ func (l *runLogger) line(level, msg string) {
 	l.mu.Unlock()
 	b, _ := json.Marshal(map[string]any{"type": "log", "runId": l.run.ID, "line": line})
 	l.svc.hub.Broadcast("cert-run", b)
+	// 增量落库：执行中的日志对轮询端（WS 断线 / 页面刷新）同样可见
+	l.flush()
 }
 
 func (l *runLogger) flush() {
