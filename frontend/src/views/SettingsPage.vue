@@ -19,17 +19,23 @@
         <a-space direction="vertical" style="width: 100%">
           <a-space>
             <a-button type="primary" :loading="checking" @click="checkUpdate">检查更新</a-button>
-            <a-button v-if="info?.updateAvailable && !isDevBuild" type="primary" danger :loading="applying" @click="applyUpdate">一键更新（下载并重启）</a-button>
+            <a-button v-if="info?.updateAvailable && !isDevBuild" type="primary" danger :loading="applying" @click="applyUpdate">
+              {{ info?.mode === 'container' ? '一键更新（重建容器）' : '一键更新（下载并重启）' }}
+            </a-button>
           </a-space>
           <a-alert v-if="restarting" type="info" show-icon
-            message="新版本已就位，面板正在重启，等待恢复后自动刷新页面 ..." />
+            :message="info?.mode === 'container'
+              ? '已更新 compose 镜像标签，正在重建容器并拉取新镜像（站点会短暂中断），等待恢复后自动刷新页面 ...'
+              : '新版本已就位，面板正在重启，等待恢复后自动刷新页面 ...'" />
           <a-alert v-if="info" :type="info.updateAvailable ? 'warning' : 'success'" show-icon
             :message="info.updateAvailable ? `发现新版本 ${info.latest}（当前 ${info.current}）` : `已是最新版本 ${info.current}`" />
           <a-alert v-if="isDevBuild" type="warning" show-icon
             message="当前为开发构建（本地直接运行）：一键更新不可用，本地升级请重新构建二进制；服务器部署可在面板一键更新或宿主机执行 ./update.sh。" />
           <p v-if="info?.notes" class="dim">{{ info.notes }}</p>
           <a-alert type="info" show-icon
-            message="一键更新会下载新面板二进制并原地替换重启（前端随二进制一起更新），站点与 nginx 不中断；容器镜像版本不变，需同步镜像时在宿主机执行 ./update.sh。" />
+            :message="info?.mode === 'container'
+              ? '容器部署：一键更新会更新 compose 镜像标签并重建容器，重建时自动拉取新镜像，更新后 down/up 不再回退；重建期间站点与面板会短暂中断（约数秒）。'
+              : '一键更新会下载新面板二进制并原地替换重启（前端随二进制一起更新），站点与 nginx 不中断；如需同步容器镜像，请在宿主机执行 ./update.sh。'" />
           <a-alert v-if="settings.updateUrl?.includes('github.com')" type="warning" show-icon
             message="服务器访问 GitHub 缓慢时，可在部署环境变量中设置 ZJPANEL_GH_MIRROR（如 https://ghfast.top）加速下载。" />
         </a-space>

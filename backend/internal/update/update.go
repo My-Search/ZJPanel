@@ -21,26 +21,21 @@ import (
 
 // Service 版本检查与一键更新：
 // 检查 = 拉取版本清单（GitHub releases/latest 或自定义 {version,url} JSON），semver 对比；
-// 应用 = 参考 octopus 的自更新做法：从 GitHub Release 下载当前平台对应的面板二进制，
-// 校验后原子替换自身并重启进程。此前经一次性 docker:cli 容器执行 compose pull && up -d，
-// 属于 fire-and-forget：ghcr 拉取失败、compose 文件镜像 tag 被 update.sh 固定等情况界面完全无感知。
-// 自更新不依赖 ghcr/部署目录挂载/docker.sock，且失败原因直接反馈到界面；
-// 前端 dist 内嵌在二进制中，替换后一并生效。
-//
-// 重启方式（restart_*.go）：
-//   - Linux：syscall.Exec 原位替换进程镜像，PID 不变——容器内面板为 PID 1，容器与 nginx 均不中断；
-//   - Windows：启动新进程后退出当前进程。
-//
-// 容器镜像本身不会随之更新（writable layer 中的 /app/zjpanel 已是新二进制，容器重建后回到镜像版本），
-// 需要同步镜像时在宿主机执行 ./update.sh 拉新镜像重建容器即可。
+// 应用 = 按运行环境分两条路径（见 docker.go 的 detectContainer）：
+//   - compose 容器：镜像式更新（docker.go）。改写宿主机 compose 的 image → 清理同名残留镜像 →
+//     用一次性容器延迟重建，由 compose up 按需拉取新镜像。版本固化进镜像，down/up 后不再回退；
+//     改写失败即时反馈界面，拉取交给 compose（失败则保留旧容器，服务不中断）。
+//   - 非容器/本地：二进制式更新。从 GitHub Release 下载当前平台二进制，校验后原子替换自身并重启，
+//     dist 内嵌一并生效；重启方式见 restart_*.go（Linux syscall.Exec 原位替换，PID 不变）。
 
 type Service struct {
-	cfg *pkg.Config
+	cfg       *pkg.Config
+	container *containerUpdater // 非 nil = compose 容器环境，走镜像式更新
 
 	mu sync.Mutex // 防并发重复更新
 }
 
-func New(cfg *pkg.Config) *Service { return &Service{cfg: cfg} }
+func New(cfg *pkg.Config) *Service { return &Service{cfg: cfg, container: detectContainer(cfg)} }
 
 func CurrentVersion() string { return buildinfo.Version }
 
@@ -88,9 +83,13 @@ func (s *Service) Check() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	mode := "binary"
+	if s.container != nil {
+		mode = "container"
+	}
 	return map[string]any{
 		"current": CurrentVersion(), "latest": info.Version, "updateAvailable": semverLess(CurrentVersion(), info.Version),
-		"url": info.DownloadURL, "notes": info.Notes,
+		"url": info.DownloadURL, "notes": info.Notes, "mode": mode,
 	}, nil
 }
 
@@ -147,6 +146,17 @@ func (s *Service) Apply() (string, error) {
 	if err != nil {
 		return "", err
 	}
+
+	// compose 容器环境：走镜像式更新（改 compose → 清理残留 → 重建时由 compose 拉取），
+	// 版本固化进镜像，down/up 之后不再回退。
+	if s.container != nil {
+		tag := info.Tag
+		if tag == "" {
+			tag = "v" + info.Version // 自定义清单无 tag 时按版本号拼镜像 tag
+		}
+		return s.container.apply(tag)
+	}
+
 	url := info.DownloadURL
 	if url == "" {
 		if info.Tag == "" {

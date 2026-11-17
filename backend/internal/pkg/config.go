@@ -19,6 +19,7 @@ type Config struct {
 	NginxBin      string // nginx 可执行文件（默认 "nginx"，走 PATH）
 	ComposeRoot   string // docker-compose 项目扫描根目录
 	UpdateURL     string // 版本清单 URL（检查更新）
+	DeployDir     string // 面板自身 compose 部署目录（宿主机路径），容器自更新据此改写镜像 tag
 	ChallengePort int    // ACME HTTP-01 本地挑战端口（nginx 将 /.well-known/acme-challenge 转发到此）
 	TrustedProxies []string // 可信反代 CIDR：仅来自这些地址的 X-Forwarded-For 才参与 ClientIP 解析
 }
@@ -58,6 +59,7 @@ func LoadConfig() *Config {
 		NginxBin:      env("ZJPANEL_NGINX_BIN", "nginx"),
 		ComposeRoot:   env("ZJPANEL_COMPOSE_ROOT", "/compose"),
 		UpdateURL:     env("ZJPANEL_UPDATE_URL", "https://api.github.com/repos/My-Search/ZJPanel/releases/latest"),
+		DeployDir:    env("ZJPANEL_DEPLOY_DIR", ""),
 		ChallengePort: envInt("ZJPANEL_CHALLENGE_PORT", 9100),
 	}
 	// 可信代理：默认仅本机回环（单容器部署中同容器 nginx 经 127.0.0.1 反代面板）。

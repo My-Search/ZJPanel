@@ -27,7 +27,7 @@ Go + Vue3 + TypeScript 服务器管理面板：**nginx 管理 + SSH 终端 + Doc
 | **监控** | CPU/内存/负载/网络实时（WS）+ 磁盘用量；历史采样 30 天 |
 | **MCP** | 面板唯一 `/mcp` 端点（Streamable HTTP + API Key），核心工具与**插件声明的工具聚合**统一对外 |
 | **插件** | 内置/外部插件同一 SDK：菜单页、HTTP 路由、cron、事件订阅、MCP 工具、证书 DNS 提供商与部署目标注册；zip 上传安装，Yaegi 解释执行 |
-| **更新** | 面板一键更新（从 GitHub Release 下载新二进制原地替换并重启，支持 `ZJPANEL_GH_MIRROR` 加速）+ `update.sh`（宿主机执行，同步容器镜像） |
+| **更新** | 面板一键更新：容器部署走镜像式（改 compose→清理残留镜像→重建时自动拉取，down/up 不回退），本地直跑走二进制式（`ZJPANEL_GH_MIRROR` 加速）；另有 `update.sh`（宿主机执行，同步容器镜像） |
 
 ## 快速部署（Linux 服务器）
 
@@ -65,7 +65,12 @@ docker compose up -d
 ./update.sh v1.2.3     # 指定版本
 ```
 
-或在面板「设置 → 检查更新」中一键更新：面板从 GitHub Release 下载当前平台的新面板二进制，校验后原地替换并重启进程（前端内嵌在二进制中一并更新；Linux 下以 exec 原位替换 PID 1，nginx 与站点不中断）。下载走 GitHub 缓慢时，在部署环境变量中设置 `ZJPANEL_GH_MIRROR`（如 `https://ghfast.top`）加速。注意一键更新不更新容器镜像，需同步镜像时执行 `./update.sh`。版本清单读取 GitHub Release（`api.github.com/repos/My-Search/ZJPanel/releases/latest`），推 `v*` tag 即发布新版本。
+或在面板「设置 → 检查更新」中一键更新，按环境自动走两条路径：
+
+- **容器部署**（检测到 docker.sock 且自身为 compose 容器）：把本目录 `docker-compose.yml` 的 image 改为新版本 tag（留 `.bak`）→ 清理本地同名 tag 残留镜像 → 重建容器时由 `compose up` 自动拉取。版本固化进镜像，`docker compose down/up` 后不再回退；重建期间站点/面板短暂中断约数秒。需保证 `ZJPANEL_DEPLOY_DIR` 指向 compose 所在目录且该目录挂载进容器（默认 `/opt:/opt` 已覆盖 `/opt/zjpanel`；未设置时按 compose 标签自动反查）。
+- **本地直跑**（非容器）：从 GitHub Release 下载当前平台二进制，校验后原地替换并以 exec 重启（PID 不变，站点不中断）；下载缓慢时可用 `ZJPANEL_GH_MIRROR`（如 `https://ghfast.top`）加速。
+
+版本清单读取 GitHub Release（`api.github.com/repos/My-Search/ZJPanel/releases/latest`），推 `v*` tag 即发布新版本。
 
 ## 本地开发
 
