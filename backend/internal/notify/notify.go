@@ -85,14 +85,17 @@ func (s *Service) Send(source string, in Input) {
 	s.emailIfSubscribed(in.Type, in.Title, in.Body)
 }
 
-// List 站内信列表（新→旧）。
-func (s *Service) List(limit int, unreadOnly bool) []model.Notification {
+// List 站内信列表（新→旧）。scope: all 全部 / unread 仅未读 / read 仅已读。
+func (s *Service) List(limit int, scope string) []model.Notification {
 	if limit < 1 || limit > 500 {
 		limit = 50
 	}
 	q := s.db.Order("id DESC").Limit(limit)
-	if unreadOnly {
+	switch scope {
+	case "unread":
 		q = q.Where("read_at IS NULL")
+	case "read":
+		q = q.Where("read_at IS NOT NULL")
 	}
 	out := []model.Notification{}
 	_ = q.Find(&out).Error

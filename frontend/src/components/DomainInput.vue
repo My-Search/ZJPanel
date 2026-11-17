@@ -70,9 +70,9 @@ defineExpose({ focus: () => inputRef.value?.focus?.() })
   gap: 4px;
   min-height: 32px;
   padding: 4px 6px;
-  border: 1px solid var(--color-border, #d9d9d9);
+  border: 1px solid var(--border-input);
   border-radius: 6px;
-  background: var(--color-bg, #fff);
+  background: var(--surface-card);
 }
 .tag-row :deep(.ant-tag) { margin-inline-end: 0; }
 .tag-input { flex: 1; min-width: 180px; border: none; box-shadow: none; padding: 0 4px; }

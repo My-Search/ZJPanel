@@ -1,5 +1,5 @@
 <template>
-  <a-config-provider :theme="antdTheme">
+  <a-config-provider :theme="antdTheme" :locale="zhCN">
     <router-view />
   </a-config-provider>
 </template>
@@ -7,6 +7,9 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { theme as antd } from 'ant-design-vue'
+// antd 默认英文：表格排序提示（Click to sort ascending）、弹窗按钮（OK/Cancel）、空数据（No data）
+// 全部要中文，与项目「中文优先」约定一致
+import zhCN from 'ant-design-vue/es/locale/zh_CN'
 import { useTheme } from './store/theme'
 
 const ui = useTheme()
@@ -76,6 +79,7 @@ html[data-theme='dark'] .ant-card:hover { box-shadow: var(--shadow-hover); trans
 
 /* ---------- 焦点环：2px Action Blue + 2px offset（无障碍底线，仅键盘触发避免与点击态叠加） ---------- */
 .ant-btn:focus-visible,
+button:focus-visible,
 .ant-menu-item:focus-visible,
 .ant-dropdown-menu-item:focus-visible,
 a:focus-visible {

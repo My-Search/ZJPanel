@@ -343,15 +343,17 @@ try {
      树节点动作按钮常显；长按弹右键菜单；点已选中单元格进入编辑。 */
   @media (max-width: 767px) {
     .tb-menu { display: flex; }
-    .titlebar { height: 38px; padding: 0 8px; }
+    /* 标题栏提到遮罩/抽屉之上，抽屉打开时汉堡按钮仍可点关闭 */
+    .titlebar { height: 38px; padding: 0 8px; position: relative; z-index: 80; }
     .titlebar .tb-right { display: none; }
     .vresizer { display: none; }
     .main { position: relative; }
-    .sidebar { position: fixed; left: 0; top: 0; bottom: 0; width: min(84vw, 320px);
+    /* 抽屉从标题栏下方滑出，不遮住汉堡按钮 */
+    .sidebar { position: fixed; left: 0; top: 38px; bottom: 0; width: min(84vw, 320px);
       min-width: 0; max-width: none; z-index: 70; transform: translateX(-102%);
       transition: transform .18s ease; box-shadow: var(--shadow); }
     .sidebar.m-open { transform: none; }
-    .infopanel { position: fixed; right: 0; top: 0; bottom: 0; width: min(84vw, 320px); z-index: 70;
+    .infopanel { position: fixed; right: 0; top: 38px; bottom: 0; width: min(84vw, 320px); z-index: 70;
       transform: translateX(102%); transition: transform .18s ease; box-shadow: var(--shadow); }
     .infopanel.m-open { transform: none; }
 
@@ -365,6 +367,18 @@ try {
     .btn.small { padding: 7px 12px; }
     .icon-btn { padding: 6px; }
     .icon-btn .icon { width: 15px; height: 15px; }
+    /* 其余小按钮补到 ≥30px 触控区 */
+    .tab .tab-x { min-width: 30px; min-height: 30px; justify-content: center; }
+    .tab .tab-x .icon { width: 15px; height: 15px; }
+    .ctxmenu .ci { padding: 10px 14px; font-size: 13px; }
+    .ip-col { padding: 8px 6px; }
+    .qhist .item { padding: 8px 12px; }
+    .sb-copy, .tnode .nacts .icon-btn { min-width: 30px; min-height: 30px; justify-content: center; }
+
+    /* iOS Safari：输入控件字号 <16px 聚焦时会强制放大整页（body overflow:hidden 难缩回），统一提到 16px */
+    .fld input[type=text], .fld input[type=password], .fld select,
+    .rowfld input[type=text], .filter-box input, .qbar select, .rb-page, .rb-size,
+    .qeditor textarea, table.grid td input.cell-edit { font-size: 16px; }
 
     /* 连接树：行高加大，动作按钮常显（触屏无 hover） */
     .tree { padding: 8px 6px 16px; -webkit-overflow-scrolling: touch; }
@@ -376,33 +390,48 @@ try {
 
     /* 数据网格：行高加大便于触控 */
     table.grid th, table.grid td { height: 34px; padding: 6px 10px; }
-    table.grid td input.cell-edit { font-size: 14px; }
     .gridwrap, .qgrid, .qhist, .structwrap, .sf-res { -webkit-overflow-scrolling: touch; }
 
     /* 记录条允许换行，分页不再横向溢出 */
     .recordbar { height: auto; min-height: 40px; flex-wrap: wrap; padding: 5px 8px; row-gap: 2px; }
     .rb-btn { width: 34px; height: 32px; }
     .rb-right { flex-wrap: wrap; row-gap: 4px; margin-left: auto; }
-    .rb-page { width: 52px; height: 28px; font-size: 13px; }
-    .rb-size { height: 28px; font-size: 13px; }
+    .rb-page { width: 52px; height: 28px; }
+    .rb-size { height: 28px; }
     .rb-info { margin-left: 6px; white-space: normal; flex-basis: 100%; }
 
     /* 视图条：筛选独占一行 */
     .viewbar { padding: 6px 8px; gap: 6px; }
     .viewbar .spacer { display: none; }
     .filter-box { flex: 1 1 100%; max-width: none; order: 9; }
-    .filter-box input { padding: 8px 10px; font-size: 13px; }
+    .filter-box input { padding: 8px 10px; }
     .seg-item { padding: 6px 12px; }
 
     /* 查询 */
     .qbar { padding: 6px 8px; }
     .qbar select { min-width: 0; flex: 1; max-width: 45vw; padding: 7px 8px; }
-    .qeditor textarea { height: 160px; font-size: 14px; }
+    .qeditor textarea { height: 160px; }
 
-    /* 弹窗 */
-    .modal { padding: 14px; max-height: calc(100dvh - 20px); }
+    /* 弹窗：max-height 需扣掉遮罩上下 padding(16px×2) 并留余量，否则矮屏底部按钮被裁 */
+    .modal { padding: 14px; max-height: calc(100dvh - 40px); }
     .modal-foot { flex-wrap: wrap; }
     .structwrap { padding: 10px; }
+  }
+
+  /* ── 横屏 / 矮视口（手机横屏约 844×390）：三栏虽在，但压缩纵向占用，避免网格被工具栏挤没 ── */
+  @media (max-height: 520px) and (min-width: 768px) {
+    .titlebar { height: 24px; }
+    .maintoolbar { padding: 2px 8px; }
+    .tb-btn { padding: 2px 6px; font-size: 10px; gap: 1px; }
+    .tb-btn .icon { width: 16px; height: 16px; }
+    .tabbar { padding: 2px 6px 0; }
+    .tab { padding: 3px 8px; }
+    .viewbar { padding: 3px 10px; }
+    .recordbar { height: 24px; }
+    .rb-btn { height: 20px; }
+    .sqlbar { height: 22px; }
+    .qeditor textarea { height: 70px; }
+    .qhist { max-height: 90px; }
   }
 </style>
 </head>

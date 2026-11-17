@@ -28,28 +28,34 @@ export interface NotifySettings {
 /** 统一通知：未读计数 / 站内信列表 / 邮件订阅与 SMTP 设置。 */
 export const useNotify = defineStore('notify', () => {
   const unread = ref(0)
-  const list = ref<NotifyItem[]>([])
+  // 未读/已读分开缓存：默认只拉未读，切到已读 tab 才请求，避免无谓加载已读数据
+  const unreadList = ref<NotifyItem[]>([])
+  const readList = ref<NotifyItem[]>([])
   const settings = ref<NotifySettings | null>(null)
 
   async function fetchUnread() {
     try { unread.value = (await get<any>('/api/notify/unread')).unread ?? 0 } catch { /* ignore */ }
   }
-  async function fetchList(limit = 20) {
-    const r = await get<any>(`/api/notify/list?limit=${limit}`)
-    list.value = r.list || []
+  // scope: unread 仅未读 / read 仅已读
+  async function fetchList(scope: 'unread' | 'read', limit = 30) {
+    const r = await get<any>(`/api/notify/list?scope=${scope}&limit=${limit}`)
+    const items: NotifyItem[] = r.list || []
+    if (scope === 'unread') unreadList.value = items
+    else readList.value = items
     unread.value = r.unread ?? 0
   }
   async function markRead(ids: number[]) {
     const r = await post<any>('/api/notify/read', { ids })
     unread.value = r.unread ?? 0
+    // 从当前缓存移除：未读列表移除即可（已读缓存下次切 tab 会重新拉取）
     const set = new Set(ids)
-    list.value = list.value.map(it => (set.has(it.id) ? { ...it, readAt: new Date().toISOString() } : it))
+    unreadList.value = unreadList.value.filter(it => !set.has(it.id))
   }
   async function markAll() {
     const r = await post<any>('/api/notify/read', { all: true })
     unread.value = r.unread ?? 0
-    const now = new Date().toISOString()
-    list.value = list.value.map(it => ({ ...it, readAt: now }))
+    unreadList.value = []
+    readList.value = [] // 全部已读后缓存失效，下次切 tab 重新拉
   }
   async function loadSettings() {
     settings.value = await get<NotifySettings>('/api/notify/settings')
@@ -61,5 +67,5 @@ export const useNotify = defineStore('notify', () => {
     return post('/api/notify/test', {})
   }
 
-  return { unread, list, settings, fetchUnread, fetchList, markRead, markAll, loadSettings, saveSettings, testMail }
+  return { unread, unreadList, readList, settings, fetchUnread, fetchList, markRead, markAll, loadSettings, saveSettings, testMail }
 })

@@ -62,9 +62,12 @@ const submit = async () => {
 <style scoped>
 /* 浅色（企业简洁风）：Slate Mist 画布 + 白卡 + 极浅描边，无渐变无重阴影 */
 .login-wrap {
-  min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 100vh;
+  min-height: 100dvh; /* 移动端浏览器地址栏会改变可视高度，dvh 保证按真实可视区居中 */
+  display: flex; flex-direction: column; align-items: center;
+  /* 首尾 auto margin 做「安全居中」：内容未超一屏时上下居中；超出时 auto 归零并可滚动，避免顶部被裁 */
   background: var(--surface-canvas);
-  position: relative; padding: 24px; overflow: hidden;
+  position: relative; padding: 24px; overflow-x: hidden; overflow-y: auto;
 }
 /* 细网格纹理：线稿感，石板灰极淡线条 */
 .login-wrap::before {
@@ -75,7 +78,7 @@ const submit = async () => {
   background-size: 44px 44px;
   mask-image: radial-gradient(ellipse 70% 60% at 50% 45%, #000 30%, transparent 100%);
 }
-.login-brand { text-align: center; margin-bottom: 26px; position: relative; z-index: 1; }
+.login-brand { text-align: center; margin-top: auto; margin-bottom: 26px; position: relative; z-index: 1; }
 .brand-badge {
   width: 62px; height: 62px; margin: 0 auto 12px; border-radius: 12px; overflow: hidden;
   background: #fff; border: 1px solid #e5e7eb;
@@ -88,7 +91,7 @@ const submit = async () => {
   width: 400px; max-width: 92vw; position: relative; z-index: 1;
   box-shadow: var(--shadow-hover);
 }
-.login-foot { margin-top: 24px; color: #94a3b8; font-size: 12px; letter-spacing: 1px; position: relative; z-index: 1; }
+.login-foot { margin-top: auto; padding-top: 24px; color: #94a3b8; font-size: 12px; letter-spacing: 1px; position: relative; z-index: 1; }
 /* 深色：保留原深空观感，主色已随全局切到亮蓝 */
 html[data-theme='dark'] .login-wrap {
   background:

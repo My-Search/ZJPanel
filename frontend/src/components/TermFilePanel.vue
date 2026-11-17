@@ -3,44 +3,70 @@
     <template v-if="hostId">
       <!-- ============ 列表视图 ============ -->
       <div v-if="!editing" class="fm-list">
-        <div class="fm-bar">
-          <a-space :size="4" wrap>
-            <a-button size="small" :disabled="path === '/'" @click="nav(parentPath(path))" title="上一级">
-              <ArrowUpOutlined />
-            </a-button>
-            <a-button size="small" :loading="loading" @click="load" title="刷新">
-              <ReloadOutlined />
-            </a-button>
-            <a-button size="small" :type="showHidden ? 'primary' : 'default'" @click="showHidden = !showHidden" title="显示隐藏文件">
-              <EyeOutlined v-if="!showHidden" /><EyeInvisibleOutlined v-else />
-            </a-button>
-            <span class="fm-sep"></span>
-            <a-button size="small" @click="promptNew('file')" title="新建文件"><FileAddOutlined /></a-button>
-            <a-button size="small" @click="promptNew('dir')" title="新建文件夹"><FolderAddOutlined /></a-button>
-            <a-upload :show-upload-list="false" :custom-request="doUpload" multiple>
-              <a-button size="small" title="上传到当前目录"><UploadOutlined /></a-button>
-            </a-upload>
-          </a-space>
-        </div>
+        <!-- 头部：地址栏（我在哪）+ 工具栏（我能做什么），两组动作各归其位 -->
+        <header class="fm-head">
+          <!-- 地址栏：整行路径，末端内嵌「输入路径跳转」入口 -->
+          <div class="fm-path">
+            <template v-if="!pathEditing">
+              <a-breadcrumb class="fm-crumb" separator="/">
+                <a-breadcrumb-item>
+                  <a class="fm-crumb-link fm-crumb-root" title="根目录" @click="nav('/')">
+                    <HomeOutlined /> 根目录
+                  </a>
+                </a-breadcrumb-item>
+                <a-breadcrumb-item v-for="seg in pathSegs" :key="seg.path">
+                  <a class="fm-crumb-link" :class="{ 'fm-crumb-cur': seg.path === path }" :title="seg.path"
+                    @click="nav(seg.path)">{{ seg.name }}</a>
+                </a-breadcrumb-item>
+              </a-breadcrumb>
+              <button type="button" class="fm-path-edit" title="输入路径跳转" aria-label="输入路径跳转"
+                @click="startPathEdit">
+                <FormOutlined />
+              </button>
+            </template>
+            <a-input v-else ref="pathInputRef" v-model:value="pathInput" class="fm-path-input" size="small"
+              placeholder="/etc/nginx/nginx.conf" @press-enter="nav(pathInput)" @blur="pathEditing = false">
+              <template #suffix><span class="fm-dim">回车跳转</span></template>
+            </a-input>
+          </div>
 
-        <!-- 路径导航：面包屑 / 可编辑输入 -->
-        <div class="fm-path">
-          <template v-if="!pathEditing">
-            <a-breadcrumb class="fm-crumb">
-              <a-breadcrumb-item><a @click="nav('/')">/</a></a-breadcrumb-item>
-              <a-breadcrumb-item v-for="seg in pathSegs" :key="seg.path">
-                <a @click="nav(seg.path)">{{ seg.name }}</a>
-              </a-breadcrumb-item>
-            </a-breadcrumb>
-            <a-button size="small" type="text" class="fm-path-edit" @click="startPathEdit" title="输入路径跳转">
-              <FormOutlined />
-            </a-button>
-          </template>
-          <a-input v-else ref="pathInputRef" v-model:value="pathInput" size="small" placeholder="/etc/nginx/nginx.conf"
-            @press-enter="nav(pathInput)" @blur="pathEditing = false">
-            <template #suffix><span class="fm-dim">回车跳转 · Esc 取消</span></template>
-          </a-input>
-        </div>
+          <!-- 工具栏：导航组 | 新建组，右侧补当前条目数 -->
+          <div class="fm-bar">
+            <div class="fm-tools">
+              <button type="button" class="fm-tool" :disabled="path === '/'" title="上一级" aria-label="上一级"
+                @click="nav(parentPath(path))">
+                <ArrowUpOutlined />
+              </button>
+              <button type="button" class="fm-tool" :class="{ 'is-busy': loading }" title="刷新" aria-label="刷新"
+                @click="load">
+                <ReloadOutlined />
+              </button>
+              <button type="button" class="fm-tool" :class="{ 'is-on': showHidden }"
+                :title="showHidden ? '不显示隐藏文件' : '显示隐藏文件'"
+                :aria-label="showHidden ? '不显示隐藏文件' : '显示隐藏文件'" @click="showHidden = !showHidden">
+                <EyeInvisibleOutlined v-if="showHidden" /><EyeOutlined v-else />
+              </button>
+            </div>
+            <span class="fm-rule"></span>
+            <div class="fm-tools">
+              <button type="button" class="fm-tool" title="新建文件" aria-label="新建文件" @click="promptNew('file')">
+                <FileAddOutlined />
+              </button>
+              <button type="button" class="fm-tool" title="新建文件夹" aria-label="新建文件夹" @click="promptNew('dir')">
+                <FolderAddOutlined />
+              </button>
+              <!-- 原 a-upload 会在触发器外再套一层 role="button"，形成按钮套按钮；
+                   改为隐藏 file input + 自有按钮触发，避免嵌套交互元素 -->
+              <input ref="fileInputRef" type="file" multiple class="fm-file-input" @change="onPickFiles" />
+              <button type="button" class="fm-tool" title="上传到当前目录" aria-label="上传到当前目录"
+                @click="pickFiles">
+                <UploadOutlined />
+              </button>
+            </div>
+            <span class="fm-grow"></span>
+            <span class="fm-count">{{ visibleEntries.length }} 项</span>
+          </div>
+        </header>
 
         <div class="fm-table">
           <a-table :data-source="visibleEntries" :columns="cols" size="small" row-key="name" :pagination="false"
@@ -50,7 +76,7 @@
                 <span class="fm-name" :title="record.perm ? `${record.name} · ${record.perm}` : record.name">
                   <FolderOutlined v-if="record.isDir" class="fm-ic-dir" />
                   <FileOutlined v-else class="fm-ic-file" />
-                  {{ record.name }}
+                  <span class="fm-name-text">{{ record.name }}</span>
                 </span>
               </template>
               <template v-else-if="column.key === 'size'">
@@ -62,7 +88,9 @@
               </template>
               <template v-else-if="column.key === 'act'">
                 <a-dropdown :trigger="['click']">
-                  <a-button size="small" type="text"><MoreOutlined /></a-button>
+                  <a-button size="small" type="text" aria-label="更多操作" title="更多操作">
+                    <MoreOutlined />
+                  </a-button>
                   <template #overlay>
                     <a-menu @click="({ key }: any) => rowAction(key as string, record)">
                       <a-menu-item v-if="!record.isDir" key="download">下载</a-menu-item>
@@ -122,7 +150,7 @@ import { get, post, upload } from '../api'
 import {
   ArrowUpOutlined, ReloadOutlined, EyeOutlined, EyeInvisibleOutlined, FileAddOutlined,
   FolderAddOutlined, UploadOutlined, FolderOutlined, FileOutlined, MoreOutlined,
-  ArrowLeftOutlined, FormOutlined,
+  ArrowLeftOutlined, FormOutlined, HomeOutlined,
 } from '@ant-design/icons-vue'
 import AceEditor from './AceEditor.vue'
 
@@ -172,7 +200,7 @@ const cols = [
   { title: '名称', key: 'name', sorter: (a: FEntry, b: FEntry) => cmpDir(a, b) || a.name.localeCompare(b.name) },
   { title: '大小', key: 'size', width: 88, align: 'right' as const, sorter: (a: FEntry, b: FEntry) => cmpDir(a, b) || a.size - b.size },
   { title: '修改时间', key: 'modTime', width: 122, align: 'right' as const, sorter: (a: FEntry, b: FEntry) => cmpDir(a, b) || a.modTime.localeCompare(b.modTime) },
-  { key: 'act', width: 34 },
+  { key: 'act', width: 48 },
 ]
 
 const visibleEntries = computed(() =>
@@ -326,18 +354,20 @@ const promptNew = (kind: 'file' | 'dir') => {
 }
 
 // ---- 上传 ----
-const doUpload = async (opt: any) => {
-  const file = opt.file as File
-  const target = joinPath(path.value, file.name)
-  try {
-    await upload(api('/upload') + `?path=` + encodeURIComponent(target), file)
-    message.success('已上传 ' + file.name)
-    opt.onSuccess?.(file)
-    load()
-  } catch (e) {
-    opt.onError?.(e)
-    /* toast 由拦截器处理 */
+const fileInputRef = ref<HTMLInputElement | null>(null)
+const pickFiles = () => fileInputRef.value?.click()
+const onPickFiles = async (ev: Event) => {
+  const input = ev.target as HTMLInputElement
+  const files = Array.from(input.files || [])
+  input.value = '' // 清空，保证下次能再次选中同一文件
+  if (!files.length) return
+  for (const f of files) {
+    try {
+      await upload(api('/upload') + `?path=` + encodeURIComponent(joinPath(path.value, f.name)), f)
+      message.success('已上传 ' + f.name)
+    } catch { /* toast 由拦截器处理 */ }
   }
+  load()
 }
 
 // ---- 格式化 ----
@@ -362,23 +392,76 @@ const fmtTime = (s: string) => {
 <style scoped>
 .fm-panel { height: 100%; display: flex; flex-direction: column; overflow: hidden; font-size: 13px; }
 .fm-list, .fm-editor { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.fm-bar { flex: none; padding-bottom: 8px; }
-.fm-sep { display: inline-block; width: 6px; }
-.fm-path { flex: none; display: flex; align-items: center; gap: 4px; margin-bottom: 8px; }
+
+/* ---------- 头部：地址栏 + 工具栏 ---------- */
+.fm-head { flex: none; padding-bottom: 10px; border-bottom: 1px solid var(--border-card); }
+
+/* 地址栏：像输入框的一行路径；「输入路径跳转」收进框内末端，不与路径争夺横向空间 */
+.fm-path {
+  display: flex; align-items: center; gap: 6px;
+  height: 30px; margin-bottom: 8px; padding: 0 4px 0 10px;
+  border: 1px solid var(--border-input); border-radius: var(--radius-inputs);
+  background: var(--surface-card);
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+.fm-path:focus-within { border-color: var(--color-action-blue); box-shadow: var(--focus-ring); }
 .fm-crumb { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; }
-.fm-path-edit { flex: none; }
+.fm-crumb :deep(.ant-breadcrumb) { font-size: 12px; }
+.fm-crumb :deep(.ant-breadcrumb-separator) { color: var(--color-slate); opacity: .5; }
+.fm-crumb :deep(.ant-breadcrumb-link a) { color: var(--color-slate); cursor: pointer; }
+.fm-crumb :deep(.ant-breadcrumb-link a:hover) { color: var(--color-corporate-blue); }
+/* 当前目录加重，其余为可点层级 */
+.fm-crumb :deep(.ant-breadcrumb-link a.fm-crumb-cur) { color: var(--color-ink); font-weight: 600; }
+.fm-crumb :deep(.ant-breadcrumb-link a.fm-crumb-cur:hover) { color: var(--color-corporate-blue); }
+.fm-crumb :deep(.ant-breadcrumb-link a.fm-crumb-root) { display: inline-flex; align-items: center; gap: 5px; }
+.fm-path-edit {
+  flex: none; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--color-slate); cursor: pointer;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.fm-path-edit:hover { background: rgba(128, 128, 128, .14); color: var(--color-ink); }
+.fm-path-input { flex: 1; min-width: 0; }
+.fm-path-input :deep(.ant-input) { height: 26px; padding: 0 4px; border: 0; background: transparent; box-shadow: none; }
+.fm-path-input :deep(.ant-input:focus) { box-shadow: none; }
+
+/* 工具栏：导航组与新建组之间一条竖线分组，动作权重一致 */
+.fm-bar { display: flex; align-items: center; gap: 8px; }
+.fm-tools { display: flex; align-items: center; gap: 2px; }
+.fm-rule { flex: none; width: 1px; height: 16px; background: var(--border-input); }
+.fm-grow { flex: 1; }
+.fm-count { flex: none; color: var(--color-slate); font-size: 12px; font-variant-numeric: tabular-nums; }
+.fm-file-input { display: none; }
+/* 26px 方块图标按钮：图标是主视觉，去掉边框只留悬停底色，避免一排小药丸 */
+.fm-tool {
+  width: 26px; height: 26px; padding: 0; border: 0; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--color-slate); font-size: 15px; cursor: pointer;
+  transition: background var(--motion-fast), color var(--motion-fast);
+}
+.fm-tool:hover:not(:disabled) { background: rgba(128, 128, 128, .14); color: var(--color-ink); }
+.fm-tool:active:not(:disabled) { background: rgba(128, 128, 128, .22); }
+.fm-tool:disabled { opacity: .35; cursor: not-allowed; }
+.fm-tool.is-on { background: var(--bg-selected); color: var(--color-corporate-blue); }
+.fm-tool.is-on:hover { background: var(--bg-selected); color: var(--color-corporate-blue); }
+.fm-tool.is-busy :deep(.anticon) { animation: fm-spin 1s linear infinite; }
+@keyframes fm-spin { to { transform: rotate(360deg); } }
+
 .fm-table { flex: 1; min-height: 0; overflow: auto; }
+/* 面板可拖窄到 320px，固定列会挤掉名称列：给表格一个下限宽度，
+   窄屏时改为横向滚动，而不是把文件名压成三个字 */
+.fm-table :deep(.ant-table-content > table) { min-width: 420px; }
 /* 固定布局下长文件名不再挤压大小/时间列；整行 pointer，双击进入 */
 .fm-table :deep(.ant-table-tbody > tr.ant-table-row) { cursor: pointer; }
 .fm-table :deep(.ant-table-tbody > tr > td),
 .fm-table :deep(.ant-table-thead > tr > th) { white-space: nowrap; }
 .fm-table :deep(.ant-table-tbody > tr:hover > td) { background: rgba(128, 128, 128, .13); }
-.fm-name { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fm-ic-dir { color: #faad14; }
-.fm-ic-file { color: #8c8c8c; }
+.fm-name { display: flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; }
+.fm-name-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-ic-dir { flex: none; color: #faad14; }
+.fm-ic-file { flex: none; color: #8c8c8c; }
 .fm-editor-bar { gap: 8px; display: flex; align-items: center; }
 .fm-editor-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.fm-grow { flex: 1; }
 .fm-warn { color: #fa8c16; font-size: 12px; }
 .fm-editor-box { flex: 1; min-height: 0; border: 1px solid rgba(128,128,128,.25); border-radius: 6px; overflow: hidden; }
 .fm-empty { flex: 1; display: flex; align-items: center; justify-content: center; }

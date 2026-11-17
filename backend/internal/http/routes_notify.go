@@ -13,8 +13,11 @@ func (s *Server) registerNotifyRoutes() {
 	// 站内信列表（新→旧，Limit 模式照审计日志惯例）
 	g.GET("/list", func(c *gin.Context) {
 		limit := intParam(c.DefaultQuery("limit", "50"))
-		unread := c.Query("unread") == "1"
-		c.JSON(http.StatusOK, gin.H{"list": s.Notify.List(limit, unread), "unread": s.Notify.Unread()})
+		scope := c.DefaultQuery("scope", "all")
+		// unread=1 / read=1 为兼容简写，优先于 scope
+		if c.Query("unread") == "1" { scope = "unread" }
+		if c.Query("read") == "1" { scope = "read" }
+		c.JSON(http.StatusOK, gin.H{"list": s.Notify.List(limit, scope), "unread": s.Notify.Unread()})
 	})
 
 	g.GET("/unread", func(c *gin.Context) {

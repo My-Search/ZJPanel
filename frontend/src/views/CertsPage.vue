@@ -544,16 +544,17 @@ onUnmounted(() => { stopRunWs?.(); stopRunPoll() })
 .toolbar { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
 .dim { color: var(--color-slate); font-size: 12px; }
 .mode-cards { display: flex; gap: 12px; }
-.mode-card { flex: 1; border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px; cursor: pointer; transition: all var(--motion-fast); }
-.mode-card.active { border-color: #1e40af; background: #eff6ff; }
+.mode-card { flex: 1; border: 1px solid var(--border-card); border-radius: 8px; padding: 14px; cursor: pointer; transition: all var(--motion-fast); }
+.mode-card.active { border-color: var(--color-corporate-blue); background: var(--bg-selected); }
 .mode-title { font-weight: 600; margin-bottom: 6px; }
 .mode-desc { font-size: 12px; color: var(--color-slate); line-height: 1.6; }
 .provider-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
-.provider-card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px; cursor: pointer; text-align: center; transition: all var(--motion-fast); }
-.provider-card.active { border-color: #1e40af; background: #eff6ff; }
+.provider-card { border: 1px solid var(--border-card); border-radius: 8px; padding: 10px; cursor: pointer; text-align: center; transition: all var(--motion-fast); }
+.provider-card.active { border-color: var(--color-corporate-blue); background: var(--bg-selected); }
 .provider-title { font-weight: 600; font-size: 13px; }
 .provider-name { font-size: 11px; color: var(--color-slate); }
-.target-card { border: 1px dashed #d1d5db; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+.target-card { border: 1px dashed var(--border-input); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
 .target-head { display: flex; justify-content: space-between; margin-bottom: 10px; }
-.runlog { max-height: 420px; overflow: auto; background: #111; color: #0f0; padding: 12px; font-size: 12px; white-space: pre-wrap; }
+.runlog { max-height: 420px; overflow: auto; background: var(--surface-canvas); color: var(--color-ink); padding: 12px; font-size: 12px; white-space: pre-wrap; }
+html[data-theme='dark'] .runlog { background: #111; color: #0f0; }
 </style>

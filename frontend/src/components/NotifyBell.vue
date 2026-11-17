@@ -13,34 +13,34 @@
           <a @click.prevent="doMarkAll" class="nb-link">全部已读</a>
           <a @click.prevent="openSettings" class="nb-link">通知设置</a>
         </div>
+        <!-- 未读 / 已读分 tab：各 tab 按需加载，互不牵连 -->
+        <div class="nb-tabs" role="tablist">
+          <button type="button" role="tab" class="nb-tab" :class="{ on: tab === 'unread' }" @click="switchTab('unread')">
+            未读<span v-if="notify.unread" class="nb-tab-n">{{ notify.unread }}</span>
+          </button>
+          <button type="button" role="tab" class="nb-tab" :class="{ on: tab === 'read' }" @click="switchTab('read')">已读</button>
+        </div>
         <a-spin :spinning="loading">
           <div class="nb-list">
-            <div v-if="!unreadList.length && !readList.length" class="nb-empty">暂无通知</div>
-            <template v-else>
-              <div v-if="!unreadList.length" class="nb-empty">暂无未读通知</div>
-              <div
-                v-for="it in displayList"
-                :key="it.id"
-                class="nb-item"
-                :class="{ unread: !it.readAt }"
-                @click="readOne(it)"
-              >
-                <span class="nb-dot" :class="it.level" :title="levelText(it.level)"></span>
-                <div class="nb-main">
-                  <div class="nb-title">
-                    <span class="nb-type">{{ it.type }}</span>
-                    {{ it.title }}
-                  </div>
-                  <div v-if="it.body" class="nb-body">{{ it.body }}</div>
-                  <div class="nb-time">{{ fmtTime(it.createdAt) }} · {{ it.source }}</div>
+            <div v-if="!displayList.length" class="nb-empty">
+              {{ tab === 'unread' ? '暂无未读通知' : '暂无已读通知' }}
+            </div>
+            <div
+              v-for="it in displayList"
+              :key="it.id"
+              class="nb-item"
+              :class="{ unread: !it.readAt }"
+              @click="readOne(it)"
+            >
+              <span class="nb-dot" :class="it.level" :title="levelText(it.level)"></span>
+              <div class="nb-main">
+                <div class="nb-title">
+                  <span class="nb-type">{{ it.type }}</span>
+                  {{ it.title }}
                 </div>
+                <div v-if="it.body" class="nb-body">{{ it.body }}</div>
+                <div class="nb-time">{{ fmtTime(it.createdAt) }} · {{ it.source }}</div>
               </div>
-            </template>
-            <!-- 已读收纳：默认折叠，点击按需展开/收起 -->
-            <div v-if="readList.length" class="nb-fold" @click="showRead = !showRead">
-              <CaretDownOutlined v-if="!showRead" />
-              <CaretUpOutlined v-else />
-              {{ showRead ? '收起已读' : `已读 ${readList.length} 条` }}
             </div>
           </div>
         </a-spin>
@@ -127,7 +127,7 @@
 
 <script setup lang="ts">
 import { computed, onUnmounted, ref } from 'vue'
-import { BellOutlined, CaretDownOutlined, CaretUpOutlined } from '@ant-design/icons-vue'
+import { BellOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import { useNotify, type NotifyItem, type NotifySettings } from '../store/notify'
 import { wsTopic } from '../api'
@@ -142,11 +142,21 @@ const passInput = ref('')
 const st = computed(() => notify.settings as NotifySettings | null)
 const isMobile = ref(window.innerWidth < 768)
 
-// 已读收纳：默认只列未读，已读项折叠进底部「已读 N 条」，点开才展开（未读在前、已读在后）
-const unreadList = computed(() => notify.list.filter(it => !it.readAt))
-const readList = computed(() => notify.list.filter(it => it.readAt))
-const showRead = ref(false)
-const displayList = computed(() => (showRead.value ? [...unreadList.value, ...readList.value] : unreadList.value))
+// 未读 / 已读分 tab：默认未读，各 tab 数据由 store 按需加载
+type NotifyTab = 'unread' | 'read'
+const tab = ref<NotifyTab>('unread')
+const displayList = computed(() => (tab.value === 'unread' ? notify.unreadList : notify.readList))
+
+// 加载指定 tab 数据；打开弹窗只拉未读，切到已读 tab 时才拉已读
+async function loadTab(target: NotifyTab) {
+  loading.value = true
+  try { await notify.fetchList(target, 30) } finally { loading.value = false }
+}
+async function switchTab(next: NotifyTab) {
+  if (tab.value === next) return
+  tab.value = next
+  await loadTab(next)
+}
 
 const levelText = (l: string) => ({ info: '信息', warn: '警告', error: '错误' }[l] || l)
 
@@ -160,10 +170,8 @@ const fmtTime = (t: string) => {
 
 async function onPopChange(open: boolean) {
   if (open) {
-    loading.value = true
-    try { await notify.fetchList(30) } finally { loading.value = false }
-  } else {
-    showRead.value = false // 关闭即重新收纳已读，下次打开只看未读
+    tab.value = 'unread'  // 每次打开默认回到未读 tab
+    await loadTab('unread') // 只拉未读，已读等切 tab 时再拉
   }
 }
 const readOne = (it: NotifyItem) => {
@@ -222,7 +230,8 @@ let stopWs: (() => void) | null = null
 const startWs = () => {
   stopWs = wsTopic('notify', () => {
     notify.fetchUnread()
-    if (popOpen.value) notify.fetchList(30)
+    // 弹窗开着时刷新当前 tab；未读 tab 才需要即时刷新（已读不会因推送变化）
+    if (popOpen.value && tab.value === 'unread') loadTab('unread')
   })
 }
 startWs()
@@ -248,6 +257,13 @@ onUnmounted(() => { stopWs?.(); window.clearInterval(timer); window.removeEventL
 .nb-head { display: flex; align-items: center; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid rgba(128,128,128,.2); }
 .nb-head b { margin-right: auto; font-size: 13.5px; }
 .nb-link { font-size: 12px; }
+.nb-tabs { display: flex; gap: 4px; margin-top: 8px; border-bottom: 1px solid rgba(128,128,128,.2); }
+.nb-tab { flex: 1; padding: 6px 0; border: none; background: transparent; cursor: pointer; font-size: 12.5px;
+  color: var(--color-slate); border-bottom: 2px solid transparent; transition: color var(--motion-fast), border-color var(--motion-fast); }
+.nb-tab:hover { color: var(--color-ink); }
+.nb-tab.on { color: var(--color-corporate-blue); border-bottom-color: var(--color-corporate-blue); font-weight: 600; }
+.nb-tab-n { display: inline-block; min-width: 16px; margin-left: 4px; padding: 0 4px; border-radius: 8px;
+  background: var(--color-corporate-blue); color: #fff; font-size: 10px; line-height: 16px; text-align: center; }
 .nb-list { max-height: 380px; overflow: auto; margin-top: 4px; }
 .nb-empty { text-align: center; color: var(--color-slate); padding: 28px 0; font-size: 12.5px; }
 .nb-item { display: flex; gap: 8px; padding: 8px 4px; border-bottom: 1px solid rgba(128,128,128,.12); cursor: pointer; }
@@ -263,8 +279,6 @@ onUnmounted(() => { stopWs?.(); window.clearInterval(timer); window.removeEventL
 .nb-type { font-size: 11px; color: var(--color-slate); background: rgba(128,128,128,.15); border-radius: 4px; padding: 0 5px; margin-right: 6px; }
 .nb-body { font-size: 12px; color: var(--color-slate); margin-top: 2px; word-break: break-all; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .nb-time { font-size: 11px; color: #aaa; margin-top: 2px; }
-.nb-fold { display: flex; align-items: center; justify-content: center; gap: 5px; padding: 7px 0 2px; font-size: 12px; color: var(--color-slate); cursor: pointer; user-select: none; }
-.nb-fold:hover { opacity: .7; }
 .bell-btn { padding: 0 8px; font-size: 15px; }
 .sub-list { border: 1px solid rgba(128,128,128,.2); border-radius: 8px; padding: 4px 12px; max-height: 300px; overflow: auto; }
 .sub-row { display: flex; align-items: center; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid rgba(128,128,128,.12); }
