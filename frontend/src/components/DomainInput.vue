@@ -1,9 +1,6 @@
 <template>
   <div class="domain-input">
     <div class="tag-row">
-      <a-tag v-for="(d, i) in modelValue" :key="d" color="blue" closable @close="removeAt(i)">
-        {{ d }}
-      </a-tag>
       <a-input
         ref="inputRef"
         v-model:value="text"
@@ -14,6 +11,9 @@
         @blur="commit"
         @paste="onPaste"
       />
+      <a-tag v-for="(d, i) in modelValue" :key="d" color="blue" closable @close="removeAt(i)">
+        {{ d }}
+      </a-tag>
     </div>
   </div>
 </template>
