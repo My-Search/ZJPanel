@@ -115,6 +115,22 @@ func migrateCredentialV2(db *gorm.DB, box *pkg.SecretBox, dataDir string) {
 		}
 	}
 
+	// 插件 password 类型设置项（webhooks.smtp_pass / notify-webhook.secret）
+	for _, ps := range []struct{ pluginID, key string }{
+		{"webhooks", "smtp_pass"},
+		{"notify-webhook", "secret"},
+	} {
+		var rec model.PluginSetting
+		if err := db.Where("plugin_id = ? AND key = ?", ps.pluginID, ps.key).First(&rec).Error; err == nil &&
+			rec.Value != "" && !strings.HasPrefix(rec.Value, "v2:") {
+			if enc, err2 := box.SealECtx(pkg.CtxPluginSetting(ps.pluginID, ps.key), rec.Value); err2 == nil {
+				if err3 := db.Model(&model.PluginSetting{}).Where("plugin_id = ? AND key = ?", ps.pluginID, ps.key).Update("value", enc).Error; err3 == nil {
+					migrated++
+				}
+			}
+		}
+	}
+
 	// mysqladmin 插件连接文件（JSON，Password 为密文）
 	migrated += migrateMySQLConns(dataDir, box)
 

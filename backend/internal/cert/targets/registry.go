@@ -14,6 +14,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	certdns "zjpanel/backend/internal/cert/dns"
+	"zjpanel/backend/internal/nginx"
 	"zjpanel/backend/internal/pkg"
 )
 
@@ -101,6 +102,9 @@ func RegisterBuiltins(r *TargetRegistry, cfg *pkg.Config, reloadFn func() (strin
 			}
 			if domain == "" {
 				return "", fmt.Errorf("无法确定目标域名")
+			}
+			if err := nginx.ValidateName(domain); err != nil {
+				return "", fmt.Errorf("目标域名非法: %w", err)
 			}
 			dir := filepath.Join(cfg.NginxPrefix, "ssl", domain)
 			if err := os.MkdirAll(dir, 0o755); err != nil {

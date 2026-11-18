@@ -244,7 +244,7 @@
 
     <!-- 容器日志 -->
     <a-modal v-model:open="logsOpen" :title="'日志 · ' + logsName" :footer="null" :width="860">
-      <pre class="runlog" style="color: #ddd">{{ logsText }}</pre>
+      <pre class="runlog">{{ logsText }}</pre>
     </a-modal>
 
     <!-- 容器终端 -->
@@ -731,8 +731,8 @@ onUnmounted(() => { clearInterval(timer); clearInterval(reqTimer); stopOutWatch(
 <style scoped>
 .toolbar { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
 .dim { color: var(--color-slate); font-size: 12px; }
-.proj-card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; margin-bottom: 10px; cursor: pointer; transition: all var(--motion-fast); }
-.proj-card.active { border-color: #1e40af; background: #eff6ff; }
+.proj-card { border: 1px solid var(--border-card); border-radius: 8px; padding: 12px; margin-bottom: 10px; cursor: pointer; transition: all var(--motion-fast); }
+.proj-card.active { border-color: var(--color-corporate-blue); background: var(--bg-selected); }
 /* 桌面端：左右两栏各自独立滚动（左列表/右详情最大高度 = 视口 - 页头/工具条占用） */
 @media (min-width: 768px) {
   .apps-layout { align-items: flex-start; }
@@ -765,10 +765,10 @@ onUnmounted(() => { clearInterval(timer); clearInterval(reqTimer); stopOutWatch(
 }
 .site-open svg { width: 1em; height: 1em; fill: currentColor; font-size: 12px; }
 .site-open:hover { color: var(--color-corporate-blue); background: rgba(59, 130, 246, .1); }
-.decl, .runlog { max-height: 440px; overflow: auto; background: #111; color: #0f0; padding: 12px; font-size: 12px; white-space: pre-wrap; }
-.dir-list { max-height: 300px; overflow: auto; border: 1px solid #e5e7eb; border-radius: 8px; }
-.dir-item { display: flex; align-items: center; padding: 9px 14px; cursor: pointer; border-bottom: 1px solid #f1f5f9; }
-.dir-item:hover { background: #eff6ff; }
+.decl, .runlog { max-height: 440px; overflow: auto; background: var(--surface-card); color: var(--color-ink); padding: 12px; font-size: 12px; white-space: pre-wrap; border: 1px solid var(--border-card); border-radius: 8px; font-family: ui-monospace, Consolas, monospace; }
+.dir-list { max-height: 300px; overflow: auto; border: 1px solid var(--border-card); border-radius: 8px; }
+.dir-item { display: flex; align-items: center; padding: 9px 14px; cursor: pointer; border-bottom: 1px solid var(--border-card); }
+.dir-item:hover { background: var(--bg-selected); }
 /* 移动端：项目列表压缩成横向滑动的卡片带，详情占满宽度（上下布局，不出横向溢出） */
 @media (max-width: 767px) {
   .apps-layout { display: block; }

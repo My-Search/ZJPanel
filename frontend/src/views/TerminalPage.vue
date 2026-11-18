@@ -147,21 +147,42 @@ const setTermBox = (id: string, el: any) => { if (el) termBoxes.set(id, el as HT
 const loadHosts = async () => { hosts.value = await get('/api/ssh/hosts') }
 
 // ===== 刷新恢复：快照 + 增量续传 =====
-// sessionStorage 按会话 ID 存 xterm 缓冲快照（含光标位置/颜色）与已消费偏移：
-// 刷新后先写快照、attach 带 since 增量续传，恢复画面与断开前一致，TUI 应用无感继续。
+// localStorage 按会话 ID 存 xterm 缓冲快照（含光标位置/颜色/时间戳）与已消费偏移：
+// 刷新/关闭标签后重新打开都能恢复画面与断开前一致，TUI 应用无感继续。
+// 相比 sessionStorage：关闭 tab 后打开新 tab 也能利用快照恢复，不再降级全量回放。
 const snapKey = (id: string) => `zj.term.snap.${id}`
 const readSnapshot = (id: string): { c: number; s: string } | null => {
   try {
-    const raw = sessionStorage.getItem(snapKey(id))
+    const raw = localStorage.getItem(snapKey(id))
     if (!raw) return null
     const o = JSON.parse(raw)
-    if (o && typeof o.c === 'number' && typeof o.s === 'string') return o
+    if (o && typeof o.c === 'number' && typeof o.s === 'string') {
+      // 快照超过 24 小时视为过期（后端会话大概率已不在）
+      if (o.t && Date.now() - o.t > 86400_000) {
+        localStorage.removeItem(snapKey(id))
+        return null
+      }
+      return o
+    }
   } catch { /* 快照损坏按无快照处理，走回退路径 */ }
   return null
 }
 const dropSnapshot = (id?: string | null) => {
   if (!id) return
-  try { sessionStorage.removeItem(snapKey(id)) } catch {}
+  try { localStorage.removeItem(snapKey(id)) } catch {}
+}
+// 启动时清理孤立快照：后端会话列表里没有的快照一律删除，防止 localStorage 堆积
+const cleanOrphanSnapshots = (activeSids: string[]) => {
+  try {
+    const prefix = 'zj.term.snap.'
+    const active = new Set(activeSids)
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i)
+      if (k && k.startsWith(prefix) && !active.has(k.slice(prefix.length))) {
+        localStorage.removeItem(k)
+      }
+    }
+  } catch {}
 }
 
 // 统一写入口：跟踪 xterm 异步写排空——快照必须等队列排空，否则会缺尾部字节
@@ -174,15 +195,23 @@ const tWrite = (t: Tab, data: string | Uint8Array) => {
   })
 }
 
+// 立即拍快照（同步）：供 beforeunload 等需要即时保存的场景
+const takeSnapshotNow = (t: Tab) => {
+  if (!t.serialize || !t.sessionId || t.closing || t.noRe) return
+  try {
+    localStorage.setItem(snapKey(t.sessionId), JSON.stringify({
+      c: t.consumed, s: t.serialize.serialize(), t: Date.now(),
+    }))
+  } catch { /* 配额满等：跳过 */ }
+}
+
 // 防抖拍快照：写队列排空后同步检查+序列化（JS 单线程内无写交错，快照与 consumed 严格对应）
 const scheduleSnapshot = (t: Tab) => {
   if (t.snapTimer || t.closing) return
   t.snapTimer = setTimeout(() => {
     t.snapTimer = null
-    if (!t.serialize || t.pendingWrites > 0 || !t.sessionId || t.closing || t.noRe) return
-    try {
-      sessionStorage.setItem(snapKey(t.sessionId), JSON.stringify({ c: t.consumed, s: t.serialize.serialize() }))
-    } catch { /* 配额满等：跳过本次，下次恢复走回退路径 */ }
+    if (t.pendingWrites > 0) return
+    takeSnapshotNow(t)
   }, 800)
 }
 
@@ -232,6 +261,14 @@ const dialWS = (t: Tab, createMsg: Record<string, any> | null) => {
     const since = t.consumed > 0 ? t.consumed : undefined
     sinceSent = since !== undefined
     ws.send(JSON.stringify(createMsg ?? { type: 'attach', sessionId: t.sessionId, since }))
+    // 恢复/重连后立即同步终端尺寸到服务端 PTY——
+    // 浏览器窗口可能在断线期间被调整过大小，PTY 仍保持旧尺寸导致 TUI 画面错乱
+    if (!createMsg && term) {
+      const { cols, rows } = term
+      if (cols > 0 && rows > 0) {
+        ws.send(JSON.stringify({ type: 'resize', cols, rows }))
+      }
+    }
   }
   ws.onmessage = (ev) => {
     if (ev.data instanceof ArrayBuffer) {
@@ -377,6 +414,8 @@ const closeTab = async (id: string | number, action: string) => {
 // 保存/恢复：刷新页面后从后端会话列表恢复标签（含断线重连中的会话）
 const restoreSessions = async () => {
   const list = await get<any[]>('/api/terminal/sessions')
+  // 清理 localStorage 中不再有对应后端会话的孤立快照
+  cleanOrphanSnapshots((list || []).map((s: any) => s.id))
   for (const s of list || []) {
     const t = addTab(s.label)
     t.sessionId = s.id // 关键：attach 必须带会话 ID——此前遗漏导致刷新恢复永远报「会话不存在」
@@ -469,16 +508,22 @@ const testHost = async (h: any) => {
 }
 
 onMounted(async () => {
+  window.addEventListener('beforeunload', beforeUnloadHandler)
   await loadHosts()
   await restoreSessions()
 })
 
 // 保活生命周期：终端 WS 会话保持不断（切走仍输出）；仅窗口 resize 监听随激活/停用增删，
 // 激活时重排尺寸（keep-alive 恢复时容器尺寸可能已变化）
+const beforeUnloadHandler = () => {
+  // 页面刷新/关闭前立即拍所有标签的快照（不走防抖），确保恢复时不丢最后一批内容
+  tabs.value.forEach(t => takeSnapshotNow(t))
+}
 onActivated(() => { window.addEventListener('resize', fitAll); fitAll() })
 onDeactivated(() => window.removeEventListener('resize', fitAll))
 onUnmounted(() => {
   window.removeEventListener('resize', fitAll)
+  window.removeEventListener('beforeunload', beforeUnloadHandler)
   tabs.value.forEach(t => {
     t.closing = true
     if (t.reconnTimer) clearTimeout(t.reconnTimer)
@@ -507,15 +552,13 @@ watch(() => ui.isDark, () => {
 .fm-divider { flex: none; width: 5px; cursor: col-resize; background: transparent; transition: background .15s; }
 .fm-divider:hover { background: rgba(22,119,255,.35); }
 .fm-side { flex: none; min-width: 0; display: flex; flex-direction: column; overflow: hidden;
-  border: 1px solid rgba(128,128,128,.25); border-radius: 6px; background: rgba(128,128,128,.04); }
+  border: 1px solid var(--border-card); border-radius: 6px; background: var(--surface-card); }
 @media (max-width: 900px) {
   /* 窄屏：文件面板改为全宽覆盖层 */
   .term-body { position: relative; }
   .fm-divider { display: none; }
   .fm-side { position: absolute; right: 0; top: 0; bottom: 0; z-index: 20; width: 100% !important; }
 }
-html[data-theme='light'] .fm-side { background: #fff; }
-html[data-theme='dark'] .fm-side { background: #141414; }
 .term-tabs { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .term-tabs :deep(.ant-tabs-nav) { margin-bottom: 8px; }
 .term-tabs :deep(.ant-tabs-content-holder) { flex: 1; min-height: 0; overflow: hidden; }

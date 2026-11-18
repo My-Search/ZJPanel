@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -18,6 +19,8 @@ import (
 	"zjpanel/backend/internal/buildinfo"
 	"zjpanel/backend/internal/pkg"
 )
+
+var versionTagRE = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$`)
 
 // Service 版本检查与一键更新：
 // 检查 = 拉取版本清单（GitHub releases/latest 或自定义 {version,url} JSON），semver 对比；
@@ -69,6 +72,7 @@ type releaseInfo struct {
 	Tag         string // GitHub tag（如 v0.1.8.1）；自定义清单为空
 	Version     string // 语义化版本（去 v 前缀）
 	DownloadURL string // 自定义清单提供的直链（GitHub 路径时为空，按 tag 拼接）
+	SHA256      string // 当前平台二进制的期望 SHA-256（GitHub Release assets.digest 或自定义 sha256 字段）
 	Notes       string
 }
 
@@ -84,23 +88,53 @@ func (s *Service) fetchRelease() (*releaseInfo, error) {
 		return nil, fmt.Errorf("版本清单拉取失败: HTTP %d", resp.StatusCode)
 	}
 	var raw map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&raw); err != nil {
 		return nil, err
 	}
 	info := &releaseInfo{}
 	if tn, ok := raw["tag_name"].(string); ok && tn != "" {
 		// GitHub releases/latest
+		if !versionTagRE.MatchString(tn) || strings.Contains(tn, "..") {
+			return nil, fmt.Errorf("版本清单 tag_name 非法: %q", tn)
+		}
 		info.Tag = tn
 		info.Version = strings.TrimPrefix(tn, "v")
 		info.Notes, _ = raw["html_url"].(string)
+		info.SHA256 = extractAssetSHA256(raw["assets"], assetName())
 	} else if v, ok := raw["version"].(string); ok && v != "" {
+		if !versionTagRE.MatchString(v) || strings.Contains(v, "..") {
+			return nil, fmt.Errorf("版本清单 version 非法: %q", v)
+		}
 		info.Version = strings.TrimPrefix(v, "v")
 		info.DownloadURL, _ = raw["downloadUrl"].(string)
+		info.SHA256, _ = raw["sha256"].(string)
 		info.Notes, _ = raw["notes"].(string)
 	} else {
 		return nil, fmt.Errorf("版本清单格式无法识别")
 	}
 	return info, nil
+}
+
+// extractAssetSHA256 从 GitHub Release assets 列表中提取目标文件的 digest（格式 "sha256:<hex>"）。
+func extractAssetSHA256(assetsAny any, targetName string) string {
+	assets, ok := assetsAny.([]any)
+	if !ok {
+		return ""
+	}
+	for _, item := range assets {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := m["name"].(string)
+		if name != targetName {
+			continue
+		}
+		if d, _ := m["digest"].(string); strings.HasPrefix(strings.ToLower(d), "sha256:") {
+			return strings.TrimSpace(d[7:])
+		}
+	}
+	return ""
 }
 
 func (s *Service) Check() (map[string]any, error) {
@@ -183,11 +217,12 @@ func (s *Service) Apply() (string, error) {
 	}
 
 	url := info.DownloadURL
+	var repo string
 	if url == "" {
 		if info.Tag == "" {
 			return "", fmt.Errorf("版本清单未提供下载地址，无法自更新；请在宿主机执行 ./update.sh")
 		}
-		repo := githubRepo(s.cfg.UpdateURL)
+		repo = githubRepo(s.cfg.UpdateURL)
 		if repo == "" {
 			return "", fmt.Errorf("无法从更新清单 URL 识别 GitHub 仓库（%s）", s.cfg.UpdateURL)
 		}
@@ -199,6 +234,19 @@ func (s *Service) Apply() (string, error) {
 	}
 	if err := validateBinary(data); err != nil {
 		return "", err
+	}
+	expectedHash := strings.ToLower(strings.TrimSpace(info.SHA256))
+	if expectedHash == "" && repo != "" && info.Tag != "" {
+		sumsURL := fmt.Sprintf("https://github.com/%s/releases/download/%s/SHA256SUMS", repo, info.Tag)
+		if sumsData, serr := download(sumsURL); serr == nil {
+			expectedHash = parseSHA256Sums(string(sumsData), assetName())
+		}
+	}
+	if expectedHash != "" {
+		gotHash := strings.ToLower(pkg.SHA256Hex(string(data)))
+		if gotHash != expectedHash {
+			return "", fmt.Errorf("二进制 SHA-256 校验失败（期望 %s，实际 %s），已拒绝更新以防篡改", expectedHash, gotHash)
+		}
 	}
 	execPath, err := replaceSelf(data)
 	if err != nil {
@@ -278,6 +326,20 @@ func validateBinary(data []byte) error {
 		return nil // ELF（linux/darwin）或 PE（windows）
 	}
 	return fmt.Errorf("下载内容不是有效的可执行文件（缺少 ELF/PE 头）")
+}
+
+// parseSHA256Sums 从 SHA256SUMS 内容中提取指定资产的 64 位 hex 校验和。
+func parseSHA256Sums(sumsContent, targetName string) string {
+	for _, line := range strings.Split(sumsContent, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) >= 2 {
+			name := strings.TrimPrefix(fields[1], "*")
+			if filepath.Base(name) == targetName && len(fields[0]) == 64 {
+				return strings.ToLower(fields[0])
+			}
+		}
+	}
+	return ""
 }
 
 // replaceSelf 原子替换当前可执行文件（参考 octopus）：旧文件改名 .old → 新文件写入原路径，失败回滚。

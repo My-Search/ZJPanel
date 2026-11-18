@@ -80,6 +80,11 @@ const (
 	CtxMySQLConnPwd  = "mysqladmin.connection.password"
 )
 
+// CtxPluginSetting 插件 password 类型设置项的 AAD 上下文。
+func CtxPluginSetting(pluginID, key string) string {
+	return "plugin_settings." + pluginID + "." + key
+}
+
 // AesGCMEncryptAAD v2 格式："v2:" + base64(nonce‖ct)，AAD 绑定字段上下文，
 // 密文不可跨字段/跨用途互换而不被发现。AAD = "zjpanel:" + ctx。
 func AesGCMEncryptAAD(key []byte, ctx, plain string) (string, error) {

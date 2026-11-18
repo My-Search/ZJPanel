@@ -3,6 +3,7 @@ package site
 import (
 	_ "embed"
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,9 +65,9 @@ func RenderMaintenance(cfg *pkg.Config, siteOverride, domain, message string) st
 		msg = "站点正在维护，请稍后访问"
 	}
 	r := strings.NewReplacer(
-		"{{domain}}", domain,
+		"{{domain}}", html.EscapeString(domain),
 		"{{time}}", time.Now().Format("2006-01-02 15:04:05"),
-		"{{message}}", msg,
+		"{{message}}", html.EscapeString(msg),
 	)
 	return r.Replace(tpl)
 }

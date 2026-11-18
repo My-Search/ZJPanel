@@ -1,10 +1,11 @@
 <template>
+  <a-spin :spinning="loading">
   <div class="dash">
     <a-row :gutter="24">
       <a-col :span="6">
         <a-card size="small" class="stat-card">
           <div class="stat-top" :title="`CPU ${(snap.cpu ?? 0).toFixed(1)}%`">
-            <div class="vbar"><div class="vfill" :class="level(snap.cpu)" :style="{ height: (snap.cpu ?? 0) + '%' }"></div></div>
+            <div class="vbar" role="meter" :aria-valuenow="Math.round(snap.cpu ?? 0)" aria-valuemin="0" aria-valuemax="100" :aria-label="`CPU 占用 ${Math.round(snap.cpu ?? 0)}%`"><div class="vfill" :class="level(snap.cpu)" :style="{ height: (snap.cpu ?? 0) + '%' }"></div></div>
             <div>
               <div class="stat-label">CPU占用</div>
               <div class="stat-value" :class="level(snap.cpu)">{{ Math.round(snap.cpu ?? 0) }}<span class="unit">%</span></div>
@@ -16,7 +17,7 @@
       <a-col :span="6">
         <a-card size="small" class="stat-card">
           <div class="stat-top" :title="`内存 ${(snap.memPct ?? 0).toFixed(1)}% ${snap.memTxt || ''}`">
-            <div class="vbar"><div class="vfill" :class="level(snap.memPct)" :style="{ height: (snap.memPct ?? 0) + '%' }"></div></div>
+            <div class="vbar" role="meter" :aria-valuenow="Math.round(snap.memPct ?? 0)" aria-valuemin="0" aria-valuemax="100" :aria-label="`内存占用 ${Math.round(snap.memPct ?? 0)}%`"><div class="vfill" :class="level(snap.memPct)" :style="{ height: (snap.memPct ?? 0) + '%' }"></div></div>
             <div>
               <div class="stat-label">系统内存占用</div>
               <div class="stat-value" :class="level(snap.memPct)">{{ Math.round(snap.memPct ?? 0) }}<span class="unit">%</span></div>
@@ -40,7 +41,7 @@
       <a-col :span="6">
         <a-card size="small" class="stat-card">
           <div class="stat-top" :title="disksSummary">
-            <div class="vbar"><div class="vfill" :class="level(mainDiskPct)" :style="{ height: mainDiskPct + '%' }"></div></div>
+            <div class="vbar" role="meter" :aria-valuenow="Math.round(mainDiskPct)" aria-valuemin="0" aria-valuemax="100" :aria-label="`磁盘占用 ${Math.round(mainDiskPct)}%`"><div class="vfill" :class="level(mainDiskPct)" :style="{ height: mainDiskPct + '%' }"></div></div>
             <div>
               <div class="stat-label">磁盘占用</div>
               <div class="stat-value" :class="level(mainDiskPct)">{{ Math.round(mainDiskPct) }}<span class="unit">%</span></div>
@@ -87,23 +88,26 @@
       </a-col>
       <a-col :span="10">
         <a-card title="系统信息" size="small" class="sys-card">
-          <p><b>主机名：</b>{{ snap.hostname || '-' }}</p>
-          <p><b>系统：</b>{{ snap.os || '-' }}</p>
-          <p><b>负载：</b>{{ snap.load1?.toFixed(2) }} / {{ snap.load5?.toFixed(2) }} / {{ snap.load15?.toFixed(2) }}</p>
-          <p><b>磁盘：</b>{{ disksSummary || '-' }}</p>
-          <p><b>运行时间：</b>{{ uptimeText }}</p>
-          <p><b>面板版本：</b>{{ version }}</p>
+          <a-descriptions :column="1" size="small">
+            <a-descriptions-item label="主机名">{{ snap.hostname || '-' }}</a-descriptions-item>
+            <a-descriptions-item label="系统">{{ snap.os || '-' }}</a-descriptions-item>
+            <a-descriptions-item label="负载">{{ snap.load1?.toFixed(2) }} / {{ snap.load5?.toFixed(2) }} / {{ snap.load15?.toFixed(2) }}</a-descriptions-item>
+            <a-descriptions-item label="磁盘">{{ disksSummary || '-' }}</a-descriptions-item>
+            <a-descriptions-item label="运行时间">{{ uptimeText }}</a-descriptions-item>
+            <a-descriptions-item label="面板版本">{{ version }}</a-descriptions-item>
+          </a-descriptions>
         </a-card>
         <a-card title="快捷入口" size="small" class="quick-card">
           <a-space direction="vertical">
-            <router-link to="/compose">从 docker-compose 目录导入网站 →</router-link>
-            <router-link to="/certs">申请/管理证书（自动续期）→</router-link>
-            <router-link to="/map">查看请求地图流向 →</router-link>
+            <router-link to="/compose"><ClusterOutlined /> 从 docker-compose 目录导入网站 →</router-link>
+            <router-link to="/certs"><SafetyCertificateOutlined /> 申请/管理证书（自动续期）→</router-link>
+            <router-link to="/map"><GlobalOutlined /> 查看请求地图流向 →</router-link>
           </a-space>
         </a-card>
       </a-col>
     </a-row>
   </div>
+  </a-spin>
 </template>
 
 <script setup lang="ts">
@@ -111,11 +115,13 @@ import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref } fro
 import { get, wsTopic, fmtBytes } from '../api'
 import { sortSites } from '../utils/siteOrder'
 import RequestMap from '../components/RequestMap.vue'
+import { ClusterOutlined, SafetyCertificateOutlined, GlobalOutlined } from '@ant-design/icons-vue'
 
 const snap = ref<any>({})
 const sites = ref<any[]>([])
 const nginxRunning = ref(false)
 const version = ref('')
+const loading = ref(true)
 let stopWs: (() => void) | null = null
 let timer: any = null
 
@@ -168,6 +174,7 @@ const loadAll = async () => {
     nginxRunning.value = (await get<any>('/api/nginx/status')).running
     version.value = (await get<any>('/api/update/current')).version
   } catch { /* 拦截器统一提示，保留上次数据 */ }
+  loading.value = false
 }
 
 onMounted(async () => {
@@ -214,6 +221,7 @@ onUnmounted(() => { stopWs?.(); clearInterval(timer) })
   margin-top: 2px; font-size: 28px; font-weight: 700; line-height: 1.15;
   letter-spacing: -.5px; color: #0f172a; user-select: none;
 }
+.stat-value.warn { color: #f59e0b; }
 .stat-value.high { color: #ef4444; }
 .stat-value .unit { font-size: 13px; font-weight: 600; letter-spacing: 0; opacity: .55; margin-left: 3px; }
 .stat-sub { margin-top: 6px; padding-left: 16px; color: #64748b; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

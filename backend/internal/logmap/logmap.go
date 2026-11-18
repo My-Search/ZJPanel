@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -14,8 +16,12 @@ import (
 	"sync"
 	"time"
 
+	maxminddb "github.com/oschwald/maxminddb-golang"
+
 	"zjpanel/backend/internal/pkg"
 )
+
+const maxMMDBBytes = 128 << 20 // GeoIP mmdb 最大允许 128MB
 
 // Service 请求地图：增量解析 nginx access log（zjp 格式，兼容 combined），
 // GeoIP 聚合国家/站点维度，环形窗口保存最近请求，SSE 逐条推送实时请求流。
@@ -419,25 +425,75 @@ func (s *Service) GeoIPInfo() map[string]any {
 	}
 }
 
-// SaveMMDB 保存上传的 mmdb 并重载。
+// SaveMMDB 校验上传的 mmdb 格式有效后保存并重载。
 func (s *Service) SaveMMDB(data []byte) error {
+	if int64(len(data)) > maxMMDBBytes {
+		return fmt.Errorf("GeoIP 文件过大（上限 128MB）")
+	}
 	_ = os.MkdirAll(filepath.Dir(s.geo.Path()), 0o755)
-	if err := os.WriteFile(s.geo.Path(), data, 0o644); err != nil {
+	tmp := s.geo.Path() + ".upload.tmp"
+	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+		return err
+	}
+	if err := validateMMDBFile(tmp); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, s.geo.Path()); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	s.geo.Reload()
 	return nil
 }
 
+func validateMMDBFile(p string) error {
+	db, err := maxminddb.Open(p)
+	if err != nil {
+		return fmt.Errorf("无效的 MaxMind mmdb 文件: %w", err)
+	}
+	_ = db.Close()
+	return nil
+}
+
+// validateDownloadURL 校验 GeoIP 下载地址（仅允许 HTTPS 公网地址，防 SSRF 探测内网/元数据服务）。
+func validateDownloadURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil || !strings.EqualFold(u.Scheme, "https") || u.Hostname() == "" {
+		return fmt.Errorf("仅允许 https:// 公网下载地址")
+	}
+	ips, err := net.LookupIP(u.Hostname())
+	if err != nil || len(ips) == 0 {
+		return fmt.Errorf("无法解析下载域名: %s", u.Hostname())
+	}
+	for _, ip := range ips {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+			return fmt.Errorf("禁止从内网或本机地址下载: %s", ip.String())
+		}
+	}
+	return nil
+}
+
 // DownloadMMDB 自动下载 GeoLite2-City（公开镜像，可关）。City 库为 Country 超集，
 // 含经纬度（请求地图「请求方→服务器」真实流向依赖），Country 库无 location 字段。
-func (s *Service) DownloadMMDB(url string) error {
-	if url == "" {
+func (s *Service) DownloadMMDB(rawURL string) error {
+	if rawURL == "" {
 		// P3TERX/GeoLite.mmdb 公开镜像（jsdelivr 旧地址已失效，改用 raw.githubusercontent 稳定分支）
-		url = "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-City.mmdb"
+		rawURL = "https://raw.githubusercontent.com/P3TERX/GeoLite.mmdb/download/GeoLite2-City.mmdb"
 	}
-	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Get(url)
+	if err := validateDownloadURL(rawURL); err != nil {
+		return err
+	}
+	client := &http.Client{
+		Timeout: 120 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("重定向次数过多")
+			}
+			return validateDownloadURL(req.URL.String())
+		},
+	}
+	resp, err := client.Get(rawURL)
 	if err != nil {
 		return err
 	}
@@ -451,13 +507,22 @@ func (s *Service) DownloadMMDB(url string) error {
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(f, resp.Body)
+	n, err := io.Copy(f, io.LimitReader(resp.Body, maxMMDBBytes+1))
 	_ = f.Close()
 	if err != nil {
 		_ = os.Remove(tmp)
 		return err
 	}
+	if n > maxMMDBBytes {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("下载文件超出 128MB 限制")
+	}
+	if err := validateMMDBFile(tmp); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
 	if err := os.Rename(tmp, s.geo.Path()); err != nil {
+		_ = os.Remove(tmp)
 		return err
 	}
 	s.geo.Reload()

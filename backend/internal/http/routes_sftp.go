@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"io"
+	"mime"
 	"net/http"
 	"path"
 
@@ -197,7 +198,7 @@ func (s *Server) registerSftpRoutes() {
 				return
 			}
 			name := path.Base(p)
-			c.Header("Content-Disposition", `attachment; filename="`+name+`"`)
+			c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 			http.ServeContent(c.Writer, c.Request, name, st.ModTime(), f)
 			return
 		}

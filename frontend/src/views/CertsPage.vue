@@ -555,6 +555,5 @@ onUnmounted(() => { stopRunWs?.(); stopRunPoll() })
 .provider-name { font-size: 11px; color: var(--color-slate); }
 .target-card { border: 1px dashed var(--border-input); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
 .target-head { display: flex; justify-content: space-between; margin-bottom: 10px; }
-.runlog { max-height: 420px; overflow: auto; background: var(--surface-canvas); color: var(--color-ink); padding: 12px; font-size: 12px; white-space: pre-wrap; }
-html[data-theme='dark'] .runlog { background: #111; color: #0f0; }
+.runlog { max-height: 420px; overflow: auto; background: var(--surface-canvas); color: var(--color-ink); padding: 12px; font-size: 12px; white-space: pre-wrap; border: 1px solid var(--border-card); border-radius: 8px; font-family: ui-monospace, Consolas, monospace; }
 </style>

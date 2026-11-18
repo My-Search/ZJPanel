@@ -1,4 +1,5 @@
 <template>
+  <a-spin :spinning="loading">
   <a-card size="small">
     <a-tabs>
       <a-tab-pane key="general" tab="常规">
@@ -42,7 +43,7 @@
       </a-tab-pane>
 
       <a-tab-pane key="maintenance" tab="全局维护页模板">
-        <div style="height: 360px; border: 1px solid #eee">
+        <div style="height: 360px; border: 1px solid var(--border-card)">
           <AceEditor v-model="maintTemplate" mode="html" />
         </div>
         <a-button type="primary" style="margin-top: 10px" @click="saveMaint">保存模板</a-button>
@@ -74,6 +75,7 @@
       </a-tab-pane>
     </a-tabs>
   </a-card>
+  </a-spin>
 </template>
 
 <script setup lang="ts">
@@ -109,12 +111,17 @@ const auditCols: any[] = [
   { title: 'IP', dataIndex: 'ip', key: 'ip', width: 130 },
 ]
 
+const loading = ref(false)
+
 const load = async () => {
-  settings.value = await get('/api/settings')
-  version.value = (await get<any>('/api/update/current')).version
-  audit.value = await get('/api/settings/audit')
-  const d = await get('/api/sites/maintenance-template').catch(() => null)
-  if (d) maintTemplate.value = d.content
+  loading.value = true
+  try {
+    settings.value = await get('/api/settings')
+    version.value = (await get<any>('/api/update/current')).version
+    audit.value = await get('/api/settings/audit')
+    const d = await get('/api/sites/maintenance-template').catch(() => null)
+    if (d) maintTemplate.value = d.content
+  } finally { loading.value = false }
 }
 const checkUpdate = async () => {
   checking.value = true

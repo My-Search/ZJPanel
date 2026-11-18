@@ -281,6 +281,9 @@ var imageLineRE = regexp.MustCompile(`(?m)^([ \t]*image:[ \t]*)([^\s#]+)`)
 // rewriteComposeImage 把 compose 中本面板的 image 行改成 newImage，保留文件权限并留 .bak。
 // 按 repo 精确匹配镜像行，避免多 service 的 compose 改错行。
 func rewriteComposeImage(file, repo, newImage string) error {
+	if newImage == "" || strings.ContainsAny(newImage, " \t\r\n\"'#;\\") {
+		return fmt.Errorf("目标镜像引用含非法字符: %q", newImage)
+	}
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return fmt.Errorf("读取 compose 文件失败: %w", err)

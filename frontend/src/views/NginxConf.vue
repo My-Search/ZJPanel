@@ -140,7 +140,7 @@ onActivated(loadPage)
 <style scoped>
 .dim { color: var(--color-slate); font-size: 12px; }
 .tree-col { max-height: 620px; overflow: auto; }
-.editor-wrap { height: 620px; border: 1px solid #eee; }
+.editor-wrap { height: 620px; border: 1px solid var(--border-card); border-radius: var(--radius-inputs); }
 .editor-empty { height: 100%; display: flex; flex-direction: column; justify-content: center; }
 @media (max-width: 767px) {
   .tree-col { max-height: 300px; }

@@ -194,7 +194,13 @@ func Run() {
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	slog.Info("ZJPanel 启动完成", "addr", addr, "data", cfg.DataDir, "version", update.CurrentVersion())
-	if err := nethttp.ListenAndServe(addr, srv.Engine()); err != nil {
+	httpSrv := &nethttp.Server{
+		Addr:              addr,
+		Handler:           srv.Engine(),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	if err := httpSrv.ListenAndServe(); err != nil {
 		slog.Error("HTTP 服务退出", "err", err)
 	}
 }

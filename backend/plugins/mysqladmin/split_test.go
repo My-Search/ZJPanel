@@ -59,3 +59,19 @@ CREATE TABLE ` + "`t`" + ` (
 		t.Errorf("第 3 条应为 CREATE TABLE: %q", got[2])
 	}
 }
+
+func TestMySQLDSNAndValidation(t *testing.T) {
+	if err := validHostPort("127.0.0.1", "3306"); err != nil {
+		t.Errorf("合法主机端口应通过: %v", err)
+	}
+	if err := validHostPort("127.0.0.1", "3306)/mysql?allowAllFiles=true"); err == nil {
+		t.Error("注入端口参数应被拒绝")
+	}
+	if err := validHostPort("evil.com/mysql?allowAllFiles=true", "3306"); err == nil {
+		t.Error("注入主机参数应被拒绝")
+	}
+	dsn := buildMySQLDSN(&Connection{Host: "127.0.0.1", Port: "3306", User: "root"}, "test", "p@ss/word?allowAllFiles=true", 0, 0)
+	if strings.Contains(dsn, "allowAllFiles=true&") || !strings.Contains(dsn, "@tcp(127.0.0.1:3306)/test?") {
+		t.Errorf("DSN 构造不安全: %s", dsn)
+	}
+}

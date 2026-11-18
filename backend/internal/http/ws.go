@@ -17,12 +17,14 @@ import (
 	"zjpanel/backend/internal/terminal"
 )
 
-// wsAccept 统一 WS 升级入口：放开 Origin 严格校验（coder/websocket v1.8.13+ 默认拒绝跨源）。
-// 面板常部署在 vite dev 代理 / nginx 反代之后，Host 会被改写、Origin 保持前端地址，
-// 默认校验会把合法连接一律 403。安全上不受影响：会话 Cookie 为 SameSite=Lax，
-// 跨站发起的 WS 握手不会携带会话，鉴权（auth.Require）仍是硬门槛。
+// wsAccept 统一 WS 升级入口：校验 Origin 与当前请求 Host 同源（兼容本地 vite :5173 开发代理），
+// 阻断同 IP 不同端口或同父域兄弟子域利用 SameSite=Lax 发起的跨源 WebSocket 劫持（CSWSH）。
 func wsAccept(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {
-	return websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
+	if !isSameOrigin(r) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return nil, fmt.Errorf("forbidden origin: %s", r.Header.Get("Origin"))
+	}
+	return websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
 }
 
 // ===================== Hub 主题订阅（metrics/sitecheck/logmap/cert-run/docker-pull） =====================

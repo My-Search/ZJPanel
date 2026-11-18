@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,22 +32,47 @@ type Auth struct {
 	pwFP func(uid uint) (string, bool)
 }
 
-const CookieName = "zjp_session"
+const (
+	CookieName  = "zjp_session"
+	maxSessions = 1024
+)
 
 // NewAuth pwFP 为密码指纹回查函数（绑定当前凭据）。
 func NewAuth(pwFP func(uid uint) (string, bool)) *Auth {
 	return &Auth{sessions: map[string]*session{}, pwFP: pwFP}
 }
 
+func isHTTPS(c *gin.Context) bool {
+	return c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https")
+}
+
 // Login 签发会话：记录当前密码哈希指纹。
 func (a *Auth) Login(c *gin.Context, uid uint, username, pwHash string) {
 	token := pkg.RandomHex(32)
+	now := time.Now()
 	a.mu.Lock()
+	if len(a.sessions) >= maxSessions {
+		var oldestKey string
+		var oldestExp time.Time
+		for k, s := range a.sessions {
+			if now.After(s.Expires) {
+				delete(a.sessions, k)
+				continue
+			}
+			if oldestKey == "" || s.Expires.Before(oldestExp) {
+				oldestKey, oldestExp = k, s.Expires
+			}
+		}
+		if len(a.sessions) >= maxSessions && oldestKey != "" {
+			delete(a.sessions, oldestKey)
+		}
+	}
 	a.sessions[token] = &session{UserID: uid, Username: username,
-		PwFP: pkg.PwFingerprint(pwHash), Expires: time.Now().Add(24 * time.Hour)}
+		PwFP: pkg.PwFingerprint(pwHash), Expires: now.Add(24 * time.Hour)}
 	a.mu.Unlock()
 	http.SetCookie(c.Writer, &http.Cookie{
-		Name: CookieName, Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		Name: CookieName, Value: token, Path: "/", HttpOnly: true,
+		Secure: isHTTPS(c), SameSite: http.SameSiteLaxMode,
 		MaxAge: 86400,
 	})
 }

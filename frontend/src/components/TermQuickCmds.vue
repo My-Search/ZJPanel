@@ -153,7 +153,7 @@ const delCmd = async (q: QuickCmd) => {
 .qc-bar { flex: none; display: flex; align-items: flex-start; gap: 8px; margin-bottom: 8px; }
 /* 不撑满整行：管理按钮紧跟最后一个 chip；chip 多时在剩余宽度内换行 */
 .qc-chips { min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; }
-.qc-chip { border: 1px solid rgba(0,0,0,.14); border-radius: 12px; padding: 1px 10px; font-size: 12px; line-height: 20px; cursor: pointer; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: rgba(0,0,0,.75); }
+.qc-chip { border: 1px solid var(--border-input); border-radius: 12px; padding: 1px 10px; font-size: 12px; line-height: 20px; cursor: pointer; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-ink); }
 .qc-chip:disabled { cursor: not-allowed; opacity: .45; }
 .qc-chip:not(:disabled):hover { box-shadow: 0 1px 4px rgba(0,0,0,.2); }
 html[data-theme='dark'] .qc-chip:not(:disabled):hover { box-shadow: 0 1px 4px rgba(0,0,0,.6); }
@@ -164,9 +164,9 @@ html[data-theme='dark'] .qc-add { background: rgba(255,255,255,.06); color: rgba
 .qc-hint { margin-left: 10px; font-size: 12px; color: var(--color-slate); }
 .qc-manage { flex: none; }
 .qc-cmd { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; }
-.qc-dot { display: inline-block; width: 16px; height: 16px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15); }
+.qc-dot { display: inline-block; width: 16px; height: 16px; border-radius: 4px; border: 1px solid var(--border-input); }
 .qc-pick { cursor: pointer; }
 .qc-pick.active { outline: 2px solid var(--color-action-blue); outline-offset: 2px; }
-.qc-none { width: auto; padding: 0 6px; font-size: 11px; line-height: 14px; display: inline-flex; align-items: center; color: #666; }
+.qc-none { width: auto; padding: 0 6px; font-size: 11px; line-height: 14px; display: inline-flex; align-items: center; color: var(--color-slate); }
 .qc-swatches { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 </style>

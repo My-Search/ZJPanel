@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,32 +18,43 @@ import (
 	"zjpanel/backend/internal/model"
 	"zjpanel/backend/internal/notify"
 	"zjpanel/backend/internal/pkg"
+	"zjpanel/backend/internal/plugin"
 	sitePkg "zjpanel/backend/internal/site"
 	"zjpanel/backend/internal/update"
 	sdk "zjpanel/backend/sdk/plugin"
 )
+
+const pluginPasswordMask = "********"
 
 // ===================== MCP（聚合端点 + API Key 管理） =====================
 
 func (s *Server) registerMCPRoutes() {
 	// /mcp：唯一对外 MCP 端点（API Key 鉴权；核心工具 + 插件工具聚合）
 	mcpAuth := func(c *gin.Context) {
+		rateKey := "mcp:" + c.ClientIP()
+		if !loginAllow(rateKey) {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "尝试过于频繁，请稍后再试"})
+			c.Abort()
+			return
+		}
 		key := mcp.ValidateKey(c.Request)
 		if key == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "缺少 API Key（X-Api-Key 或 Authorization: Bearer）"})
 			c.Abort()
 			return
 		}
+		keyHash := pkg.SHA256Hex(key)
 		var keys []model.ApiKey
 		s.db.Find(&keys)
 		for _, k := range keys {
-			if pkg.SHA256Hex(key) == k.Hash {
+			if subtle.ConstantTimeCompare([]byte(keyHash), []byte(k.Hash)) == 1 {
 				now := pkg.Now()
 				s.db.Model(&k).Update("last_used_at", &now)
 				c.Next()
 				return
 			}
 		}
+		loginRecordFail(rateKey)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "API Key 无效"})
 		c.Abort()
 	}
@@ -122,9 +134,10 @@ func (s *Server) registerPluginRoutes() {
 		c.JSON(http.StatusOK, s.Plugins.List())
 	})
 	g.POST("/install", func(c *gin.Context) {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 32<<20)
 		fh, err := c.FormFile("file")
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 zip 文件"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少 zip 文件或文件过大（上限 32MB）"})
 			return
 		}
 		f, err := fh.Open()
@@ -133,9 +146,9 @@ func (s *Server) registerPluginRoutes() {
 			return
 		}
 		defer f.Close()
-		data, err := io.ReadAll(f)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		data, err := io.ReadAll(io.LimitReader(f, (32<<20)+1))
+		if err != nil || len(data) > 32<<20 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "读取 zip 文件失败或超出 32MB 限制"})
 			return
 		}
 		id, err := s.Plugins.InstallZip(data)
@@ -175,8 +188,11 @@ func (s *Server) registerPluginRoutes() {
 	})
 	g.GET("/:id/settings", func(c *gin.Context) {
 		id := c.Param("id")
-		// 直接返回 sdk.SettingDef（自带小写 json tag）；旧匿名结构体无 tag，
-		// 序列化成 Key/Title 大写字段导致前端表单无标签无帮助文案
+		if !plugin.ValidID(id) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "非法插件 ID"})
+			return
+		}
+		// 直接返回 sdk.SettingDef（自带小写 json tag）；password 类型仅返回掩码占位，不明文回显
 		defs := []sdk.SettingDef{}
 		values := map[string]string{}
 		for _, p := range s.Plugins.List() {
@@ -184,11 +200,14 @@ func (s *Server) registerPluginRoutes() {
 				continue
 			}
 			for _, sd := range p.Settings {
-				// 直接返回 sdk.SettingDef（自带小写 json tag），匿名结构体曾导致前端拿到 Title/Help 大写字段、表单无标签
 				defs = append(defs, sd)
 				var rec model.PluginSetting
 				if err := s.db.Where("plugin_id = ? AND key = ?", id, sd.Key).First(&rec).Error; err == nil {
-					values[sd.Key] = rec.Value
+					if sd.Type == "password" && rec.Value != "" {
+						values[sd.Key] = pluginPasswordMask
+					} else {
+						values[sd.Key] = rec.Value
+					}
 				} else if sd.Default != "" {
 					values[sd.Key] = sd.Default
 				}
@@ -196,14 +215,36 @@ func (s *Server) registerPluginRoutes() {
 		}
 		c.JSON(http.StatusOK, gin.H{"settings": defs, "values": values})
 	})
-	g.PUT("/:id/settings", func(c *gin.Context) {
+	savePluginSettings := func(c *gin.Context) {
 		id := c.Param("id")
+		if !plugin.ValidID(id) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "非法插件 ID"})
+			return
+		}
 		var req map[string]string
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		pwdKeys := map[string]bool{}
+		for _, p := range s.Plugins.List() {
+			if p.ID == id {
+				for _, sd := range p.Settings {
+					if sd.Type == "password" {
+						pwdKeys[sd.Key] = true
+					}
+				}
+			}
+		}
 		for k, v := range req {
+			if pwdKeys[k] {
+				if v == pluginPasswordMask {
+					continue // 未修改密码：保留既有密文
+				}
+				if v != "" && s.box != nil {
+					v = s.box.SealCtx(pkg.CtxPluginSetting(id, k), v)
+				}
+			}
 			var rec model.PluginSetting
 			if err := s.db.Where("plugin_id = ? AND key = ?", id, k).First(&rec).Error; err != nil {
 				s.db.Create(&model.PluginSetting{PluginID: id, Key: k, Value: v})
@@ -216,7 +257,9 @@ func (s *Server) registerPluginRoutes() {
 		_ = s.Plugins.Enable(id)
 		s.audit(c, "plugin.settings", id)
 		c.JSON(http.StatusOK, gin.H{"ok": true})
-	})
+	}
+	g.PUT("/:id/settings", savePluginSettings)
+	g.POST("/:id/settings", savePluginSettings)
 
 	// 插件 API 动态派发
 	s.r.Any("/api/plugin/:id/*path", s.auth.Require(), func(c *gin.Context) {

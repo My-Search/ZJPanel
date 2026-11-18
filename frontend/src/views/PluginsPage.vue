@@ -10,7 +10,8 @@
       <a-button @click="load">刷新</a-button>
     </a-space>
 
-    <a-row :gutter="12">
+    <a-spin :spinning="loading">
+    <a-row :gutter="[12, 12]">
       <a-col v-for="p in plugins" :key="p.id" :span="8" style="margin-bottom: 12px">
         <a-card size="small" :title="p.name">
           <template #extra>
@@ -29,6 +30,7 @@
         </a-card>
       </a-col>
     </a-row>
+    </a-spin>
 
     <a-modal v-model:open="settingsOpen" :title="'设置 · ' + (settingsPlugin?.name || '')" @ok="saveSettings">
       <a-form layout="vertical">
@@ -51,12 +53,13 @@ import { get, post, del, upload } from '../api'
 import { usePluginMenu } from '../store/pluginMenu'
 
 const plugins = ref<any[]>([])
+const loading = ref(false)
 const settingsOpen = ref(false)
 const settingsPlugin = ref<any>(null)
 const settingsDefs = ref<any[]>([])
 const settingsValues = ref<Record<string, string>>({})
 
-const load = async () => { plugins.value = await get('/api/plugins') }
+const load = async () => { loading.value = true; plugins.value = await get('/api/plugins'); loading.value = false }
 // 插件安装/启停/卸载会影响侧栏菜单挂载，变更后联动强制刷新菜单缓存
 const menus = usePluginMenu()
 const reloadWithMenu = () => { load(); menus.load(true) }

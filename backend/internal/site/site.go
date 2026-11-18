@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"gorm.io/gorm"
@@ -252,29 +253,75 @@ type SaveReq struct {
 	ComposeProjectID *uint  `json:"composeProjectId"`
 }
 
-func validateDomain(d string) error {
-	if d == "" || len(d) > 253 || strings.ContainsAny(d, " /\\") || !strings.Contains(d, ".") {
+var upstreamRe = regexp.MustCompile(`^[a-zA-Z0-9._:\[\]-]+(:[0-9]{1,5})?(/[a-zA-Z0-9._/-]*)?$`)
+
+// ValidateDomain 校验站点域名（严禁路径穿越、空白或 nginx 配置元字符）。
+func ValidateDomain(d string) error {
+	if d == "" || len(d) > 253 || !strings.Contains(d, ".") {
+		return fmt.Errorf("非法域名: %s", d)
+	}
+	if err := nginx.ValidateName(d); err != nil {
+		return fmt.Errorf("非法域名: %s", d)
+	}
+	if strings.HasPrefix(d, ".") || strings.HasSuffix(d, ".") || strings.HasPrefix(d, "-") || strings.HasSuffix(d, "-") {
 		return fmt.Errorf("非法域名: %s", d)
 	}
 	return nil
 }
 
+// ValidateUpstream 校验反代目标（host:port 或带路径前缀，严禁分号/花括号/换行等指令注入字符）。
+func ValidateUpstream(u string) error {
+	if u == "" || len(u) > 255 || !upstreamRe.MatchString(u) || strings.Contains(u, "..") {
+		return fmt.Errorf("非法反代目标: %s", u)
+	}
+	return nil
+}
+
+// ValidateRoot 校验静态站点根目录（严禁分号/花括号/引号/变量/换行/路径回退）。
+func ValidateRoot(r string) error {
+	if r == "" {
+		return nil
+	}
+	if len(r) > 255 || strings.ContainsAny(r, ";{}\"'$\r\n\t\x00") || strings.Contains(r, "..") {
+		return fmt.Errorf("非法静态目录: %s", r)
+	}
+	return nil
+}
+
+func validateDomain(d string) error { return ValidateDomain(d) }
+
 // Create 新建站点：写 conf → 启用 → nginx -t → reload，失败整体回退。
 func (s *Service) Create(req SaveReq) (*model.Site, error) {
-	if err := validateDomain(req.Domain); err != nil {
+	if err := ValidateDomain(req.Domain); err != nil {
 		return nil, err
+	}
+	if req.Type == "" {
+		req.Type = "proxy"
+	}
+	if req.Type != "proxy" && req.Type != "static" {
+		return nil, fmt.Errorf("未知站点类型: %s", req.Type)
 	}
 	var cnt int64
 	s.db.Model(&model.Site{}).Where("domain = ?", req.Domain).Count(&cnt)
 	if cnt > 0 {
 		return nil, fmt.Errorf("站点已存在: %s", req.Domain)
 	}
-	if req.Type == "proxy" && req.Upstream == "" {
-		return nil, fmt.Errorf("反代目标不能为空")
+	if req.Type == "proxy" {
+		if req.Upstream == "" {
+			return nil, fmt.Errorf("反代目标不能为空")
+		}
+		if err := ValidateUpstream(req.Upstream); err != nil {
+			return nil, err
+		}
 	}
-	if req.Type == "static" && req.Root == "" {
-		req.Root = filepath.Join(s.cfg.NginxHTMLDir, "sites", req.Domain)
-		_ = os.MkdirAll(req.Root, 0o755)
+	if req.Type == "static" {
+		if err := ValidateRoot(req.Root); err != nil {
+			return nil, err
+		}
+		if req.Root == "" {
+			req.Root = filepath.Join(s.cfg.NginxHTMLDir, "sites", req.Domain)
+			_ = os.MkdirAll(req.Root, 0o755)
+		}
 	}
 	site := &model.Site{
 		Domain: req.Domain, Type: req.Type, Upstream: req.Upstream, Root: req.Root,
@@ -368,8 +415,23 @@ func (s *Service) Update(id uint, req SaveReq) (*model.Site, error) {
 	if err := s.db.First(&site, id).Error; err != nil {
 		return nil, fmt.Errorf("站点不存在")
 	}
-	if err := validateDomain(site.Domain); err != nil {
+	if err := ValidateDomain(site.Domain); err != nil {
 		return nil, err
+	}
+	if req.Type == "" {
+		req.Type = site.Type
+	}
+	if req.Type != "proxy" && req.Type != "static" {
+		return nil, fmt.Errorf("未知站点类型: %s", req.Type)
+	}
+	if req.Type == "proxy" {
+		if err := ValidateUpstream(req.Upstream); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := ValidateRoot(req.Root); err != nil {
+			return nil, err
+		}
 	}
 	site.Type = req.Type
 	site.Upstream = req.Upstream

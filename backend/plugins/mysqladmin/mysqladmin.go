@@ -11,15 +11,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	mysqldrv "github.com/go-sql-driver/mysql"
 
 	"zjpanel/backend/internal/pkg"
 	sdk "zjpanel/backend/sdk/plugin"
@@ -160,13 +162,44 @@ func (p *Plugin) dsn(c *Connection, db string) string {
 	return p.dsnWithPassword(c, db, p.openPassword(c))
 }
 
-// dsnWithPassword 用明文密码直接组装连接串。db 为空时连 information_schema。
+// dsnWithPassword 用明文密码组装结构化连接串（防 DSN 参数注入，如 allowAllFiles=true）。db 为空时连 information_schema。
 func (p *Plugin) dsnWithPassword(c *Connection, db, plainPwd string) string {
+	return buildMySQLDSN(c, db, plainPwd, 5*time.Second, 30*time.Second)
+}
+
+func buildMySQLDSN(c *Connection, db, plainPwd string, connTimeout, rwTimeout time.Duration) string {
 	if db == "" {
 		db = "information_schema"
 	}
-	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local&timeout=5s&readTimeout=30s&writeTimeout=30s",
-		c.User, plainPwd, c.Host, c.Port, db)
+	port := c.Port
+	if port == "" {
+		port = "3306"
+	}
+	cfg := mysqldrv.NewConfig()
+	cfg.User = c.User
+	cfg.Passwd = plainPwd
+	cfg.Net = "tcp"
+	cfg.Addr = net.JoinHostPort(c.Host, port)
+	cfg.DBName = db
+	cfg.Params = map[string]string{"charset": "utf8mb4"}
+	cfg.ParseTime = true
+	cfg.Loc = time.Local
+	cfg.Timeout = connTimeout
+	cfg.ReadTimeout = rwTimeout
+	cfg.WriteTimeout = rwTimeout
+	cfg.AllowAllFiles = false
+	return cfg.FormatDSN()
+}
+
+func validHostPort(host, port string) error {
+	if host == "" || strings.ContainsAny(host, " \t\r\n/?#@\\") {
+		return fmt.Errorf("主机地址含非法字符")
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("端口须为 1-65535 的整数")
+	}
+	return nil
 }
 
 func (p *Plugin) findConn(id string) *Connection {
@@ -302,6 +335,10 @@ func (p *Plugin) apiSaveConn(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "标识/主机/用户名必填"})
 		return
 	}
+	if err := validHostPort(c.Host, c.Port); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
 	p.mu.Lock()
 	old, exists := p.conns[c.ID]
 	if c.Password == "" && exists {
@@ -373,6 +410,10 @@ func (p *Plugin) apiTestForm(w http.ResponseWriter, r *http.Request) {
 	}
 	if c.Port == "" {
 		c.Port = "3306"
+	}
+	if err := validHostPort(c.Host, c.Port); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
 	}
 	terr := p.testConn(&c, c.Password) // 表单密码为明文
 	writeJSON(w, http.StatusOK, ginH("ok", terr == nil, "error", errStr(terr)))
@@ -1080,12 +1121,7 @@ func (p *Plugin) openTimeout(connID, db string, t time.Duration) (*sql.DB, *Conn
 	if c == nil {
 		return nil, nil, fmt.Errorf("连接不存在: %s", connID)
 	}
-	if db == "" {
-		db = "information_schema"
-	}
-	dbh, err := sql.Open("mysql", fmt.Sprintf(
-		"%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local&timeout=10s&readTimeout=%s&writeTimeout=%s",
-		c.User, p.openPassword(c), c.Host, c.Port, db, t, t))
+	dbh, err := sql.Open("mysql", buildMySQLDSN(c, db, p.openPassword(c), 10*time.Second, t))
 	if err != nil {
 		return nil, nil, err
 	}

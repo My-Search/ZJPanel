@@ -1,4 +1,5 @@
 <template>
+  <a-spin :spinning="loading">
   <a-card size="small">
     <a-alert type="info" show-icon style="margin-bottom: 12px"
       :message="`MCP 端点（聚合核心 + 插件工具）：POST ${origin}/mcp`"
@@ -41,6 +42,7 @@
 }</pre>
     </a-card>
   </a-card>
+  </a-spin>
 </template>
 
 <script setup lang="ts">
@@ -66,9 +68,14 @@ const toolCols = [
   { title: '说明', dataIndex: 'description', key: 'description' },
 ]
 
+const loading = ref(false)
+
 const load = async () => {
-  keys.value = await get('/api/mcp/keys')
-  tools.value = await get('/api/mcp/tools')
+  loading.value = true
+  try {
+    keys.value = await get('/api/mcp/keys')
+    tools.value = await get('/api/mcp/tools')
+  } finally { loading.value = false }
 }
 const createKey = async () => {
   const r = await post('/api/mcp/keys', { name: 'key-' + new Date().toISOString().slice(0, 10) })

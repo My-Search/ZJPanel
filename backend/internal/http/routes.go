@@ -477,6 +477,7 @@ func (s *Server) registerMaintenanceRoute() {
 			override = siteRec.MaintenanceHTML
 		}
 		html := site.RenderMaintenance(s.cfg, override, domain, c.Query("message"))
+		c.Header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:")
 		c.Header("Content-Type", "text/html; charset=utf-8")
 		c.String(http.StatusOK, html)
 	})

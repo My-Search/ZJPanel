@@ -60,7 +60,7 @@
 
     <!-- 日志 -->
     <a-modal v-model:open="logsOpen" :title="'日志 · ' + logsName" :footer="null" :width="860">
-      <pre ref="logsBox" style="max-height: 480px; overflow: auto; background: #111; color: #ddd; padding: 12px; font-size: 12px; white-space: pre-wrap">{{ logsText }}</pre>
+      <pre ref="logsBox" class="docker-log">{{ logsText }}</pre>
     </a-modal>
 
     <!-- exec 终端 -->
@@ -70,7 +70,7 @@
 
     <!-- 拉取进度 -->
     <a-modal v-model:open="pullOpen" :title="'拉取 ' + pullRef" :footer="null" :width="720">
-      <pre style="max-height: 400px; overflow: auto; background: #111; color: #0f0; padding: 12px; font-size: 12px">{{ pullText }}</pre>
+      <pre class="docker-log">{{ pullText }}</pre>
     </a-modal>
   </a-card>
 </template>
@@ -217,4 +217,5 @@ onUnmounted(() => { clearInterval(timer); logsWs?.close(); closeExec() })
 
 <style scoped>
 .dim { color: var(--color-slate); font-size: 12px; margin-right: 6px; }
+.docker-log { max-height: 480px; overflow: auto; padding: 12px; font-size: 12px; white-space: pre-wrap; border-radius: 8px; font-family: ui-monospace, Consolas, monospace; background: var(--surface-card); color: var(--color-ink); border: 1px solid var(--border-card); }
 </style>

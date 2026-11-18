@@ -126,9 +126,10 @@ func (s *Server) registerLogmapRoutes() {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 	g.POST("/geoip/upload", func(c *gin.Context) {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 128<<20)
 		fh, err := c.FormFile("file")
 		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少文件"})
+			c.JSON(http.StatusBadRequest, gin.H{"error": "缺少文件或文件过大（上限 128MB）"})
 			return
 		}
 		f, err := fh.Open()
@@ -137,13 +138,13 @@ func (s *Server) registerLogmapRoutes() {
 			return
 		}
 		defer f.Close()
-		data, err := io.ReadAll(f)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		data, err := io.ReadAll(io.LimitReader(f, (128<<20)+1))
+		if err != nil || len(data) > 128<<20 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "读取文件失败或超出 128MB 限制"})
 			return
 		}
 		if err := s.Logmap.SaveMMDB(data); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		s.audit(c, "logmap.geoip.upload", fh.Filename)

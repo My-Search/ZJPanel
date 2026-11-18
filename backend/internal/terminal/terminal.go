@@ -45,7 +45,7 @@ type Session struct {
 func newSession(kind, label string, p ptyHandle) *Session {
 	return &Session{
 		ID: pkg.RandomHex(8), Kind: kind, Label: label,
-		CreatedAt: time.Now(), buf: NewRingBuf(256 * 1024),
+		CreatedAt: time.Now(), buf: NewRingBuf(1024 * 1024),
 		pty: p, clients: map[Client]struct{}{}, lastInput: time.Now(),
 		cols: 80, rows: 24,
 	}
@@ -127,6 +127,7 @@ func (s *Session) Attach(c Client, since uint64) AttachResult {
 
 // RedrawDance 触发一次 PTY 尺寸抖动（rows-1 → rows）：内核/远端 sshd 向前台进程组发 SIGWINCH，
 // 让 vim/htop/ink 类 TUI 整屏重画。用于全量回放（无快照恢复或增量失效）后清掉回放残影。
+// 双次抖动+稍长间隔使更多 TUI 应用可靠收到 SIGWINCH 并完成重画。
 func (s *Session) RedrawDance() {
 	s.mu.Lock()
 	p, cols, rows, down := s.pty, s.cols, s.rows, s.down
@@ -134,14 +135,34 @@ func (s *Session) RedrawDance() {
 	if p == nil || down || rows <= 1 {
 		return
 	}
+	// 第一次抖动：rows-1 → rows（部分 TUI 只响应尺寸变化方向为增大的 SIGWINCH）
 	_ = p.Resize(cols, rows-1)
-	time.AfterFunc(200*time.Millisecond, func() {
+	time.AfterFunc(300*time.Millisecond, func() {
 		s.mu.Lock()
 		same := s.pty == p // 重连循环可能已换新 pty
 		s.mu.Unlock()
-		if same {
-			_ = p.Resize(cols, rows)
+		if !same {
+			return
 		}
+		_ = p.Resize(cols, rows)
+		// 第二次抖动：cols-1 → cols（覆盖只响应列变化的 TUI，如某些版本的 less/man）
+		time.AfterFunc(300*time.Millisecond, func() {
+			s.mu.Lock()
+			same2 := s.pty == p
+			s.mu.Unlock()
+			if !same2 {
+				return
+			}
+			_ = p.Resize(cols-1, rows)
+			time.AfterFunc(200*time.Millisecond, func() {
+				s.mu.Lock()
+				same3 := s.pty == p
+				s.mu.Unlock()
+				if same3 {
+					_ = p.Resize(cols, rows)
+				}
+			})
+		})
 	})
 }
 

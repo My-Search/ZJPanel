@@ -9,12 +9,15 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"crypto/sha256"
+	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	stdhash "hash"
 	"fmt"
 	"io"
 	"net/http"
+	"net/smtp"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -278,9 +281,10 @@ func (p *Plugin) apiReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// GitHub 风格签名：X-Hub-Signature = sha1=<hex(hmac-sha1(secret, body))>；同时兼容 sha256=
+	// 必须配置非空 Secret 且至少携带一个有效签名头，严禁无头放行。
 	sig := r.Header.Get("X-Hub-Signature")
 	sig256 := r.Header.Get("X-Hub-Signature-256")
-	if !verifySig(sig, "sha1=", h.Secret, body) || (sig256 != "" && !verifySig(sig256, "sha256=", h.Secret, body)) {
+	if !verifyWebhookRequest(h.Secret, body, sig, sig256) {
 		p.ctx.Logf("hook %s 签名校验失败", id)
 		http.Error(w, "signature mismatch", http.StatusForbidden)
 		return
@@ -295,11 +299,21 @@ func (p *Plugin) apiReceive(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"status": "accepted", "hook": id})
 }
 
-func verifySig(header, prefix, secret string, body []byte) bool {
-	if header == "" {
-		return prefix == "sha1=" // GitHub 恒带 sha1 头；未配置任何头时仅要求 sha1 缺省校验通过
+func verifyWebhookRequest(secret string, body []byte, sig1, sig256 string) bool {
+	if secret == "" || (sig1 == "" && sig256 == "") {
+		return false
 	}
-	if !strings.HasPrefix(header, prefix) {
+	if sig256 != "" && !verifySig(sig256, "sha256=", secret, body) {
+		return false
+	}
+	if sig1 != "" && !verifySig(sig1, "sha1=", secret, body) {
+		return false
+	}
+	return true
+}
+
+func verifySig(header, prefix, secret string, body []byte) bool {
+	if header == "" || secret == "" || !strings.HasPrefix(header, prefix) {
 		return false
 	}
 	var mac stdhash.Hash
@@ -356,24 +370,87 @@ func (p *Plugin) runHook(id string) (string, error) {
 	return rl.Output, err
 }
 
-// notify SMTP 邮件通知（curl smtps，与旧 webhook-manager.sh 链路一致；配置不全时静默跳过）。
+// notify SMTP 邮件通知（原生 TLS/STARTTLS，避免 curl --user 在进程命令行暴露密码及邮件头 CRLF 注入）。
 func (p *Plugin) notify(h *Hook, subject string, rl RunLog) {
 	if h.NotifyMail == "" || p.smtp.server == "" || p.smtp.user == "" || p.smtp.pass == "" {
 		return
 	}
 	body := fmt.Sprintf("Hook: %s\n时间: %s\n退出码: %d\n\n--- 输出 ---\n%s",
 		h.ID, rl.StartAt, rl.ExitCode, rl.Output)
-	cmd := exec.Command("curl", "--silent", "--show-error", "--ssl-reqd",
-		"--url", "smtps://"+p.smtp.server,
-		"--user", p.smtp.user+":"+p.smtp.pass,
-		"--mail-from", p.smtp.from,
-		"--mail-rcpt", h.NotifyMail,
-		"-T", "-")
-	cmd.Stdin = strings.NewReader(fmt.Sprintf("From: %s\r\nTo: %s\r\nSubject: %s\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s",
-		p.smtp.from, h.NotifyMail, subject, body))
-	if err := cmd.Run(); err != nil {
+	if err := sendHookMail(p.smtp.server, p.smtp.user, p.smtp.pass, p.smtp.from, h.NotifyMail, subject, body); err != nil {
 		p.ctx.Logf("邮件通知失败: %v", err)
 	}
+}
+
+func stripCRLF(s string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
+}
+
+func sendHookMail(addr, user, pass, from, to, subject, body string) error {
+	host := addr
+	if i := strings.LastIndex(addr, ":"); i > 0 {
+		host = addr[:i]
+	}
+	from, to = stripCRLF(from), stripCRLF(to)
+	msg := strings.Join([]string{
+		"From: " + from,
+		"To: " + to,
+		"Subject: =?UTF-8?B?" + base64.StdEncoding.EncodeToString([]byte(subject)) + "?=",
+		"MIME-Version: 1.0",
+		"Content-Type: text/plain; charset=UTF-8",
+		"Content-Transfer-Encoding: base64",
+		"",
+		base64.StdEncoding.EncodeToString([]byte(body)),
+	}, "\r\n") + "\r\n"
+
+	var c *smtp.Client
+	if strings.HasSuffix(addr, ":465") {
+		conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: host})
+		if err != nil {
+			return err
+		}
+		cli, err := smtp.NewClient(conn, host)
+		if err != nil {
+			_ = conn.Close()
+			return err
+		}
+		c = cli
+	} else {
+		cli, err := smtp.Dial(addr)
+		if err != nil {
+			return err
+		}
+		if ok, _ := cli.Extension("STARTTLS"); ok {
+			if err := cli.StartTLS(&tls.Config{ServerName: host}); err != nil {
+				_ = cli.Close()
+				return err
+			}
+		}
+		c = cli
+	}
+	defer c.Close()
+	if ok, _ := c.Extension("AUTH"); ok {
+		if err := c.Auth(smtp.PlainAuth("", user, pass, host)); err != nil {
+			return err
+		}
+	}
+	if err := c.Mail(from); err != nil {
+		return err
+	}
+	if err := c.Rcpt(to); err != nil {
+		return err
+	}
+	w, err := c.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write([]byte(msg)); err != nil {
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return err
+	}
+	return c.Quit()
 }
 
 // ---- MCP ----

@@ -1,5 +1,5 @@
 <template>
-  <div class="status-strip" :class="{ dark: ui.isDark }">
+  <div class="status-strip">
     <template v-if="stats">
       <span class="item" :title="`CPU ${stats.cpu.toFixed(1)}%`">
         <ThunderboltOutlined class="ico" /><span class="val">{{ stats.cpu.toFixed(0) }}%</span>
@@ -30,9 +30,6 @@
  * 数据由终端 WS 的 stats 消息推送（父组件转发），5s 刷新；采集未就绪时显示等待态。
  */
 import { ThunderboltOutlined, DatabaseOutlined, HddOutlined, GlobalOutlined, DashboardOutlined } from '@ant-design/icons-vue'
-import { useTheme } from '../store/theme'
-
-const ui = useTheme()
 
 defineProps<{
   /** 最近一次机器资源采样；null=尚未采到 */
@@ -53,10 +50,9 @@ const fmtNet = (v: number) => {
 <style scoped>
 .status-strip {
   display: flex; align-items: center; gap: 4px 18px; flex-wrap: wrap;
-  border-top: 1px solid #e5e7eb; margin-top: 6px; padding: 6px 10px 0;
-  color: #475569; font-size: 12px; min-height: 30px; user-select: none;
+  border-top: 1px solid var(--border-card); margin-top: 6px; padding: 6px 10px 0;
+  color: var(--color-slate); font-size: 12px; min-height: 30px; user-select: none;
 }
-.status-strip.dark { border-top-color: #2b2b2b; color: #9ca3af; }
 .item { display: inline-flex; align-items: center; gap: 6px; }
 .ico { font-size: 12px; }
 .val { min-width: 44px; }
@@ -66,7 +62,7 @@ const fmtNet = (v: number) => {
 .fill.mem { background: #0ea5e9; }
 .fill.disk { background: #10b981; }
 .net .val { min-width: 110px; }
-.waiting { color: #94a3b8; font-size: 12px; }
+.waiting { color: var(--color-slate); font-size: 12px; }
 @media (max-width: 767px) {
   .status-strip { gap: 4px 12px; }
   .bar { width: 44px; }

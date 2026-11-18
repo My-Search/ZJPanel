@@ -77,6 +77,8 @@ func sendWithClient(c *smtp.Client, host, user, pass, from, to, msg string) erro
 // buildMessage 组装邮件原文：别名/主题按 RFC 2047 Base64 编码（中文安全，ASCII 别名原样），
 // 正文整体 Base64，规避 8-bit 传输与行首点号问题。
 func buildMessage(fromAlias, fromAddr, to, subject, body string) string {
+	strip := strings.NewReplacer("\r", "", "\n", "")
+	fromAlias, fromAddr, to = strip.Replace(fromAlias), strip.Replace(fromAddr), strip.Replace(to)
 	sub := base64.StdEncoding.EncodeToString([]byte(subject))
 	fromLine := fromAddr
 	if fromAlias != "" {

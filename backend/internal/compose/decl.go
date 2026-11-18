@@ -11,6 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"zjpanel/backend/internal/model"
+	sitePkg "zjpanel/backend/internal/site"
 )
 
 // DeclFile 声明式站点描述（zjpanel.json，随 compose 项目目录落盘）。
@@ -113,18 +114,34 @@ func (s *Service) SyncDecl(projectID uint) (int, int, []string, error) {
 	created, updated := 0, 0
 	declared := map[string]bool{}
 	for _, ds := range decl.Sites {
+		if err := sitePkg.ValidateDomain(ds.Domain); err != nil {
+			return created, updated, nil, fmt.Errorf("声明站点域名非法 %q: %w", ds.Domain, err)
+		}
+		typ := ds.Type
+		if typ == "" {
+			typ = "proxy"
+		}
+		if typ != "proxy" && typ != "static" {
+			return created, updated, nil, fmt.Errorf("声明站点 %s 类型非法: %q", ds.Domain, ds.Type)
+		}
+		if typ == "proxy" {
+			if err := sitePkg.ValidateUpstream(ds.Upstream); err != nil {
+				return created, updated, nil, fmt.Errorf("声明站点 %s 反代目标非法: %w", ds.Domain, err)
+			}
+		} else {
+			if err := sitePkg.ValidateRoot(ds.Root); err != nil {
+				return created, updated, nil, fmt.Errorf("声明站点 %s 静态目录非法: %w", ds.Domain, err)
+			}
+		}
 		declared[ds.Domain] = true
 		var site model.Site
 		err := s.db.Where("domain = ?", ds.Domain).First(&site).Error
 		if err != nil {
 			// 声明里有、面板没有 → 创建（声明恢复）
 			site = model.Site{
-				Domain: ds.Domain, Type: ds.Type, Upstream: ds.Upstream, Root: ds.Root,
+				Domain: ds.Domain, Type: typ, Upstream: ds.Upstream, Root: ds.Root,
 				SSL: ds.SSL, Maintenance: ds.Maintenance, Remark: ds.Remark,
 				ComposeProjectID: &rec.ID,
-			}
-			if site.Type == "" {
-				site.Type = "proxy"
 			}
 			if err := s.db.Create(&site).Error; err != nil {
 				return created, updated, nil, fmt.Errorf("恢复站点 %s 失败: %w", ds.Domain, err)
@@ -142,13 +159,10 @@ func (s *Service) SyncDecl(projectID uint) (int, int, []string, error) {
 		// 面板已有：以声明为准同步关键字段（仅当站点归属本项目时）
 		if site.ComposeProjectID != nil && *site.ComposeProjectID == rec.ID {
 			changed := site.Upstream != ds.Upstream || site.SSL != ds.SSL ||
-				site.Type != ds.Type || site.Root != ds.Root || site.Maintenance != ds.Maintenance
+				site.Type != typ || site.Root != ds.Root || site.Maintenance != ds.Maintenance
 			if changed {
-				site.Type, site.Upstream, site.Root = ds.Type, ds.Upstream, ds.Root
+				site.Type, site.Upstream, site.Root = typ, ds.Upstream, ds.Root
 				site.SSL, site.Maintenance = ds.SSL, ds.Maintenance
-				if site.Type == "" {
-					site.Type = "proxy"
-				}
 				if err := s.db.Save(&site).Error; err != nil {
 					return created, updated, nil, err
 				}

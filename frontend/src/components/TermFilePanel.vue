@@ -2,7 +2,18 @@
   <div class="fm-panel">
     <template v-if="hostId">
       <!-- ============ 列表视图 ============ -->
-      <div v-if="!editing" class="fm-list">
+      <div v-if="!editing" class="fm-list"
+        @dragover.prevent="onDragOver" @dragleave.prevent="onDragLeave"
+        @drop.prevent="onDrop">
+        <!-- 拖拽遮罩 -->
+        <Transition name="fm-drop-fade">
+          <div v-if="dragOver" class="fm-drop-overlay">
+            <div class="fm-drop-hint">
+              <UploadOutlined style="font-size: 36px" />
+              <span>松开上传到 {{ path }}</span>
+            </div>
+          </div>
+        </Transition>
         <!-- 头部：地址栏（我在哪）+ 工具栏（我能做什么），两组动作各归其位 -->
         <header class="fm-head">
           <!-- 地址栏：整行路径，末端内嵌「输入路径跳转」入口 -->
@@ -139,6 +150,21 @@
     <!-- 确认弹窗（删除等） -->
     <a-modal v-model:open="confirm.open" :title="confirm.title" ok-text="确认" ok-type="danger" @ok="confirm.onOk" :width="420">
       <div class="fm-hint">{{ confirm.body }}</div>
+    </a-modal>
+
+    <!-- 上传进度弹窗 -->
+    <a-modal v-model:open="uploadProgress.open" title="上传中…" :closable="false" :maskClosable="false"
+      :footer="null" :width="420">
+      <div class="fm-upload-progress">
+        <a-progress :percent="uploadProgress.percent" :status="uploadProgress.failed ? 'exception' : 'active'" size="small" />
+        <div class="fm-upload-detail">
+          <span>{{ uploadProgress.current }} / {{ uploadProgress.total }} 个文件</span>
+          <span v-if="uploadProgress.currentName" class="fm-dim fm-upload-name">{{ uploadProgress.currentName }}</span>
+        </div>
+        <div v-if="uploadProgress.failed" class="fm-upload-fail">
+          {{ uploadProgress.failCount }} 个文件上传失败
+        </div>
+      </div>
     </a-modal>
   </div>
 </template>
@@ -361,13 +387,123 @@ const onPickFiles = async (ev: Event) => {
   const files = Array.from(input.files || [])
   input.value = '' // 清空，保证下次能再次选中同一文件
   if (!files.length) return
-  for (const f of files) {
+  await uploadFiles(files.map(f => ({ file: f, relativePath: f.name })))
+}
+
+// ---- 上传进度 ----
+const uploadProgress = ref({
+  open: false, percent: 0, current: 0, total: 0,
+  currentName: '', failed: false, failCount: 0,
+})
+
+/** 统一上传入口：接收 { file, relativePath } 数组，逐个上传并显示进度弹窗 */
+const uploadFiles = async (items: { file: File; relativePath: string }[]) => {
+  if (!items.length) return
+  const prog = uploadProgress.value
+  prog.open = true
+  prog.total = items.length
+  prog.current = 0
+  prog.percent = 0
+  prog.failed = false
+  prog.failCount = 0
+  prog.currentName = ''
+  for (const item of items) {
+    prog.current++
+    prog.currentName = item.relativePath
+    prog.percent = Math.round((prog.current - 1) / prog.total * 100)
     try {
-      await upload(api('/upload') + `?path=` + encodeURIComponent(joinPath(path.value, f.name)), f)
-      message.success('已上传 ' + f.name)
-    } catch { /* toast 由拦截器处理 */ }
+      await upload(api('/upload') + `?path=` + encodeURIComponent(joinPath(path.value, item.relativePath)), item.file)
+    } catch {
+      prog.failCount++
+      prog.failed = true
+    }
+  }
+  prog.percent = 100
+  prog.currentName = ''
+  // 短暂停留后关闭弹窗
+  setTimeout(() => { prog.open = false }, prog.failed ? 1500 : 500)
+  if (!prog.failed) {
+    message.success(`已上传 ${prog.total} 个文件`)
+  } else {
+    message.warning(`${prog.total - prog.failCount} 个文件上传成功，${prog.failCount} 个失败`)
   }
   load()
+}
+
+// ---- 拖拽上传 ----
+const dragOver = ref(false)
+let dragLeaveTimer = 0
+
+const onDragOver = (ev: DragEvent) => {
+  clearTimeout(dragLeaveTimer)
+  // 只在有文件拖入时激活（忽略纯文本拖拽等）
+  if (ev.dataTransfer?.types.includes('Files')) {
+    dragOver.value = true
+  }
+}
+const onDragLeave = () => {
+  // 子元素切换会连续触发 leave/enter，用短延迟防闪烁
+  clearTimeout(dragLeaveTimer)
+  dragLeaveTimer = window.setTimeout(() => { dragOver.value = false }, 80)
+}
+const onDrop = async (ev: DragEvent) => {
+  clearTimeout(dragLeaveTimer)
+  dragOver.value = false
+  if (!ev.dataTransfer) return
+
+  // 优先用 webkitGetAsEntry（支持文件夹递归遍历）
+  const items = Array.from(ev.dataTransfer.items || [])
+  const hasEntry = items.length > 0 && typeof items[0].webkitGetAsEntry === 'function'
+
+  if (hasEntry) {
+    const entryList: FileSystemEntry[] = []
+    for (const item of items) {
+      const entry = item.webkitGetAsEntry()
+      if (entry) entryList.push(entry)
+    }
+    const collected = await collectEntries(entryList, '')
+    if (collected.length) await uploadFiles(collected)
+  } else {
+    // 回退：只能拿到扁平文件（不支持文件夹）
+    const files = Array.from(ev.dataTransfer.files || [])
+    if (files.length) await uploadFiles(files.map(f => ({ file: f, relativePath: f.name })))
+  }
+}
+
+/** 递归遍历 FileSystemEntry 树，收集全部文件及其相对路径 */
+const collectEntries = async (
+  entries: FileSystemEntry[], prefix: string,
+): Promise<{ file: File; relativePath: string }[]> => {
+  const result: { file: File; relativePath: string }[] = []
+  for (const entry of entries) {
+    const relPath = prefix ? prefix + '/' + entry.name : entry.name
+    if (entry.isFile) {
+      const file = await new Promise<File>((resolve, reject) =>
+        (entry as FileSystemFileEntry).file(resolve, reject))
+      result.push({ file, relativePath: relPath })
+    } else if (entry.isDirectory) {
+      const dirReader = (entry as FileSystemDirectoryEntry).createReader()
+      const children = await readAllEntries(dirReader)
+      const sub = await collectEntries(children, relPath)
+      result.push(...sub)
+    }
+  }
+  return result
+}
+
+/** readEntries 每次最多返回 100 条，需循环读取直至空 */
+const readAllEntries = (reader: FileSystemDirectoryReader): Promise<FileSystemEntry[]> => {
+  return new Promise((resolve, reject) => {
+    const all: FileSystemEntry[] = []
+    const readBatch = () => {
+      reader.readEntries((batch) => {
+        if (batch.length === 0) { resolve(all); return }
+        all.push(...batch)
+        readBatch()
+      }, reject)
+    }
+    readBatch()
+  })
 }
 
 // ---- 格式化 ----
@@ -391,7 +527,7 @@ const fmtTime = (s: string) => {
 
 <style scoped>
 .fm-panel { height: 100%; display: flex; flex-direction: column; overflow: hidden; font-size: 13px; }
-.fm-list, .fm-editor { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.fm-list, .fm-editor { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
 
 /* ---------- 头部：地址栏 + 工具栏 ---------- */
 .fm-head { flex: none; padding-bottom: 10px; border-bottom: 1px solid var(--border-card); }
@@ -458,13 +594,34 @@ const fmtTime = (s: string) => {
 .fm-table :deep(.ant-table-tbody > tr:hover > td) { background: rgba(128, 128, 128, .13); }
 .fm-name { display: flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; }
 .fm-name-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fm-ic-dir { flex: none; color: #faad14; }
-.fm-ic-file { flex: none; color: #8c8c8c; }
+.fm-ic-dir { flex: none; color: var(--color-warning, #faad14); }
+.fm-ic-file { flex: none; color: var(--color-slate); }
 .fm-editor-bar { gap: 8px; display: flex; align-items: center; }
 .fm-editor-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.fm-warn { color: #fa8c16; font-size: 12px; }
+.fm-warn { color: var(--color-warning, #fa8c16); font-size: 12px; }
 .fm-editor-box { flex: 1; min-height: 0; border: 1px solid rgba(128,128,128,.25); border-radius: 6px; overflow: hidden; }
 .fm-empty { flex: 1; display: flex; align-items: center; justify-content: center; }
 .fm-dim { color: var(--color-slate); font-size: 12px; }
 .fm-hint { color: var(--color-slate); font-size: 12px; margin-top: 8px; word-break: break-all; }
+
+/* ---------- 拖拽上传遮罩 ---------- */
+.fm-drop-overlay {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(var(--color-action-blue-rgb, 24, 144, 255), .08);
+  border: 2px dashed var(--color-action-blue, #1890ff);
+  border-radius: 8px; pointer-events: none;
+}
+.fm-drop-hint {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  color: var(--color-action-blue, #1890ff); font-size: 14px; font-weight: 500;
+}
+.fm-drop-fade-enter-active, .fm-drop-fade-leave-active { transition: opacity .15s ease; }
+.fm-drop-fade-enter-from, .fm-drop-fade-leave-to { opacity: 0; }
+
+/* ---------- 上传进度弹窗 ---------- */
+.fm-upload-progress { padding: 4px 0; }
+.fm-upload-detail { display: flex; align-items: center; gap: 10px; margin-top: 6px; font-size: 13px; }
+.fm-upload-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-upload-fail { margin-top: 6px; color: var(--color-error, #ff4d4f); font-size: 12px; }
 </style>

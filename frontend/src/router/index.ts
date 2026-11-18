@@ -1,6 +1,21 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuth } from '../store/auth'
 
+// 路由 → 页面标题映射：浏览器标签栏显示当前页面名称，多标签时一眼区分
+const TITLE_MAP: Record<string, string> = {
+  '/dashboard': '仪表盘',
+  '/apps': '应用',
+  '/nginx': 'Nginx',
+  '/terminal': '终端',
+  '/certs': '证书',
+  '/map': '请求地图',
+  '/monitor': '监控',
+  '/mcp': 'MCP',
+  '/plugins': '插件',
+  '/settings': '设置',
+  '/login': '登录',
+}
+
 const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -28,6 +43,16 @@ const router = createRouter({
     },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
+})
+
+router.afterEach((to) => {
+  const base = 'ZJPanel'
+  const matched = Object.entries(TITLE_MAP).find(([prefix]) => to.path.startsWith(prefix))
+  // 插件页：标题取路由参数 id
+  const title = to.path.startsWith('/plugin/')
+    ? `插件 · ${to.params.id}`
+    : matched?.[1]
+  document.title = title ? `${title} - ${base}` : base
 })
 
 router.beforeEach(async (to) => {

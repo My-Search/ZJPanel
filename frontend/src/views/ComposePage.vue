@@ -43,7 +43,7 @@
     </a-modal>
 
     <a-modal v-model:open="outOpen" :title="outTitle" :footer="null" :width="720">
-      <pre style="max-height: 400px; overflow: auto; background: #111; color: #0f0; padding: 12px; font-size: 12px">{{ outContent || '(无输出)' }}</pre>
+      <pre class="compose-log">{{ outContent || '(无输出)' }}</pre>
     </a-modal>
   </a-card>
 </template>
@@ -127,3 +127,7 @@ const refresh = async (r: any) => {
 
 onMounted(scan)
 </script>
+
+<style scoped>
+.compose-log { max-height: 400px; overflow: auto; padding: 12px; font-size: 12px; white-space: pre-wrap; border-radius: 8px; font-family: ui-monospace, Consolas, monospace; background: var(--surface-card); color: var(--color-ink); border: 1px solid var(--border-card); }
+</style>

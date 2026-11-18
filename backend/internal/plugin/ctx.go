@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/go-acme/lego/v5/challenge"
@@ -15,6 +16,7 @@ import (
 	"zjpanel/backend/internal/mcp"
 	"zjpanel/backend/internal/model"
 	"zjpanel/backend/internal/notify"
+	"zjpanel/backend/internal/pkg"
 	sdk "zjpanel/backend/sdk/plugin"
 )
 
@@ -40,6 +42,13 @@ func (c *ctxImpl) SettingGet(key string) (string, error) {
 	var rec model.PluginSetting
 	if err := c.mgr.db.Where("plugin_id = ? AND key = ?", c.id, key).First(&rec).Error; err != nil {
 		return "", fmt.Errorf("设置不存在: %s", key)
+	}
+	if strings.HasPrefix(rec.Value, "v2:") && c.mgr.box != nil {
+		plain, err := c.mgr.box.OpenCtx(pkg.CtxPluginSetting(c.id, key), rec.Value)
+		if err != nil {
+			return "", fmt.Errorf("设置解密失败: %s", key)
+		}
+		return plain, nil
 	}
 	return rec.Value, nil
 }

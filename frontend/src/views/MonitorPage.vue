@@ -1,12 +1,13 @@
 <template>
+  <a-spin :spinning="loading">
   <a-card size="small">
     <a-row :gutter="12">
-      <a-col :span="12"><div ref="cpuBox" style="height: 260px"></div></a-col>
-      <a-col :span="12"><div ref="memBox" style="height: 260px"></div></a-col>
+      <a-col :span="12"><div ref="cpuBox" class="chart-box"></div></a-col>
+      <a-col :span="12"><div ref="memBox" class="chart-box"></div></a-col>
     </a-row>
     <a-row :gutter="12" style="margin-top: 8px">
-      <a-col :span="12"><div ref="netBox" style="height: 260px"></div></a-col>
-      <a-col :span="12"><div ref="loadBox" style="height: 260px"></div></a-col>
+      <a-col :span="12"><div ref="netBox" class="chart-box"></div></a-col>
+      <a-col :span="12"><div ref="loadBox" class="chart-box"></div></a-col>
     </a-row>
 
     <a-card title="磁盘" size="small" style="margin-top: 12px">
@@ -19,6 +20,7 @@
       <a-empty v-else :image-style="{ height: '48px' }" description="暂无磁盘数据" style="padding: 12px 0" />
     </a-card>
   </a-card>
+  </a-spin>
 </template>
 
 <script setup lang="ts">
@@ -26,6 +28,7 @@ import { onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
 import { get, wsTopic, fmtBytes } from '../api'
 
 const snap = ref<any>({})
+const loading = ref(true)
 const cpuBox = ref<HTMLElement | null>(null)
 const memBox = ref<HTMLElement | null>(null)
 const netBox = ref<HTMLElement | null>(null)
@@ -77,6 +80,7 @@ onMounted(async () => {
   } catch { /* ignore */ }
   const cur = await get('/api/metrics/current')
   update(cur)
+  loading.value = false
 })
 
 // 保活生命周期：激活重连实时流并恢复图表尺寸；切走时断开实时流（历史数据保留）
@@ -88,3 +92,7 @@ onActivated(() => {
 onDeactivated(() => { stopWs?.(); stopWs = null; clearInterval(resizeTimer) })
 onUnmounted(() => { stopWs?.(); clearInterval(resizeTimer); charts.forEach(c => c?.dispose()) })
 </script>
+
+<style scoped>
+.chart-box { height: min(260px, 30vh); }
+</style>
