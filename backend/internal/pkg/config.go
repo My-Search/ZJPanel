@@ -21,6 +21,7 @@ type Config struct {
 	UpdateURL     string // 版本清单 URL（检查更新）
 	DeployDir     string // 面板自身 compose 部署目录（宿主机路径），容器自更新据此改写镜像 tag
 	ChallengePort int    // ACME HTTP-01 本地挑战端口（nginx 将 /.well-known/acme-challenge 转发到此）
+	LogmapRing    int    // 请求地图环形窗口容量（条，默认 2 万；内存占用 ≈ 容量 × ~170B）
 	TrustedProxies []string // 可信反代 CIDR：仅来自这些地址的 X-Forwarded-For 才参与 ClientIP 解析
 }
 
@@ -61,6 +62,7 @@ func LoadConfig() *Config {
 		UpdateURL:     env("ZJPANEL_UPDATE_URL", "https://api.github.com/repos/My-Search/ZJPanel/releases/latest"),
 		DeployDir:    env("ZJPANEL_DEPLOY_DIR", ""),
 		ChallengePort: envInt("ZJPANEL_CHALLENGE_PORT", 9100),
+		LogmapRing:    envInt("ZJPANEL_LOGMAP_RING", 20000),
 	}
 	// 可信代理：默认仅本机回环（单容器部署中同容器 nginx 经 127.0.0.1 反代面板）。
 	// 特殊值 "none" = 完全不信任任何代理头；多值逗号分隔 CIDR。

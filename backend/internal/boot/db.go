@@ -12,11 +12,21 @@ import (
 )
 
 func OpenDB(cfg *pkg.Config) (*gorm.DB, error) {
-	db, err := gorm.Open(sqlite.Open(cfg.DataDir+"/zjpanel.db"), &gorm.Config{
-		Logger: gormlogger.Default.LogMode(gormlogger.Silent),
+	// WAL + busy_timeout：写不再阻塞读、并发读写时等锁而非报 database is locked；
+	// synchronous(NORMAL) 是 WAL 推荐档（掉电最多丢最后一个事务，不损坏库）。
+	// PrepareStmt 缓存预编译语句，省去每次查询的重复编译。
+	dsn := cfg.DataDir + "/zjpanel.db?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		Logger:      gormlogger.Default.LogMode(gormlogger.Silent),
+		PrepareStmt: true,
 	})
 	if err != nil {
 		return nil, err
+	}
+	// SQLite 单写多读：池限 4 足够面板自身负载，避免突发请求堆出大量连接各持一份页缓存
+	if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(4)
+		sqlDB.SetMaxIdleConns(4)
 	}
 	if err := db.AutoMigrate(
 		&model.User{}, &model.Setting{}, &model.ApiKey{}, &model.SshHost{},

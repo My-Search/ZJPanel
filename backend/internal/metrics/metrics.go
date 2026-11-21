@@ -72,6 +72,8 @@ func New(db *gorm.DB, hub *ws.Hub) *Service {
 func (s *Service) Close() { s.once.Do(func() { close(s.stop) }) }
 
 // Start 启动采样与 WS 推送循环。
+// 实时快照循环（3s）：无人订阅 metrics WS 时完全跳过采集（历史采样由入库循环独立负责，
+// /api/metrics/current 是按需快照），空闲时不产生 gopsutil 调用开销。
 func (s *Service) Start() {
 	go func() {
 		// 首次 cpu percent 需要间隔
@@ -83,30 +85,32 @@ func (s *Service) Start() {
 			case <-s.stop:
 				return
 			case <-tick.C:
+				if s.hub.Count("metrics") == 0 {
+					continue
+				}
 				snap := s.Snapshot()
 				s.mu.Lock()
 				prev := s.last
 				s.last = snap
 				s.mu.Unlock()
-				// 网络速率
+				// 网络速率：间隔超过数个周期（空闲后恢复/调度停顿）时差分无意义，置零等下一帧
 				if prev != nil {
 					dt := snap.Time.Sub(prev.Time).Seconds()
-					if dt > 0 {
+					if dt > 0 && dt <= 15 {
 						snap.NetRateIn = float64(snap.NetIn-prev.NetIn) / dt
 						snap.NetRateOut = float64(snap.NetOut-prev.NetOut) / dt
 					}
 				}
-				if s.hub.Count("metrics") > 0 {
-					b, _ := json.Marshal(snap)
-					s.hub.Broadcast("metrics", b)
-				}
+				b, _ := json.Marshal(snap)
+				s.hub.Broadcast("metrics", b)
 			}
 		}
 	}()
-	// 采样入库（60s）
+	// 采样入库（60s）：历史图表的数据源，与是否有观看者无关；过期清理降频到每小时
 	go func() {
 		tick := time.NewTicker(60 * time.Second)
 		defer tick.Stop()
+		var lastPrune time.Time
 		for {
 			select {
 			case <-s.stop:
@@ -121,9 +125,12 @@ func (s *Service) Start() {
 					MemUsed: snap.MemUsed, MemTotal: snap.MemTotal,
 					NetIn: snap.NetIn, NetOut: snap.NetOut, Load1: snap.Load1,
 				})
-				// 清理 30 天前
-				cut := time.Now().AddDate(0, 0, -30)
-				s.db.Where("time < ?", cut).Delete(&model.MetricSample{})
+				// 清理 30 天前（每小时一次即可，不必每分钟全表扫描）
+				if lastPrune.IsZero() || time.Since(lastPrune) >= time.Hour {
+					lastPrune = time.Now()
+					cut := lastPrune.AddDate(0, 0, -30)
+					s.db.Where("time < ?", cut).Delete(&model.MetricSample{})
+				}
 			}
 		}
 	}()

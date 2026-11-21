@@ -111,9 +111,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import { get, wsTopic, fmtBytes } from '../api'
 import { sortSites } from '../utils/siteOrder'
+import { usePolling, useVisibleConn } from '../composables/usePolling'
 import RequestMap from '../components/RequestMap.vue'
 import { ClusterOutlined, SafetyCertificateOutlined, GlobalOutlined } from '@ant-design/icons-vue'
 
@@ -122,8 +123,6 @@ const sites = ref<any[]>([])
 const nginxRunning = ref(false)
 const version = ref('')
 const loading = ref(true)
-let stopWs: (() => void) | null = null
-let timer: any = null
 
 const uptimeText = computed(() => {
   const s = snap.value?.uptime || 0
@@ -177,18 +176,12 @@ const loadAll = async () => {
   loading.value = false
 }
 
-onMounted(async () => {
-  await loadAll()
-})
-
-// 保活生命周期：激活重连实时指标流；切走时暂停（周期数据由下次激活 loadAll 补偿）
-onActivated(() => {
-  loadAll()
-  stopWs = wsTopic('metrics', (m) => { snap.value = m })
-  timer = setInterval(loadAll, 15000)
-})
-onDeactivated(() => { stopWs?.(); stopWs = null; clearInterval(timer) })
-onUnmounted(() => { stopWs?.(); clearInterval(timer) })
+// 轮询与实时流统一管理：keep-alive 切走或标签页隐藏时暂停/断开，
+// 恢复（切回页面/切回标签）时立即补一次加载并重连（后端据此把空闲采集降到零）。
+// 首次加载由 onActivated 触发（Dashboard 在 MainLayout 的 keep-alive 缓存内，
+// 挂载后必触发激活）——不再像旧版那样 mounted+activated 各拉一遍造成首屏双请求。
+usePolling(loadAll, 15000, { immediate: false })
+useVisibleConn(() => wsTopic('metrics', (m) => { snap.value = m }))
 </script>
 
 <style scoped>

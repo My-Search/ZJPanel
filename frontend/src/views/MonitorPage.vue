@@ -24,8 +24,9 @@
 </template>
 
 <script setup lang="ts">
-import { onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
+import { onActivated, onMounted, onUnmounted, ref } from 'vue'
 import { get, wsTopic, fmtBytes } from '../api'
+import { useVisibleConn } from '../composables/usePolling'
 
 const snap = ref<any>({})
 const loading = ref(true)
@@ -34,8 +35,7 @@ const memBox = ref<HTMLElement | null>(null)
 const netBox = ref<HTMLElement | null>(null)
 const loadBox = ref<HTMLElement | null>(null)
 let charts: any[] = []
-let stopWs: (() => void) | null = null
-let resizeTimer: any = null
+let resizeObserver: ResizeObserver | null = null
 const series = { cpu: [] as any[], mem: [] as any[], net: [] as any[], load: [] as any[] }
 
 const mkOption = (title: string, data: any[], formatter?: (v: any) => string, max?: number) => ({
@@ -67,6 +67,13 @@ const update = (m: any) => {
 onMounted(async () => {
   const echarts = await import('echarts')
   charts = [cpuBox.value, memBox.value, netBox.value, loadBox.value].map(el => echarts.init(el!))
+  // 容器真实尺寸变化才 resize（ResizeObserver），替代旧版每 3s 强制重排的定时器。
+  // keep-alive 切走瞬间容器 0 尺寸：忽略（否则画布缩成 0×0），切回后由 onActivated 恢复
+  resizeObserver = new ResizeObserver(() => {
+    const box = cpuBox.value
+    if (box && box.clientWidth > 0) charts.forEach(c => c.resize())
+  })
+  ;[cpuBox.value, memBox.value, netBox.value, loadBox.value].forEach(el => el && resizeObserver!.observe(el))
   // 历史采样回填（60s 一条 → 近 30 分钟）
   try {
     const hist = await get<any[]>('/api/metrics/history', { hours: 1 })
@@ -83,14 +90,21 @@ onMounted(async () => {
   loading.value = false
 })
 
-// 保活生命周期：激活重连实时流并恢复图表尺寸；切走时断开实时流（历史数据保留）
+// 实时流：keep-alive 切走或标签页隐藏时断开（后端订阅数归零即停采样），恢复时重连
+useVisibleConn(() => wsTopic('metrics', (m) => update(m)))
+
+// 保活切回：RO 在 DOM 脱离/回归文档期间可能不触发（离开时已按 0 尺寸收缩），
+// 双 rAF 等布局完成后再恢复一次画布尺寸
 onActivated(() => {
-  stopWs = wsTopic('metrics', (m) => update(m))
-  resizeTimer = setInterval(() => charts.forEach(c => c.resize()), 3000)
-  charts.forEach(c => c.resize())
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    const box = cpuBox.value
+    if (box && box.clientWidth > 0) charts.forEach(c => c.resize())
+  }))
 })
-onDeactivated(() => { stopWs?.(); stopWs = null; clearInterval(resizeTimer) })
-onUnmounted(() => { stopWs?.(); clearInterval(resizeTimer); charts.forEach(c => c?.dispose()) })
+onUnmounted(() => {
+  resizeObserver?.disconnect(); resizeObserver = null
+  charts.forEach(c => c?.dispose()); charts = []
+})
 </script>
 
 <style scoped>

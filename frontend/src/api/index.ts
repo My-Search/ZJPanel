@@ -27,22 +27,31 @@ export const upload = (url: string, file: File, field = 'file') => {
   return http.post(url, fd, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data)
 }
 
-// WebSocket 主题订阅（统一 /api/ws?topic=xxx，带自动重连）
+// WebSocket 主题订阅（统一 /api/ws?topic=xxx，带自动重连）。
+// 重连用指数退避（1s→2s→4s…上限 30s + 随机抖动，连上即重置）：
+// 固定 3s 重试在后端宕机/网络中断时会形成重连风暴，白耗前后端 CPU。
 export function wsTopic(topic: string, onData: (msg: any) => void, isBinary = false): () => void {
   let ws: WebSocket | null = null
   let closed = false
   let timer: any = null
+  let attempt = 0
   const connect = () => {
     if (closed) return
     const proto = location.protocol === 'https:' ? 'wss' : 'ws'
     ws = new WebSocket(`${proto}://${location.host}/api/ws?topic=${encodeURIComponent(topic)}`)
+    ws.onopen = () => { attempt = 0 }
     ws.onmessage = (ev) => {
       if (isBinary) onData(ev.data)
       else {
         try { onData(JSON.parse(ev.data)) } catch { /* ignore */ }
       }
     }
-    ws.onclose = () => { if (!closed) timer = setTimeout(connect, 3000) }
+    ws.onclose = () => {
+      if (closed) return
+      attempt++
+      const delay = Math.min(30000, 1000 * 2 ** Math.min(attempt, 5)) + Math.random() * 500
+      timer = setTimeout(connect, delay)
+    }
     ws.onerror = () => ws?.close()
   }
   connect()

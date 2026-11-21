@@ -79,6 +79,7 @@
 import { onActivated, onDeactivated, onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post, del, fmtBytes } from '../api'
+import { usePolling } from '../composables/usePolling'
 import { useTermTheme } from '../utils/termTheme'
 import { wsMessageToText } from '../utils/wsMessage'
 
@@ -203,16 +204,18 @@ const removeImage = async (r: any) => {
   load()
 }
 
-let timer: any = null
 onMounted(() => { load() })
 
-// 保活生命周期（作为 AppsPage 子组件随父级缓存）：激活恢复轮询，切走暂停
-onActivated(() => {
-  load()
-  timer = setInterval(load, 10000)
-})
-onDeactivated(() => clearInterval(timer))
-onUnmounted(() => { clearInterval(timer); logsWs?.close(); closeExec() })
+// 轮询门控三条件：Docker 标签激活（antd Tabs 的 v-show 切换不触发 activated/deactivated，
+// 由父级传 active prop，watch 驱动启停）+ 路由级 keep-alive 激活（切其它页面时传播触发，
+// 仅设标记，恢复动作交给 usePolling 内部钩子避免重复 resume 双请求）+ 标签页可见（内部处理）。
+const props = defineProps<{ active?: boolean }>()
+let routeActive = true
+onActivated(() => { routeActive = true })
+onDeactivated(() => { routeActive = false })
+const poll = usePolling(load, 10000, { immediate: false, enabled: () => routeActive && props.active !== false })
+watch(() => props.active, (v) => { v !== false ? poll.resume() : poll.stop() })
+onUnmounted(() => { poll.stop(); logsWs?.close(); closeExec() })
 </script>
 
 <style scoped>

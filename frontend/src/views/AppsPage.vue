@@ -147,7 +147,7 @@
 
       <!-- Docker 全局 -->
       <a-tab-pane key="docker" tab="Docker 全局">
-        <DockerPage />
+        <DockerPage :active="tab === 'docker'" />
       </a-tab-pane>
     </a-tabs>
     </a-spin>
@@ -719,13 +719,24 @@ const closeExec = () => {
 let timer: any = null
 onMounted(() => { scan() })
 
-// 保活生命周期：激活重新扫描并恢复轮询；切走时暂停轮询（终端会话/日志 WS 保持，返回时恢复）
+// 保活生命周期：激活重新扫描并恢复运行中任务的实时视图与展开行轮询；切走时全部暂停。
+// （此前 outPollTimer/reqTimer 切走不清理：compose 任务运行中或站点行展开状态下离开页面，
+// 3s/30s 轮询在后台持续打接口）
 onActivated(() => {
   scan()
   timer = setInterval(refreshRuntime, 10000)
+  // compose 任务运行中：切走时已停 WS/兜底轮询，回来接上（输出文本保留，续传不重放）
+  if (outStatus.value === 'running' && outJobProjectId.value != null && !outPollTimer) {
+    trackRunningJob(outJobProjectId.value)
+  }
+  if (expandedKeys.value.length) ensureReqPolling()
 })
-onDeactivated(() => clearInterval(timer))
-onUnmounted(() => { clearInterval(timer); clearInterval(reqTimer); stopOutWatch(); logsWs?.close(); closeExec() })
+onDeactivated(() => {
+  clearInterval(timer); timer = null
+  if (outStatus.value === 'running') stopOutWatch() // WS 订阅与兜底轮询停掉，返回时 trackRunningJob 恢复
+  stopReqPolling()
+})
+onUnmounted(() => { clearInterval(timer); stopReqPolling(); stopOutWatch(); logsWs?.close(); closeExec() })
 </script>
 
 <style scoped>

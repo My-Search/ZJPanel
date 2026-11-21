@@ -522,10 +522,24 @@ const stop = () => {
   clearInterval(sweepTimer); sweepTimer = null
   clearInterval(treeTimer); treeTimer = null
 }
+// 标签页隐藏时整体暂停（断 SSE、停轮询/流星动画），恢复可见时重启：
+// 后端按 SSE 订阅数与 Summary 查询热度自适应降频，后台标签不再拖住服务端采集。
+// deactivated 标记防止「keep-alive 已切走但标签切回可见」时误启动。
+let deactivated = false
+const onVis = () => {
+  if (document.hidden) stop()
+  else if (!deactivated) start()
+}
+document.addEventListener('visibilitychange', onVis)
 onMounted(start)
-onActivated(start)
-onDeactivated(stop)
-onUnmounted(() => { stop(); resizeObserver?.disconnect(); resizeObserver = null; chart?.dispose(); chart = null })
+onActivated(() => { deactivated = false; start() })
+onDeactivated(() => { deactivated = true; stop() })
+onUnmounted(() => {
+  stop(); deactivated = true
+  document.removeEventListener('visibilitychange', onVis)
+  resizeObserver?.disconnect(); resizeObserver = null
+  chart?.dispose(); chart = null
+})
 </script>
 
 <style scoped>

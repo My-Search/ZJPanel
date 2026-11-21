@@ -102,19 +102,37 @@ type Service struct {
 	count     int64
 	startedAt time.Time               // 服务启动时刻：仅此后发生的请求才算「实时」
 	subs      map[chan Entry]struct{} // SSE 实时条目订阅者
+	lastQuery time.Time               // 最近一次 Summary 查询时刻（驱动扫描周期自适应）
 	// 增量解析游标
-	offsets map[string]int64
-	stop    chan struct{}
-	once    sync.Once
+	offsets  map[string]int64
+	lastStat map[string]fileStat // 最近一次扫描时的文件 size/mtime：未变化直接跳过 open/read
+	stop     chan struct{}
+	once     sync.Once
 	// 服务器位置状态（serverloc.go：手动指定/在线反查缓存，落盘 geoip/serverloc.json）
 	locMu    sync.Mutex
 	locState *serverLocState
 }
 
+// fileStat 用于判断日志文件是否发生变化（append 必然改变 size；轮转必然改变 size/mtime 之一）。
+type fileStat struct {
+	size int64
+	mod  time.Time
+}
+
 func New(cfg *pkg.Config) *Service {
+	ringN := cfg.LogmapRing
+	if ringN <= 0 {
+		ringN = 20000 // 默认 2 万条：空闲内存 ~3.4MB（此前 10 万条 ~17MB，对低占用部署偏大）
+	}
+	if ringN < 1000 {
+		ringN = 1000
+	}
+	if ringN > 200000 {
+		ringN = 200000
+	}
 	s := &Service{
 		cfg: cfg, geo: NewGeoIP(cfg.DataDir),
-		ringN: 100000, ring: make([]Entry, 100000), offsets: map[string]int64{}, stop: make(chan struct{}),
+		ringN: ringN, ring: make([]Entry, ringN), offsets: map[string]int64{}, lastStat: map[string]fileStat{}, stop: make(chan struct{}),
 		startedAt: time.Now(), subs: map[chan Entry]struct{}{},
 	}
 	// 后台预热服务器位置（出口 IP 反查并落盘缓存）：首次打开地图页即有准确红点，
@@ -168,17 +186,25 @@ func (s *Service) push(e Entry) {
 	s.mu.Unlock()
 }
 
-// Start 周期增量解析 access log（5s）。实时条目由 push 即时投递 SSE 订阅者（逐条，无批量延迟）；
+// Start 周期增量解析 access log。实时条目由 push 即时投递 SSE 订阅者（逐条，无批量延迟）；
 // 聚合摘要由 /api/logmap/stream 的每个连接按 10s 周期自行推送。
+// 扫描周期自适应：有 SSE 订阅者或近期有 Summary 查询（地图页/仪表盘在轮询）时 5s，
+// 空闲时 30s——空闲时段不对日志目录做高频扫描。
 func (s *Service) Start() {
 	go func() {
-		tick := time.NewTicker(5 * time.Second)
-		defer tick.Stop()
+		const fast, slow = 5 * time.Second, 30 * time.Second
 		for {
+			delay := slow
+			s.mu.Lock()
+			busy := len(s.subs) > 0 || (!s.lastQuery.IsZero() && time.Since(s.lastQuery) < slow+5*time.Second)
+			s.mu.Unlock()
+			if busy {
+				delay = fast
+			}
 			select {
 			case <-s.stop:
 				return
-			case <-tick.C:
+			case <-time.After(delay):
 				s.tailLogs()
 			}
 		}
@@ -186,6 +212,8 @@ func (s *Service) Start() {
 }
 
 // tailLogs 扫描日志目录所有 *.log，按文件偏移量增量解析新行。
+// 文件 size/mtime 均未变化且已有读取游标时直接跳过（append 必然改变 size），
+// 空闲时段对静止日志零 open/read。
 func (s *Service) tailLogs() {
 	entries, err := os.ReadDir(s.cfg.NginxLogsDir)
 	if err != nil {
@@ -196,7 +224,23 @@ func (s *Service) tailLogs() {
 			continue
 		}
 		path := filepath.Join(s.cfg.NginxLogsDir, e.Name())
+		fi, err := e.Info()
+		if err != nil {
+			s.tailFile(path)
+			continue
+		}
+		s.mu.Lock()
+		prev, has := s.lastStat[path]
+		off := s.offsets[path]
+		s.mu.Unlock()
+		if has && off > 0 && prev.size == fi.Size() && prev.mod.Equal(fi.ModTime()) {
+			continue
+		}
 		s.tailFile(path)
+		// 记录扫描前的 stat：若扫描期间文件又追加，下次因 stat 不匹配必然重扫
+		s.mu.Lock()
+		s.lastStat[path] = fileStat{size: fi.Size(), mod: fi.ModTime()}
+		s.mu.Unlock()
 	}
 }
 
@@ -297,6 +341,7 @@ func (s *Service) Summary(minutes, recent int, withPaths bool) *Summary {
 	}
 	cut := time.Now().Add(-time.Duration(minutes) * time.Minute)
 	s.mu.Lock()
+	s.lastQuery = time.Now() // 标记有活跃查询：扫描循环据此保持 5s 快速档
 	var entries []Entry
 	for i := 0; i < s.ringN; i++ {
 		idx := (s.head - 1 - i + 2*s.ringN) % s.ringN
