@@ -164,7 +164,9 @@ func (s *Service) push(e Entry) {
 	s.count++
 	// 启动前的历史条目（面板重启后首扫整份日志、日志轮转残留）只进 ring 供聚合统计，
 	// 不进实时流——否则重启瞬间整份 access log 被当作「实时请求」推送（实时数虚高的根因）。
-	if e.Time.Before(s.startedAt) {
+	// startedAt 按秒截断后再比较：日志时间戳只到整秒，同一秒内启动后落盘的请求
+	// 若用原始纳秒值比较会被误判为历史条目而丢失（请求流偶发断条的边角）。
+	if e.Time.Before(s.startedAt.Truncate(time.Second)) {
 		s.mu.Unlock()
 		return
 	}

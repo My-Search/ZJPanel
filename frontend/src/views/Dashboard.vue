@@ -111,10 +111,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onActivated, onDeactivated, onUnmounted, ref } from 'vue'
 import { get, wsTopic, fmtBytes } from '../api'
 import { sortSites } from '../utils/siteOrder'
-import { usePolling, useVisibleConn } from '../composables/usePolling'
+import { usePolling } from '../composables/usePolling'
 import RequestMap from '../components/RequestMap.vue'
 import { ClusterOutlined, SafetyCertificateOutlined, GlobalOutlined } from '@ant-design/icons-vue'
 
@@ -176,12 +176,17 @@ const loadAll = async () => {
   loading.value = false
 }
 
-// 轮询与实时流统一管理：keep-alive 切走或标签页隐藏时暂停/断开，
-// 恢复（切回页面/切回标签）时立即补一次加载并重连（后端据此把空闲采集降到零）。
+// 轮询统一管理：keep-alive 切走暂停，切回/标签恢复时立即补一次加载。
 // 首次加载由 onActivated 触发（Dashboard 在 MainLayout 的 keep-alive 缓存内，
 // 挂载后必触发激活）——不再像旧版那样 mounted+activated 各拉一遍造成首屏双请求。
 usePolling(loadAll, 15000, { immediate: false })
-useVisibleConn(() => wsTopic('metrics', (m) => { snap.value = m }))
+
+// 实时指标流：挂载/激活即连，切走断开（v1.0.6 语义）。
+// 不做「标签页隐藏断开」——可见性时序不可控（冻结/丢弃/恢复），影响实时数据可靠性。
+let stopWs: (() => void) | null = null
+onActivated(() => { stopWs = wsTopic('metrics', (m) => { snap.value = m }) })
+onDeactivated(() => { stopWs?.(); stopWs = null })
+onUnmounted(() => { stopWs?.() })
 </script>
 
 <style scoped>

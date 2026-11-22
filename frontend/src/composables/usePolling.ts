@@ -52,33 +52,3 @@ export function usePolling(fn: () => unknown, intervalMs: number, opts: { immedi
   start()
   return { stop, resume }
 }
-
-// 长连接（WS/SSE）生命周期管理：keep-alive 切走或标签页隐藏时断开，切回/恢复可见时重连。
-// 断开后后端订阅数归零，推送侧采集/解析随之降频或停止——空闲节省的关键联动点。
-export function useVisibleConn(start: () => (() => void) | void) {
-  let stopFn: (() => void) | null = null
-  let dead = false
-  let active = true // keep-alive 激活状态（未被 keep-alive 包裹时保持 true）
-  const open = () => {
-    if (dead || stopFn) return
-    stopFn = start() || null
-  }
-  const close = () => {
-    stopFn?.()
-    stopFn = null
-  }
-  const onVis = () => {
-    if (document.hidden) close()
-    else if (active) open()
-  }
-  document.addEventListener('visibilitychange', onVis)
-  onActivated(() => { active = true; open() })
-  onDeactivated(() => { active = false; close() })
-  onUnmounted(() => {
-    dead = true
-    document.removeEventListener('visibilitychange', onVis)
-    close()
-  })
-  if (!document.hidden) open()
-  return { close, open }
-}

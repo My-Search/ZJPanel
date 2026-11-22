@@ -58,16 +58,35 @@ export function wsTopic(topic: string, onData: (msg: any) => void, isBinary = fa
   return () => { closed = true; clearTimeout(timer); ws?.close() }
 }
 
-// SSE 事件流订阅（同源 EventSource 自动携带登录 Cookie；断线由浏览器自动重连）。
-// 返回 stop 函数；信封约定 {"type":"...","data":...}，与 wsTopic 消息一致。
+// SSE 事件流订阅（同源 EventSource 自动携带登录 Cookie）。
+// 看门狗：超过 STALL_MS 没有任何 message 就主动重建连接。后端 summary 每 10s 一帧、
+// 心跳 15s 一帧（注释帧不触发 message），35s 静默即视为流僵死——自愈代理超时断流、
+// 连接被中间层静默丢弃、原生重连失效等一切「流死了但没人重建」的场景。
 export function sseTopic(url: string, onData: (msg: any) => void): () => void {
+  let es: EventSource | null = null
   let closed = false
-  const es = new EventSource(url)
-  es.onmessage = (ev) => {
-    try { onData(JSON.parse(ev.data)) } catch { /* ignore */ }
+  let watchdog: any = null
+  const STALL_MS = 35000
+  const arm = () => {
+    clearTimeout(watchdog)
+    watchdog = setTimeout(() => {
+      if (closed) return
+      es?.close()
+      connect() // 僵死自愈：重建连接
+    }, STALL_MS)
   }
-  es.onerror = () => { if (closed) es.close() } // 未手动关闭时交给原生自动重连
-  return () => { closed = true; es.close() }
+  const connect = () => {
+    if (closed) return
+    es = new EventSource(url)
+    es.onmessage = (ev) => {
+      arm()
+      try { onData(JSON.parse(ev.data)) } catch { /* ignore */ }
+    }
+    es.onerror = () => { if (closed) es?.close() } // 未手动关闭时交给原生自动重连，看门狗兜底
+    arm()
+  }
+  connect()
+  return () => { closed = true; clearTimeout(watchdog); es?.close() }
 }
 
 export function fmtBytes(n: number): string {

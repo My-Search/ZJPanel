@@ -131,7 +131,7 @@ import { BellOutlined } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import { useNotify, type NotifyItem, type NotifySettings } from '../store/notify'
 import { wsTopic } from '../api'
-import { usePolling, useVisibleConn } from '../composables/usePolling'
+import { usePolling } from '../composables/usePolling'
 
 const notify = useNotify()
 const popOpen = ref(false)
@@ -226,14 +226,13 @@ const doTest = async () => {
   }
 }
 
-// 实时：WS 推送新通知 → 刷新未读；弹窗开着时顺带刷新列表。
-// 铃铛在布局层（非 keep-alive），useVisibleConn 只做标签页可见性管理：
-// 隐藏即断开长连接，后台标签页不再维持 WS（配合 usePolling 一并归零后台流量）
-useVisibleConn(() => wsTopic('notify', () => {
+// 实时：WS 推送新通知 → 刷新未读；弹窗开着时顺带刷新列表（布局层常驻连接）
+let stopWs: (() => void) | null = null
+stopWs = wsTopic('notify', () => {
   notify.fetchUnread()
   // 弹窗开着时刷新当前 tab；未读 tab 才需要即时刷新（已读不会因推送变化）
   if (popOpen.value && tab.value === 'unread') loadTab('unread')
-}))
+})
 // 点击铃铛与通知面板以外区域 → 收起通知列表
 const bellWrap = ref<HTMLElement | null>(null)
 const panelRef = ref<HTMLElement | null>(null)
@@ -244,11 +243,11 @@ const onDocDown = (e: MouseEvent) => {
   popOpen.value = false
 }
 window.addEventListener('mousedown', onDocDown)
-// 兜底轮询（标签页隐藏时暂停）
+// 兜底轮询（标签页隐藏时暂停，恢复时立即补一次）
 usePolling(() => notify.fetchUnread(), 60000, { immediate: false })
 const onResize = () => { isMobile.value = window.innerWidth < 768 }
 window.addEventListener('resize', onResize)
-onUnmounted(() => { window.removeEventListener('resize', onResize); window.removeEventListener('mousedown', onDocDown) })
+onUnmounted(() => { stopWs?.(); window.removeEventListener('resize', onResize); window.removeEventListener('mousedown', onDocDown) })
 </script>
 
 <style scoped>

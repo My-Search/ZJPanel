@@ -24,9 +24,8 @@
 </template>
 
 <script setup lang="ts">
-import { onActivated, onMounted, onUnmounted, ref } from 'vue'
+import { onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
 import { get, wsTopic, fmtBytes } from '../api'
-import { useVisibleConn } from '../composables/usePolling'
 
 const snap = ref<any>({})
 const loading = ref(true)
@@ -90,8 +89,10 @@ onMounted(async () => {
   loading.value = false
 })
 
-// 实时流：keep-alive 切走或标签页隐藏时断开（后端订阅数归零即停采样），恢复时重连
-useVisibleConn(() => wsTopic('metrics', (m) => update(m)))
+// 实时流：激活即连，切走断开（v1.0.6 语义，不随标签页隐藏断开）
+let stopWs: (() => void) | null = null
+onActivated(() => { stopWs = wsTopic('metrics', (m) => update(m)) })
+onDeactivated(() => { stopWs?.(); stopWs = null })
 
 // 保活切回：RO 在 DOM 脱离/回归文档期间可能不触发（离开时已按 0 尺寸收缩），
 // 双 rAF 等布局完成后再恢复一次画布尺寸
@@ -102,6 +103,7 @@ onActivated(() => {
   }))
 })
 onUnmounted(() => {
+  stopWs?.()
   resizeObserver?.disconnect(); resizeObserver = null
   charts.forEach(c => c?.dispose()); charts = []
 })
