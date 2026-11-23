@@ -122,9 +122,11 @@ interface Tab {
   skipReplay: number    // attach 回放帧剩余字节数（不计入 consumed，服务端 offset 已覆盖）
   pendingWrites: number // xterm 异步写队列未排空数；为 0 时才能拍快照
   lastWriteAt: number   // 最近一次 xterm 写入时间：快照只在输出停顿后拍，避免持续序列化卡 UI
-  snapTimer: any
+  snapTimer: any        // 滚动对齐定时器：滚轮/拖拽停止后把视口吸附到整行
   serialize: any | null    // SerializeAddon 实例
   marker: string | null // 全量回放排空后补写的提示文本；无缝续传为 null（不插标记破坏 TUI 光标状态）
+  ro: ResizeObserver | null // 监听终端容器尺寸（状态栏换行/文件面板/窗口变化都会改变它）
+  roRaf: number
 }
 
 const hosts = ref<any[]>([])
@@ -235,6 +237,32 @@ const scheduleSnapshot = (t: Tab) => {
   }, 1000)
 }
 
+// 滚动停止后把视口吸附到整行：xterm 的滚动位置允许小数像素，
+// 停在两行之间时首行会被顶部裁掉一半（表现为「终端上面被盖住」）。
+// 只处理滚轮/拖拽/翻页这类用户滚动，输出自动滚到底不受影响。
+const snapScroll = (t: Tab) => {
+  if (t.snapTimer) clearTimeout(t.snapTimer)
+  t.snapTimer = setTimeout(() => {
+    t.snapTimer = null
+    if (t.closing || !t.term) return
+    const b = t.term.buffer.active
+    if (b.viewportY >= b.baseY) t.term.scrollToBottom()
+    else t.term.scrollToLine(b.viewportY)
+  }, 140)
+}
+
+// fit 后按行对齐视口：容器高度变化（状态栏换行、文件面板、窗口缩放）时，
+// 旧版只调 fit()，xterm 的滚动位置可能停在半行，顶部首行被切。
+const fitTerm = (t: Tab) => {
+  if (!t.term || !t.fit) return
+  const b = t.term.buffer.active
+  const y = b.viewportY
+  const atBottom = y >= b.baseY
+  t.fit.fit()
+  if (atBottom) t.term.scrollToBottom()
+  else t.term.scrollToLine(y)
+}
+
 // 首次为标签创建 xterm 实例；WS 断开重连时复用同一实例（不清屏、不重复挂事件）
 const ensureTerm = async (t: Tab) => {
   if (t.term) return
@@ -251,14 +279,37 @@ const ensureTerm = async (t: Tab) => {
   const box = termBoxes.get(t.id)
   if (!box) return
   term.open(box)
-  fit.fit()
   // xterm/FitAddon/SerializeAddon 是纯命令式实例，不能进 Vue 深度响应式代理：
   // 否则每帧 write/send 都要穿过 Proxy，输出量大时明显拖慢。
   t.term = markRaw(term)
   t.fit = markRaw(fit)
   t.serialize = markRaw(new serializeAddon.SerializeAddon())
   term.loadAddon(t.serialize)
-  setTimeout(() => fit.fit(), 150)
+  fitTerm(t)
+  setTimeout(() => fitTerm(t), 150)
+
+  // 用户滚动结束后吸附整行，避免首行停在半行被顶部裁切
+  term.element?.addEventListener('wheel', () => snapScroll(t), { passive: true, capture: true })
+  term.element?.addEventListener('pointerdown', (ev) => {
+    if ((ev.target as HTMLElement).closest('.scrollbar')) snapScroll(t)
+  }, { passive: true, capture: true })
+  term.onKey(({ domEvent }) => {
+    if (domEvent.key === 'PageUp' || domEvent.key === 'PageDown' || domEvent.key === 'Home' || domEvent.key === 'End') snapScroll(t)
+  })
+
+  // 容器尺寸变化（状态栏换行、文件面板开合、窗口缩放）时重排：
+  // 旧版只监听 window.resize，状态栏变高后终端不会重新 fit，底部行会被状态栏盖住。
+  if (typeof ResizeObserver !== 'undefined') {
+    t.ro = new ResizeObserver(() => {
+      if (t.roRaf) return
+      t.roRaf = requestAnimationFrame(() => {
+        t.roRaf = 0
+        if (!t.closing) fitTerm(t)
+      })
+    })
+    t.ro.observe(box)
+  }
+
   // 输入/尺寸发送到「当前活跃 ws」，重连后自动指向新连接
   term.onData((d: string) => {
     if (t.ws && t.ws.readyState === 1) t.ws.send(new TextEncoder().encode(d))
@@ -396,6 +447,7 @@ const addTab = (label: string) => {
     created: false, stats: null, statsTimer: null,
     everReady: false, down: false, noRe: false, restoring: false, closing: false, reconnTimer: null,
     consumed: 0, skipReplay: 0, pendingWrites: 0, lastWriteAt: 0, snapTimer: null, serialize: null, marker: null,
+    ro: null, roRaf: 0,
   }
   tabs.value.push(raw)
   const t = tabs.value[tabs.value.length - 1]
@@ -419,6 +471,9 @@ const closeTab = async (id: string | number, action: string) => {
     t.closing = true
     if (t.reconnTimer) { clearTimeout(t.reconnTimer); t.reconnTimer = null }
     if (t.snapTimer) { clearTimeout(t.snapTimer); t.snapTimer = null }
+    if (t.roRaf) { cancelAnimationFrame(t.roRaf); t.roRaf = 0 }
+    t.ro?.disconnect()
+    t.ro = null
     if (t.statsTimer) clearInterval(t.statsTimer)
     dropSnapshot(t.sessionId) // 会话随标签删除：快照一并清理
     t.ws?.close()
@@ -429,7 +484,7 @@ const closeTab = async (id: string | number, action: string) => {
   } else if (typeof id === 'string') {
     activeTab.value = id
     const t = tabs.value.find(x => x.id === id)
-    if (t) setTimeout(() => { t.fit?.fit(); t.term?.focus() }, 100)
+    if (t) setTimeout(() => { fitTerm(t); t.term?.focus() }, 100)
   }
 }
 
@@ -549,13 +604,16 @@ onUnmounted(() => {
   tabs.value.forEach(t => {
     t.closing = true
     if (t.reconnTimer) clearTimeout(t.reconnTimer)
+    if (t.snapTimer) clearTimeout(t.snapTimer)
+    if (t.roRaf) cancelAnimationFrame(t.roRaf)
+    t.ro?.disconnect()
     t.ws?.close()
     if (t.statsTimer) clearInterval(t.statsTimer)
   })
 })
 
 // 主题/窗口变化：同步所有已打开终端的配色并重新适配尺寸
-const fitAll = () => tabs.value.forEach(t => t.fit?.fit())
+const fitAll = () => tabs.value.forEach(t => { if (!t.closing) fitTerm(t) })
 watch(() => ui.isDark, () => {
   tabs.value.forEach(t => { if (t.term) t.term.options.theme = termTheme() })
   fitAll()
@@ -587,6 +645,6 @@ watch(() => ui.isDark, () => {
 .term-tabs :deep(.ant-tabs-content) { height: 100%; }
 .term-pane { height: 100%; display: flex; flex-direction: column; }
 .term-pane :deep(.ant-tabs-tabpane) { display: flex; flex-direction: column; height: 100%; }
-.term-box { flex: 1; min-height: 0; }
+.term-box { flex: 1; min-height: 0; margin-top: 4px; overflow: hidden; }
 .status-strip { flex: none; }
 </style>
