@@ -1,11 +1,8 @@
 package boot
 
 import (
-	"database/sql"
 	"fmt"
 	"log/slog"
-	"strconv"
-	"strings"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -46,6 +43,9 @@ func OpenDB(cfg *pkg.Config) (*gorm.DB, error) {
 	); err != nil {
 		return nil, err
 	}
+	// AutoMigrate 可能把历史 TEXT 列重建为 integer（数据原样搬运），再兜底清洗一次；
+	// 同时覆盖旧库该列 NOT NULL 时前置清洗失败、迁移放宽约束后的情况。
+	repairLegacyComposeIDs(db)
 	seedQuickCmds(db)
 	migrateQuickCmdColors(db)
 	slog.Info("数据库就绪", "path", cfg.DataDir+"/zjpanel.db")
@@ -70,43 +70,43 @@ func repairLegacyComposeIDs(db *gorm.DB) {
 	}
 }
 
+// repairLegacyIDColumn 用纯 SQL 清洗，避免「为了清洗坏数据先扫描坏数据」：
+// v1.0.9 的 Go 侧逐行 Scan 在极端脏值（BLOB/超长数字等）下仍可能中断。
 func repairLegacyIDColumn(db *gorm.DB, table, column string) error {
 	// 首次启动或旧库尚未建表/加列时无事可做，交给 AutoMigrate 处理
 	if !db.Migrator().HasTable(table) || !db.Migrator().HasColumn(table, column) {
 		return nil
 	}
-	var rows []struct {
-		ID  uint           `gorm:"column:id"`
-		Raw sql.NullString `gorm:"column:raw"`
+	col := fmt.Sprintf("`%s`", column)
+	tbl := fmt.Sprintf("`%s`", table)
+
+	// 1) 空串、负数、非数字、0、超长数字 → NULL（非法关联宁缺毋滥）
+	clearSQL := fmt.Sprintf(
+		"UPDATE %s SET %s = NULL WHERE %s IS NOT NULL AND ("+
+			"CAST(CAST(%s AS TEXT) AS INTEGER) <= 0 OR (typeof(%s) <> 'integer' AND ("+
+			"TRIM(CAST(%s AS TEXT)) = '' OR TRIM(CAST(%s AS TEXT)) GLOB '*[^0-9]*' OR "+
+			"LENGTH(TRIM(CAST(%s AS TEXT))) > 19))"+
+			")",
+		tbl, col, col, col, col, col, col, col,
+	)
+	res := db.Exec(clearSQL)
+	if res.Error != nil {
+		return res.Error
 	}
-	if err := db.Raw(fmt.Sprintf("SELECT id, %s AS raw FROM %s", column, table)).Scan(&rows).Error; err != nil {
-		return err
+	// 2) 合法但非规范（前后空格、前导零）的文本值改写为标准整数
+	normSQL := fmt.Sprintf(
+		"UPDATE %s SET %s = CAST(TRIM(CAST(%s AS TEXT)) AS INTEGER) WHERE %s IS NOT NULL AND typeof(%s) = 'text' AND "+
+			"TRIM(CAST(%s AS TEXT)) <> '' AND TRIM(CAST(%s AS TEXT)) NOT GLOB '*[^0-9]*' AND "+
+			"CAST(CAST(TRIM(CAST(%s AS TEXT)) AS INTEGER) AS TEXT) <> CAST(%s AS TEXT)",
+		tbl, col, col, col, col, col, col, col, col,
+	)
+	norm := db.Exec(normSQL)
+	if norm.Error != nil {
+		return norm.Error
 	}
-	cleared, normalized := 0, 0
-	for _, r := range rows {
-		if !r.Raw.Valid {
-			continue
-		}
-		s := strings.TrimSpace(r.Raw.String)
-		// 空串、负数、非数字等一律视为未关联；ID 0 不是合法项目/站点主键
-		n, err := strconv.ParseUint(s, 10, 64)
-		if s == "" || err != nil || n == 0 {
-			if err := db.Exec(fmt.Sprintf("UPDATE %s SET %s = NULL WHERE id = ?", table, column), r.ID).Error; err != nil {
-				return err
-			}
-			cleared++
-			continue
-		}
-		// 合法但非规范（前后空格、前导零）的文本值改写为整数
-		if s != r.Raw.String {
-			if err := db.Exec(fmt.Sprintf("UPDATE %s SET %s = ? WHERE id = ?", table, column), n, r.ID).Error; err != nil {
-				return err
-			}
-			normalized++
-		}
-	}
-	if cleared+normalized > 0 {
-		slog.Info("历史关联 ID 已清洗", "table", table, "column", column, "cleared", cleared, "normalized", normalized)
+	if res.RowsAffected+norm.RowsAffected > 0 {
+		slog.Info("历史关联 ID 已清洗", "table", table, "column", column,
+			"cleared", res.RowsAffected, "normalized", norm.RowsAffected)
 	}
 	return nil
 }

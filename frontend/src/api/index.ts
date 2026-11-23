@@ -8,9 +8,10 @@ http.interceptors.response.use(
   (err) => {
     const status = err.response?.status
     const msg = err.response?.data?.error || err.message
+    const silent = (err.config as any)?.silent === true
     if (status === 401 && !location.pathname.startsWith('/login')) {
       location.href = '/login'
-    } else if (msg) {
+    } else if (msg && !silent) {
       message.error(String(msg).slice(0, 200))
     }
     return Promise.reject(err)
@@ -18,6 +19,9 @@ http.interceptors.response.use(
 )
 
 export const get = <T = any>(url: string, params?: any) => http.get<T>(url, { params }).then(r => r.data)
+// 轮询/后台刷新用：失败不弹全局 toast，由调用方就地展示，避免同一个错误每 15s 弹一次
+export const getQuiet = <T = any>(url: string, params?: any) =>
+  http.get<T>(url, { params, silent: true } as any).then(r => r.data)
 export const post = <T = any>(url: string, data?: any) => http.post<T>(url, data).then(r => r.data)
 export const put = <T = any>(url: string, data?: any) => http.put<T>(url, data).then(r => r.data)
 export const del = <T = any>(url: string) => http.delete<T>(url).then(r => r.data)

@@ -65,6 +65,7 @@
       <a-col :span="14">
         <a-card title="站点状态" size="small">
           <template #extra><a-tag :color="nginxRunning ? 'green' : 'red'">Nginx {{ nginxRunning ? '运行中' : '未运行' }}</a-tag></template>
+          <a-alert v-if="sitesErr" type="error" :message="sitesErr" show-icon banner style="margin-bottom: 8px" />
           <a-table :data-source="sortedSites" :columns="siteCols" size="small" :pagination="false" row-key="domain">
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'status'">
@@ -112,7 +113,7 @@
 
 <script setup lang="ts">
 import { computed, onActivated, onDeactivated, onUnmounted, ref } from 'vue'
-import { get, wsTopic, fmtBytes } from '../api'
+import { getQuiet, wsTopic, fmtBytes } from '../api'
 import { sortSites } from '../utils/siteOrder'
 import { usePolling } from '../composables/usePolling'
 import RequestMap from '../components/RequestMap.vue'
@@ -120,6 +121,7 @@ import { ClusterOutlined, SafetyCertificateOutlined, GlobalOutlined } from '@ant
 
 const snap = ref<any>({})
 const sites = ref<any[]>([])
+const sitesErr = ref('')
 const nginxRunning = ref(false)
 const version = ref('')
 const loading = ref(true)
@@ -168,11 +170,22 @@ const siteCols = [
 const sortedSites = computed(() => sortSites(sites.value))
 
 const loadAll = async () => {
-  try {
-    sites.value = await get('/api/sites')
-    nginxRunning.value = (await get<any>('/api/nginx/status')).running
-    version.value = (await get<any>('/api/update/current')).version
-  } catch { /* 拦截器统一提示，保留上次数据 */ }
+  // 三个接口互不阻塞：站点列表失败（例如历史库脏值）时仍要拿到版本与 Nginx 状态，
+  // 否则用户看不到当前面板版本，排查部署是否生效会被连带卡住。
+  const [sitesRes, nginxRes, verRes] = await Promise.allSettled([
+    getQuiet('/api/sites'),
+    getQuiet<any>('/api/nginx/status'),
+    getQuiet<any>('/api/update/current'),
+  ])
+  if (sitesRes.status === 'fulfilled') {
+    sites.value = sitesRes.value
+    sitesErr.value = ''
+  } else {
+    const e: any = sitesRes.reason
+    sitesErr.value = '站点列表加载失败：' + (e?.response?.data?.error || e?.message || '未知错误')
+  }
+  if (nginxRes.status === 'fulfilled') nginxRunning.value = nginxRes.value.running
+  if (verRes.status === 'fulfilled') version.value = verRes.value.version
   loading.value = false
 }
 

@@ -88,7 +88,7 @@
 </template>
 
 <script setup lang="ts">
-import { onActivated, onDeactivated, onMounted, onUnmounted, ref, nextTick, computed, watch } from 'vue'
+import { markRaw, onActivated, onDeactivated, onMounted, onUnmounted, ref, nextTick, computed, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post, del } from '../api'
 import { DownOutlined, FolderOpenOutlined, ThunderboltOutlined } from '@ant-design/icons-vue'
@@ -121,6 +121,7 @@ interface Tab {
   consumed: number      // 已消费的 PTY 输出流偏移（字节）：attach 的 since 断点
   skipReplay: number    // attach 回放帧剩余字节数（不计入 consumed，服务端 offset 已覆盖）
   pendingWrites: number // xterm 异步写队列未排空数；为 0 时才能拍快照
+  lastWriteAt: number   // 最近一次 xterm 写入时间：快照只在输出停顿后拍，避免持续序列化卡 UI
   snapTimer: any
   serialize: any | null    // SerializeAddon 实例
   marker: string | null // 全量回放排空后补写的提示文本；无缝续传为 null（不插标记破坏 TUI 光标状态）
@@ -188,6 +189,7 @@ const cleanOrphanSnapshots = (activeSids: string[]) => {
 // 统一写入口：跟踪 xterm 异步写排空——快照必须等队列排空，否则会缺尾部字节
 const tWrite = (t: Tab, data: string | Uint8Array) => {
   if (!t.term) return
+  t.lastWriteAt = Date.now()
   t.pendingWrites++
   t.term.write(data as any, () => {
     t.pendingWrites--
@@ -205,14 +207,32 @@ const takeSnapshotNow = (t: Tab) => {
   } catch { /* 配额满等：跳过 */ }
 }
 
-// 防抖拍快照：写队列排空后同步检查+序列化（JS 单线程内无写交错，快照与 consumed 严格对应）
+// 空闲快照：输出停顿 3s 后才序列化，序列化本身再放到浏览器空闲时段。
+// 旧版每 800ms 就 serialize 5000 行 scrollback + 同步写 localStorage，
+// 持续输出/连续回车时会把主线程占满，表现为输入和滚动都卡。
+const SNAPSHOT_IDLE_MS = 3000
 const scheduleSnapshot = (t: Tab) => {
-  if (t.snapTimer || t.closing) return
+  if (t.snapTimer || t.closing || t.noRe) return
   t.snapTimer = setTimeout(() => {
     t.snapTimer = null
-    if (t.pendingWrites > 0) return
-    takeSnapshotNow(t)
-  }, 800)
+    if (t.closing || t.noRe) return
+    // 仍在输出或刚停顿不足 3s：1s 后再探，不做序列化
+    if (t.pendingWrites > 0 || Date.now() - t.lastWriteAt < SNAPSHOT_IDLE_MS) {
+      scheduleSnapshot(t)
+      return
+    }
+    const run = () => {
+      if (t.closing || t.noRe) return
+      if (t.pendingWrites > 0 || Date.now() - t.lastWriteAt < SNAPSHOT_IDLE_MS) {
+        scheduleSnapshot(t)
+        return
+      }
+      takeSnapshotNow(t)
+    }
+    const ric = (window as any).requestIdleCallback
+    if (typeof ric === 'function') ric(run, { timeout: 1500 })
+    else setTimeout(run, 0)
+  }, 1000)
 }
 
 // 首次为标签创建 xterm 实例；WS 断开重连时复用同一实例（不清屏、不重复挂事件）
@@ -232,9 +252,11 @@ const ensureTerm = async (t: Tab) => {
   if (!box) return
   term.open(box)
   fit.fit()
-  t.term = term
-  t.fit = fit
-  t.serialize = new serializeAddon.SerializeAddon()
+  // xterm/FitAddon/SerializeAddon 是纯命令式实例，不能进 Vue 深度响应式代理：
+  // 否则每帧 write/send 都要穿过 Proxy，输出量大时明显拖慢。
+  t.term = markRaw(term)
+  t.fit = markRaw(fit)
+  t.serialize = markRaw(new serializeAddon.SerializeAddon())
   term.loadAddon(t.serialize)
   setTimeout(() => fit.fit(), 150)
   // 输入/尺寸发送到「当前活跃 ws」，重连后自动指向新连接
@@ -254,7 +276,7 @@ const dialWS = (t: Tab, createMsg: Record<string, any> | null) => {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   const ws = new WebSocket(`${proto}://${location.host}/api/ws/terminal`)
   ws.binaryType = 'arraybuffer'
-  t.ws = ws
+  t.ws = markRaw(ws)
   let sinceSent = false // 本次 attach 是否带了 since 断点（true=增量续传，false=全量回放）
   ws.onopen = () => {
     // attach 带 since：快照断点（刷新恢复）或已收偏移（断线重连）时增量续传，服务端只回放缺失字节
@@ -373,7 +395,7 @@ const addTab = (label: string) => {
     id: Math.random().toString(36).slice(2), label, sessionId: null, hostId: null, kind: 'local', ws: null, term: null, fit: null,
     created: false, stats: null, statsTimer: null,
     everReady: false, down: false, noRe: false, restoring: false, closing: false, reconnTimer: null,
-    consumed: 0, skipReplay: 0, pendingWrites: 0, snapTimer: null, serialize: null, marker: null,
+    consumed: 0, skipReplay: 0, pendingWrites: 0, lastWriteAt: 0, snapTimer: null, serialize: null, marker: null,
   }
   tabs.value.push(raw)
   const t = tabs.value[tabs.value.length - 1]
