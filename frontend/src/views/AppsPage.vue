@@ -257,7 +257,7 @@
 <script setup lang="ts">
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
 import { message } from 'ant-design-vue'
-import { get, post, fmtBytes, wsTopic } from '../api'
+import { get, getQuiet, post, fmtBytes, wsTopic } from '../api'
 import { useTermTheme } from '../utils/termTheme'
 import { wsMessageToText } from '../utils/wsMessage'
 import Sites from './Sites.vue'
@@ -447,29 +447,67 @@ const projMem = (p: any) => {
   if (!total) return '0MB'
   return total >= 1073741824 ? (total / 1073741824).toFixed(2) + 'GB' : Math.round(total / 1048576) + 'MB'
 }
-const loadStats = async () => { stats.value = await get('/api/docker/containers/stats').catch(() => []) as any }
-/** 运行时数据（容器列表 + 资源占用）统一刷新，避免两处轮询各自为政。 */
-const refreshRuntime = async () => {
-  containers.value = await get('/api/docker/containers').catch(() => []) as any
-  await loadStats()
+let statsPromise: Promise<void> | null = null
+const loadStats = () => {
+  if (statsPromise) return statsPromise // 首屏补帧与 10s 轮询撞车时复用同一请求
+  statsPromise = getQuiet('/api/docker/containers/stats')
+    .then(v => { stats.value = (v as any) || [] })
+    .catch(() => { /* 保留上一帧，等下一轮轮询 */ })
+    .finally(() => { statsPromise = null })
+  return statsPromise
+}
+/** 运行时数据（容器列表 + 资源占用）定时刷新：两路并发，单路失败保留上一帧。 */
+let runtimePromise: Promise<void> | null = null
+const refreshRuntime = () => {
+  if (runtimePromise) return runtimePromise // 定时刷新与其它触发撞车时复用同一批请求
+  runtimePromise = (async () => {
+    // 两个接口互不依赖：并发拉取，避免 stats 等 containers 返回后才开始第二跳。
+    await Promise.all([
+      getQuiet('/api/docker/containers')
+        .then(v => { containers.value = (v as any) || [] })
+        .catch(() => { /* 保留上一帧，避免瞬时失败把列表清空 */ }),
+      loadStats(),
+    ])
+  })().finally(() => { runtimePromise = null })
+  return runtimePromise
 }
 
-const scan = async () => {
-  scanning.value = true
-  try {
-    projects.value = await get('/api/compose/scan')
-    sites.value = await get('/api/sites')
-    await refreshRuntime()
-    try { composeRoot.value = (await get<any>('/api/settings')).composeRoot } catch { /* ignore */ }
-    if (selected.value) {
-      const again = projects.value.find(p => p.dir === selected.value.dir)
-      selected.value = again || null
+// 并发去重：应用页在 keep-alive 内，首次进入时 onMounted 与 onActivated 会在同一 tick
+// 各调一次 scan；不合并会重复扫描 compose 目录并重复 SyncDB（dir 唯一索引还会让后一次 500）。
+let scanPromise: Promise<void> | null = null
+const scan = () => {
+  if (scanPromise) return scanPromise
+  scanPromise = (async () => {
+    scanning.value = true
+    try {
+      // 资源占用是慢腿，只影响卡片上的 CPU/内存小字：现在起跑，但不挡首屏。
+      void loadStats()
+      // 四路首屏数据互不依赖，全部并发：等待 ≈ 最慢一路，而不是四路串行之和。
+      // allSettled 而非 all：Docker 不可用时仍要展示项目/站点，反之亦然。
+      const [projRes, sitesRes, ctrRes, setRes] = await Promise.allSettled([
+        get('/api/compose/scan'),
+        get('/api/sites'),
+        getQuiet<any>('/api/docker/containers'),
+        getQuiet<any>('/api/settings'),
+      ])
+      if (projRes.status === 'fulfilled') projects.value = (projRes.value as any[]) || []
+      if (sitesRes.status === 'fulfilled') sites.value = (sitesRes.value as any[]) || []
+      if (ctrRes.status === 'fulfilled') containers.value = (ctrRes.value as any[]) || []
+      if (setRes.status === 'fulfilled') composeRoot.value = setRes.value?.composeRoot || composeRoot.value
+      // 选中项依赖项目列表，必须等并发结果落地后再对齐
+      if (projRes.status === 'fulfilled') {
+        if (selected.value) {
+          selected.value = projects.value.find(p => p.dir === selected.value.dir) || null
+        }
+        // 默认选中列表第一项（按展示排序：运行中优先），而非后端扫描顺序
+        if (projects.value.length && !selected.value) select(sortedProjects.value[0] || projects.value[0])
+      }
+    } finally {
+      scanning.value = false
+      scanPromise = null
     }
-    // 默认选中列表第一项（按展示排序：运行中优先），而非后端扫描顺序
-    if (projects.value.length && !selected.value) select(sortedProjects.value[0] || projects.value[0])
-  } finally {
-    scanning.value = false
-  }
+  })()
+  return scanPromise
 }
 
 const select = async (p: any) => {

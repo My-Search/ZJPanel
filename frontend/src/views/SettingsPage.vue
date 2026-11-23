@@ -79,9 +79,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onMounted, ref } from 'vue'
+import { computed, onActivated, ref } from 'vue'
 import { message } from 'ant-design-vue'
-import { get, put, post, fmtTime } from '../api'
+import { getQuiet, put, post, fmtTime } from '../api'
 import { useAuth } from '../store/auth'
 import AceEditor from '../components/AceEditor.vue'
 
@@ -116,11 +116,19 @@ const loading = ref(false)
 const load = async () => {
   loading.value = true
   try {
-    settings.value = await get('/api/settings')
-    version.value = (await get<any>('/api/update/current')).version
-    audit.value = await get('/api/settings/audit')
-    const d = await get('/api/sites/maintenance-template').catch(() => null)
-    if (d) maintTemplate.value = d.content
+    // 四个接口互不依赖：并发拉取，避免版本/审计/维护模板逐个等前面返回。
+    // quiet 拉取：单项失败只在设置主体失败时提示，避免一次刷多条 toast。
+    const [setR, verR, auditR, tplR] = await Promise.allSettled([
+      getQuiet<any>('/api/settings'),
+      getQuiet<any>('/api/update/current'),
+      getQuiet<any[]>('/api/settings/audit'),
+      getQuiet<any>('/api/sites/maintenance-template'),
+    ])
+    if (setR.status === 'fulfilled') settings.value = setR.value || {}
+    if (verR.status === 'fulfilled') version.value = verR.value?.version || ''
+    if (auditR.status === 'fulfilled') audit.value = auditR.value || []
+    if (tplR.status === 'fulfilled' && tplR.value) maintTemplate.value = tplR.value.content
+    if (setR.status === 'rejected') message.error('设置加载失败，请稍后重试')
   } finally { loading.value = false }
 }
 const checkUpdate = async () => {
@@ -176,7 +184,7 @@ const changeUn = async () => {
   await auth.refresh()
 }
 
-onMounted(load)
+// 首次加载交给 onActivated（设置页在 keep-alive 白名单内），避免 mounted+activated 双请求
 onActivated(load)
 </script>
 

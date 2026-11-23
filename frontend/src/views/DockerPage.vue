@@ -78,7 +78,7 @@
 <script setup lang="ts">
 import { onActivated, onDeactivated, onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
 import { message } from 'ant-design-vue'
-import { get, post, del, fmtBytes } from '../api'
+import { getQuiet, post, del, fmtBytes } from '../api'
 import { usePolling } from '../composables/usePolling'
 import { useTermTheme } from '../utils/termTheme'
 import { wsMessageToText } from '../utils/wsMessage'
@@ -131,15 +131,29 @@ const volCols = [
   { title: '挂载点', dataIndex: 'mountpoint', key: 'mountpoint' },
 ]
 
-const load = async () => {
-  try {
-    const info = await get<any>('/api/docker/info').catch(() => null)
-    available.value = !!info
-    containers.value = (await get('/api/docker/containers')) || []
-    images.value = (await get('/api/docker/images')) || []
-    networks.value = (await get('/api/docker/networks')) || []
-    volumes.value = (await get('/api/docker/volumes')) || []
-  } catch { available.value = false }
+// 并发去重：首次切到「Docker 全局」时，onMounted 与 keep-alive 的 onActivated（轮询 resume）
+// 会各触发一次 load，不合并就会把 5 个接口各打两遍。
+let loadPromise: Promise<void> | null = null
+const load = () => {
+  if (loadPromise) return loadPromise
+  loadPromise = (async () => {
+    // info 与四类资源互不依赖：一次并发拉取，首屏耗时 ≈ 最慢一路。
+    // 列表走 quiet：Docker 不可用时 10s 轮询每轮都会失败，用 get 会连弹多条错误 toast
+    // （原先串行在 info 失败处提前返回，只提示一条）。可用性仍由 info 单独判定。
+    const [infoRes, ctrRes, imgRes, netRes, volRes] = await Promise.allSettled([
+      getQuiet('/api/docker/info'),
+      getQuiet('/api/docker/containers'),
+      getQuiet('/api/docker/images'),
+      getQuiet('/api/docker/networks'),
+      getQuiet('/api/docker/volumes'),
+    ])
+    available.value = infoRes.status === 'fulfilled' && !!infoRes.value
+    if (ctrRes.status === 'fulfilled') containers.value = (ctrRes.value as any[]) || []
+    if (imgRes.status === 'fulfilled') images.value = (imgRes.value as any[]) || []
+    if (netRes.status === 'fulfilled') networks.value = (netRes.value as any[]) || []
+    if (volRes.status === 'fulfilled') volumes.value = (volRes.value as any[]) || []
+  })().finally(() => { loadPromise = null })
+  return loadPromise
 }
 
 const act = async (r: any, action: string) => {

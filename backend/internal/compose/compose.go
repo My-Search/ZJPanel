@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -51,7 +52,7 @@ type ProjectInfo struct {
 	Imported bool          `json:"imported"`
 	SiteID   *uint         `json:"siteId"`
 	ID       uint          `json:"id"`
-	HasDecl  bool          `json:"hasDecl"`  // 存在 zjpanel.json（声明式导入）
+	HasDecl  bool          `json:"hasDecl"` // 存在 zjpanel.json（声明式导入）
 	Decl     *DeclFile     `json:"decl,omitempty"`
 }
 
@@ -93,7 +94,9 @@ func parseCompose(dir string) (*composeFile, error) {
 	return nil, fmt.Errorf("目录中未找到 docker-compose.yml")
 }
 
-// servicesOf 归一化端口条目（字符串 "8080:80" 或映射 {published,target}）
+// servicesOf 归一化端口条目（字符串 "8080:80" 或映射 {published,target}）。
+// 按服务名排序：compose 文件里 services 是 map，Go 遍历顺序随机；不排序会导致
+// 同一份文件每次扫描产出不同 JSON，既让 SyncDB 的「无变化不写库」失效，UI 服务顺序也会跳。
 func servicesOf(f *composeFile) []ServiceInfo {
 	var out []ServiceInfo
 	for name, sv := range f.Services {
@@ -115,6 +118,7 @@ func servicesOf(f *composeFile) []ServiceInfo {
 		}
 		out = append(out, info)
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
@@ -135,13 +139,16 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// Scan 扫描根目录（一级），返回项目列表并同步 DB。
+// Scan 扫描根目录（一级），返回项目列表（附带已有导入记录）。
 func (s *Service) Scan() ([]ProjectInfo, error) {
 	var out []ProjectInfo
 	entries, err := os.ReadDir(s.cfg.ComposeRoot)
 	if err != nil {
 		return out, nil
 	}
+	// 一次取出全部记录再按目录索引：目录多时不再每个项目查一次库。
+	// 查询失败按「没有任何导入记录」处理（与原先逐目录 First 失败的语义一致）。
+	recs := s.recordsByDir()
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -155,8 +162,7 @@ func (s *Service) Scan() ([]ProjectInfo, error) {
 		if decl, derr := s.ReadDecl(dir); derr == nil && decl != nil {
 			pi.HasDecl, pi.Decl = true, decl
 		}
-		var rec model.ComposeProject
-		if err := s.db.Where("dir = ?", dir).First(&rec).Error; err == nil {
+		if rec, ok := recs[dir]; ok {
 			pi.ID, pi.Imported, pi.SiteID = rec.ID, rec.Imported, rec.SiteID
 		}
 		out = append(out, pi)
@@ -164,22 +170,43 @@ func (s *Service) Scan() ([]ProjectInfo, error) {
 	return out, nil
 }
 
-// SyncDB 扫描并入库：新目录创建记录，已有记录刷新服务解析结果。
+// recordsByDir 一次查询全部 compose 项目记录，按目录建索引（避免扫描时 N+1 查询）。
+func (s *Service) recordsByDir() map[string]*model.ComposeProject {
+	var recs []model.ComposeProject
+	if err := s.db.Find(&recs).Error; err != nil {
+		return map[string]*model.ComposeProject{}
+	}
+	m := make(map[string]*model.ComposeProject, len(recs))
+	for i := range recs {
+		m[recs[i].Dir] = &recs[i]
+	}
+	return m
+}
+
+// SyncDB 扫描并入库：新目录创建记录，已有记录仅在解析结果变化时刷新。
+// 应用页每次激活都会调用扫描，无变化时空写会白白占用 SQLite 写锁并放大 WAL。
 func (s *Service) SyncDB() ([]ProjectInfo, error) {
 	list, err := s.Scan()
 	if err != nil {
 		return nil, err
 	}
+	recs := s.recordsByDir()
 	for _, p := range list {
-		var rec model.ComposeProject
-		if err := s.db.Where("dir = ?", p.Dir).First(&rec).Error; err != nil {
-			rec = model.ComposeProject{Name: p.Name, Dir: p.Dir, Services: mustJSON(p.Services)}
-			if err := s.db.Create(&rec).Error; err != nil {
+		services := mustJSON(p.Services)
+		if rec, ok := recs[p.Dir]; ok {
+			if rec.Name == p.Name && rec.Services == services {
+				continue
+			}
+			if err := s.db.Model(rec).Updates(map[string]any{"services": services, "name": p.Name}).Error; err != nil {
 				return nil, err
 			}
-		} else {
-			s.db.Model(&rec).Updates(map[string]any{"services": mustJSON(p.Services), "name": p.Name})
+			continue
 		}
+		rec := &model.ComposeProject{Name: p.Name, Dir: p.Dir, Services: services}
+		if err := s.db.Create(rec).Error; err != nil {
+			return nil, err
+		}
+		recs[p.Dir] = rec
 	}
 	return list, nil
 }

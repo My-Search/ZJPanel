@@ -296,9 +296,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onDeactivated, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onActivated, onDeactivated, onUnmounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
-import { get, post, del, wsTopic, fmtTime } from '../api'
+import { get, getQuiet, post, del, wsTopic, fmtTime } from '../api'
 import { PlusOutlined } from '@ant-design/icons-vue'
 import DomainInput from '../components/DomainInput.vue'
 
@@ -387,14 +387,30 @@ const runColor = (s: string) => s === 'success' ? 'green' : s === 'error' ? 'red
 const parseDomains = (s: string) => { try { return JSON.parse(s) } catch { return [s] } }
 const daysLeft = (r: any) => Math.max(0, Math.floor((new Date(r.notAfter).getTime() - Date.now()) / 86400000))
 
+let loadSeq = 0
 const loadAll = async () => {
-  infos.value = await get('/api/cert/infos')
-  tasks.value = await get('/api/cert/tasks')
-  runs.value = await get('/api/cert/runs')
-  accounts.value = await get('/api/cert/accounts')
-  credentials.value = await get('/api/cert/credentials')
-  providers.value = await get('/api/cert/dns-providers')
-  targets.value = await get('/api/cert/targets')
+  const seq = ++loadSeq
+  // 7 个接口互不依赖：并发拉取，首屏等待 ≈ 最慢一路，而不是七跳串行之和。
+  // quiet + 末尾统一提示：并发失败逐条弹会一次刷 7 条 toast。
+  const [infosR, tasksR, runsR, acctsR, credsR, provR, targetsR] = await Promise.allSettled([
+    getQuiet<any[]>('/api/cert/infos'),
+    getQuiet<any[]>('/api/cert/tasks'),
+    getQuiet<any[]>('/api/cert/runs'),
+    getQuiet<any[]>('/api/cert/accounts'),
+    getQuiet<any[]>('/api/cert/credentials'),
+    getQuiet<any[]>('/api/cert/dns-providers'),
+    getQuiet<any[]>('/api/cert/targets'),
+  ])
+  if (seq !== loadSeq) return // 期间已有更新的一轮加载，丢弃本轮旧结果
+  if (infosR.status === 'fulfilled') infos.value = infosR.value || []
+  if (tasksR.status === 'fulfilled') tasks.value = tasksR.value || []
+  if (runsR.status === 'fulfilled') runs.value = runsR.value || []
+  if (acctsR.status === 'fulfilled') accounts.value = acctsR.value || []
+  if (credsR.status === 'fulfilled') credentials.value = credsR.value || []
+  if (provR.status === 'fulfilled') providers.value = provR.value || []
+  if (targetsR.status === 'fulfilled') targets.value = targetsR.value || []
+  const failed = [infosR, tasksR, runsR, acctsR, credsR, provR, targetsR].filter(r => r.status === 'rejected').length
+  if (failed) message.error(`证书数据 ${failed} 项加载失败，请稍后重试`)
 }
 
 // ---- 向导 ----
@@ -521,9 +537,8 @@ const viewCert = async (r: any, kind: string) => {
 let stopRunWs: (() => void) | null = null
 const logBox = ref<HTMLElement | null>(null)
 const scrollLogBottom = () => { nextTick(() => { const el = logBox.value; if (el) el.scrollTop = el.scrollHeight }) }
-onMounted(loadAll)
-
-// 保活生命周期：激活重连证书签发日志流；切走时断开（签发进度通过周期任务与下次激活补偿）
+// 首次加载交给 onActivated（证书页在 MainLayout 的 keep-alive 白名单内，挂载后必触发激活）；
+// 不再 mounted+activated 各拉一遍整套数据。
 onActivated(() => {
   loadAll()
   stopRunWs = wsTopic('cert-run', (m) => {
