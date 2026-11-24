@@ -1,7 +1,8 @@
 // Package webhooks 内置插件：Webhooks 服务（参考 adnanh/webhook 能力集）。
 // 能力：Hook 管理（CRUD + 密钥自动生成）、GitHub X-Hub-Signature (payload-hash-sha1) 签名校验的
 // 免鉴权接收端点（外部 CI 直接 POST）、部署命令执行与运行日志（环形保留）、可选 SMTP 邮件通知、
-// send_webhook MCP 工具。API 挂 /api/plugin/webhooks/*（面板登录态），接收端挂 /api/pub/plugin/webhooks/hook/<id>。
+// send_webhook MCP 工具、绑定终端 SSH 主机远端执行（sshHostId，0=面板本机）。
+// API 挂 /api/plugin/webhooks/*（面板登录态），接收端挂 /api/pub/plugin/webhooks/hook/<id>。
 package webhooks
 
 import (
@@ -13,8 +14,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	stdhash "hash"
+	"errors"
 	"fmt"
+	stdhash "hash"
 	"io"
 	"net/http"
 	"net/smtp"
@@ -32,11 +34,12 @@ import (
 const hookFile = "hooks.json"
 
 type Hook struct {
-	ID          string `json:"id"`            // URL 路径标识：/api/pub/plugin/webhooks/hook/<id>
-	Secret      string `json:"secret"`        // GitHub Webhook Secret（payload-hash-sha1 校验）
-	ProjectPath string `json:"projectPath"`   // 工作目录（容器内路径，如 /opt/xxx）
-	DeployCmd   string `json:"deployCmd"`     // 部署命令（bash -c 执行）
-	NotifyMail  string `json:"notifyMail"`    // 通知邮箱（空=不发邮件）
+	ID          string `json:"id"`                  // URL 路径标识：/api/pub/plugin/webhooks/hook/<id>
+	Secret      string `json:"secret"`              // GitHub Webhook Secret（payload-hash-sha1 校验）
+	ProjectPath string `json:"projectPath"`         // 工作目录（本机为容器内路径；SSH 时为远端路径）
+	DeployCmd   string `json:"deployCmd"`           // 部署命令（bash -c 执行）
+	SSHHostID   uint   `json:"sshHostId,omitempty"` // >0 = 绑定终端 SSH 主机远端执行；0 = 面板本机
+	NotifyMail  string `json:"notifyMail"`          // 通知邮箱（空=不发邮件）
 	Enabled     bool   `json:"enabled"`
 	CreatedAt   string `json:"createdAt"`
 }
@@ -45,15 +48,16 @@ type RunLog struct {
 	HookID   string `json:"hookId"`
 	StartAt  string `json:"startAt"`
 	ExitCode int    `json:"exitCode"`
+	Target   string `json:"target,omitempty"` // 执行目标：空=本机；ssh:<主机ID>
 	Output   string `json:"output"`
 }
 
 type Plugin struct {
-	ctx    sdk.Context
-	mu     sync.Mutex
-	hooks  map[string]*Hook
-	logs   map[string][]RunLog // 每 hook 环形保留最近 10 次
-	smtp   struct{ server, user, pass, from string }
+	ctx   sdk.Context
+	mu    sync.Mutex
+	hooks map[string]*Hook
+	logs  map[string][]RunLog // 每 hook 环形保留最近 10 次
+	smtp  struct{ server, user, pass, from string }
 }
 
 func New() sdk.Plugin { return &Plugin{hooks: map[string]*Hook{}, logs: map[string][]RunLog{}} }
@@ -62,8 +66,8 @@ func (p *Plugin) Meta() sdk.Meta {
 	return sdk.Meta{
 		ID:          "webhooks",
 		Name:        "Webhooks 服务",
-		Version:     "0.1.0",
-		Description: "Webhook 接收端（GitHub 签名校验）+ 部署执行 + 运行日志 + 邮件通知；替代独立 webhook 服务",
+		Version:     "0.2.0",
+		Description: "Webhook 接收端（GitHub 签名校验）+ 部署执行 + 运行日志 + 邮件通知 + 绑定 SSH 主机远端执行；替代独立 webhook 服务",
 		Permissions: []string{"http", "exec"},
 		Menu:        []sdk.Menu{{Title: "Webhooks", Icon: "thunderbolt", Path: "/"}},
 		Settings: []sdk.SettingDef{
@@ -330,6 +334,7 @@ func verifySig(header, prefix, secret string, body []byte) bool {
 // ---- 执行与日志 ----
 
 // runHook 同步执行部署命令并记录日志/邮件通知。
+// 绑定 SSH 主机（sshHostId>0）→ 远端登录 shell 执行（默认超时 3600s）；否则面板本机 bash -c。
 func (p *Plugin) runHook(id string) (string, error) {
 	p.mu.Lock()
 	h, ok := p.hooks[id]
@@ -338,21 +343,42 @@ func (p *Plugin) runHook(id string) (string, error) {
 		return "", fmt.Errorf("hook 不存在: %s", id)
 	}
 	start := time.Now()
-	cmd := exec.Command("bash", "-c", h.DeployCmd)
-	cmd.Dir = h.ProjectPath
-	cmd.Env = append(os.Environ(), "HOME=/root")
-	outBytes, err := cmd.CombinedOutput()
-	exitCode := 0
-	if err != nil {
-		exitCode = 1
-		if ee, ok := err.(*exec.ExitError); ok {
-			exitCode = ee.ExitCode()
+	var (
+		outBytes []byte
+		err      error
+		exitCode int
+		target   string
+	)
+	if h.SSHHostID > 0 {
+		target = fmt.Sprintf("ssh:%d", h.SSHHostID)
+		cmdStr := h.DeployCmd
+		if h.ProjectPath != "" {
+			cmdStr = "cd '" + strings.ReplaceAll(h.ProjectPath, "'", `'\''`) + "' && " + cmdStr
+		}
+		var out string
+		out, exitCode, err = p.ctx.SSHExec(h.SSHHostID, cmdStr, 3600)
+		outBytes = []byte(out)
+		if errors.Is(err, sdk.ErrExecTimeout) {
+			p.ctx.Logf("hook %s SSH 执行超时", id)
+		}
+	} else {
+		cmd := exec.Command("bash", "-c", h.DeployCmd)
+		cmd.Dir = h.ProjectPath
+		cmd.Env = append(os.Environ(), "HOME=/root")
+		outBytes, err = cmd.CombinedOutput()
+		exitCode = 0
+		if err != nil {
+			exitCode = 1
+			if ee, ok := err.(*exec.ExitError); ok {
+				exitCode = ee.ExitCode()
+			}
 		}
 	}
 	rl := RunLog{
 		HookID:   id,
 		StartAt:  start.Format("2006-01-02 15:04:05"),
 		ExitCode: exitCode,
+		Target:   target,
 		Output:   string(outBytes),
 	}
 	p.mu.Lock()
@@ -375,8 +401,8 @@ func (p *Plugin) notify(h *Hook, subject string, rl RunLog) {
 	if h.NotifyMail == "" || p.smtp.server == "" || p.smtp.user == "" || p.smtp.pass == "" {
 		return
 	}
-	body := fmt.Sprintf("Hook: %s\n时间: %s\n退出码: %d\n\n--- 输出 ---\n%s",
-		h.ID, rl.StartAt, rl.ExitCode, rl.Output)
+	body := fmt.Sprintf("Hook: %s\n时间: %s\n执行目标: %s\n退出码: %d\n\n--- 输出 ---\n%s",
+		h.ID, rl.StartAt, orLocal(rl.Target), rl.ExitCode, rl.Output)
 	if err := sendHookMail(p.smtp.server, p.smtp.user, p.smtp.pass, p.smtp.from, h.NotifyMail, subject, body); err != nil {
 		p.ctx.Logf("邮件通知失败: %v", err)
 	}
@@ -384,6 +410,14 @@ func (p *Plugin) notify(h *Hook, subject string, rl RunLog) {
 
 func stripCRLF(s string) string {
 	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
+}
+
+// orLocal 日志/邮件里展示执行目标（空=面板本机）。
+func orLocal(target string) string {
+	if target == "" {
+		return "本机"
+	}
+	return target
 }
 
 func sendHookMail(addr, user, pass, from, to, subject, body string) error {
@@ -462,7 +496,7 @@ func (p *Plugin) mcpList() (string, error) {
 	for id, h := range p.hooks {
 		out = append(out, map[string]any{
 			"id": id, "projectPath": h.ProjectPath, "deployCmd": h.DeployCmd,
-			"enabled": h.Enabled, "notifyMail": h.NotifyMail,
+			"enabled": h.Enabled, "notifyMail": h.NotifyMail, "sshHostId": h.SSHHostID,
 		})
 	}
 	b, _ := json.Marshal(out)
