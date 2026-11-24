@@ -503,6 +503,8 @@ func sdkExports() interp.Exports {
 			"Context":     reflect.ValueOf((*sdk.Context)(nil)),
 			"DNSProvider": reflect.ValueOf((*sdk.DNSProvider)(nil)),
 			"DeployArgs":  reflect.ValueOf((*sdk.DeployArgs)(nil)),
+			// 哨兵错误变量：Yaegi 惯例用可寻址的 Elem 值导出
+			"ErrExecTimeout": reflect.ValueOf(&sdk.ErrExecTimeout).Elem(),
 		},
 	}
 }

@@ -1,12 +1,14 @@
 // Package cronjobs 内置插件：定时任务管理。
 // 能力：任务 CRUD（名称 + 5 段 cron + shell 命令）、启停、手动执行、超时控制、
 // 按 cron 表达式自动调度（复用面板 robfig/cron）、执行日志（环形保留最近 20 次）、
-// 下次执行时间展示。API 挂 /api/plugin/cronjobs/*（面板登录态）。
+// 下次执行时间展示、绑定终端 SSH 主机远端执行（sshHostId，0=面板本机）。
+// API 挂 /api/plugin/cronjobs/*（面板登录态）。
 package cronjobs
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -30,7 +32,8 @@ type Task struct {
 	Cron      string `json:"cron"`
 	Command   string `json:"command"`
 	WorkDir   string `json:"workDir,omitempty"`
-	Timeout   int    `json:"timeout"` // 秒；0/负数 = 3600
+	SSHHostID uint   `json:"sshHostId,omitempty"` // >0 = 绑定终端 SSH 主机远端执行；0 = 面板本机
+	Timeout   int    `json:"timeout"`             // 秒；0/负数 = 3600
 	Enabled   bool   `json:"enabled"`
 	CreatedAt string `json:"createdAt"`
 }
@@ -41,6 +44,7 @@ type RunLog struct {
 	Duration string `json:"duration"`
 	ExitCode int    `json:"exitCode"`
 	Timeout  bool   `json:"timeout"`
+	Target   string `json:"target,omitempty"` // 执行目标：空=本机；ssh:<主机ID>
 	Output   string `json:"output"`
 }
 
@@ -61,8 +65,8 @@ func (p *Plugin) Meta() sdk.Meta {
 	return sdk.Meta{
 		ID:          "cronjobs",
 		Name:        "定时任务",
-		Version:     "0.1.0",
-		Description: "定时任务管理：cron 调度 / 手动执行 / 超时控制 / 执行日志；替代独立 crontab 管理",
+		Version:     "0.2.0",
+		Description: "定时任务管理：cron 调度 / 手动执行 / 超时控制 / 执行日志 / 绑定 SSH 主机远端执行；替代独立 crontab 管理",
 		Permissions: []string{"exec"},
 		Menu:        []sdk.Menu{{Title: "定时任务", Icon: "clock-circle", Path: "/"}},
 	}
@@ -322,6 +326,7 @@ func (p *Plugin) apiLogs(w http.ResponseWriter, r *http.Request) {
 // ---- 执行 ----
 
 // runTask 同步执行任务命令（带超时控制）并记录日志。
+// 绑定 SSH 主机（sshHostId>0）→ 远端登录 shell 执行；否则面板本机 bash -c。
 func (p *Plugin) runTask(id string) (string, error) {
 	p.mu.Lock()
 	t, ok := p.tasks[id]
@@ -334,20 +339,38 @@ func (p *Plugin) runTask(id string) (string, error) {
 		timeout = 3600
 	}
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "bash", "-c", t.Command)
-	if t.WorkDir != "" {
-		cmd.Dir = t.WorkDir
-	}
-	cmd.Env = append(os.Environ(), "HOME=/root")
-	outBytes, err := cmd.CombinedOutput()
-	timedOut := ctx.Err() == context.DeadlineExceeded
-	exitCode := 0
-	if err != nil {
-		exitCode = 1
-		if ee, ok := err.(*exec.ExitError); ok {
-			exitCode = ee.ExitCode()
+	var (
+		outBytes []byte
+		err      error
+		exitCode int
+		timedOut bool
+		target   string
+	)
+	if t.SSHHostID > 0 {
+		target = fmt.Sprintf("ssh:%d", t.SSHHostID)
+		cmdStr := t.Command
+		if t.WorkDir != "" {
+			cmdStr = "cd '" + strings.ReplaceAll(t.WorkDir, "'", `'\''`) + "' && " + cmdStr
+		}
+		var out string
+		out, exitCode, err = p.ctx.SSHExec(t.SSHHostID, cmdStr, timeout)
+		outBytes = []byte(out)
+		timedOut = errors.Is(err, sdk.ErrExecTimeout)
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "bash", "-c", t.Command)
+		if t.WorkDir != "" {
+			cmd.Dir = t.WorkDir
+		}
+		cmd.Env = append(os.Environ(), "HOME=/root")
+		outBytes, err = cmd.CombinedOutput()
+		timedOut = ctx.Err() == context.DeadlineExceeded
+		if err != nil {
+			exitCode = 1
+			if ee, ok := err.(*exec.ExitError); ok {
+				exitCode = ee.ExitCode()
+			}
 		}
 	}
 	rl := RunLog{
@@ -356,6 +379,7 @@ func (p *Plugin) runTask(id string) (string, error) {
 		Duration: time.Since(start).Round(time.Millisecond).String(),
 		ExitCode: exitCode,
 		Timeout:  timedOut,
+		Target:   target,
 		Output:   string(outBytes),
 	}
 	p.mu.Lock()
@@ -372,6 +396,9 @@ func (p *Plugin) runTask(id string) (string, error) {
 		}
 		if timedOut {
 			detail = fmt.Sprintf("执行超时（>%ds）", timeout)
+		}
+		if target != "" {
+			detail = fmt.Sprintf("[执行目标 %s] %s", target, detail)
 		}
 		out := string(outBytes)
 		if len(out) > 500 {
@@ -393,7 +420,7 @@ func (p *Plugin) mcpList() (string, error) {
 	for id, t := range p.tasks {
 		out = append(out, map[string]any{
 			"id": id, "name": t.Name, "cron": t.Cron, "command": t.Command,
-			"enabled": t.Enabled, "nextRun": nextRun(t),
+			"enabled": t.Enabled, "nextRun": nextRun(t), "sshHostId": t.SSHHostID,
 		})
 	}
 	b, _ := json.Marshal(out)

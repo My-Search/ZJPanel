@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-acme/lego/v5/challenge"
+	"golang.org/x/crypto/ssh"
 
 	"zjpanel/backend/internal/cert/dns"
 	"zjpanel/backend/internal/cert/targets"
@@ -17,6 +19,7 @@ import (
 	"zjpanel/backend/internal/model"
 	"zjpanel/backend/internal/notify"
 	"zjpanel/backend/internal/pkg"
+	"zjpanel/backend/internal/terminal"
 	sdk "zjpanel/backend/sdk/plugin"
 )
 
@@ -103,6 +106,58 @@ func (c *ctxImpl) Notify(nType, level, title, body string) {
 		return
 	}
 	c.mgr.notify.Send(c.id, notify.Input{Type: nType, Level: level, Title: title, Body: body})
+}
+
+// SSHExec 复用终端已保存的 SSH 主机凭证执行命令（非交互 exec 通道）。
+// 命令用登录 shell 包裹（bash 优先，缺失回退 sh），保证 PATH 与手动开终端一致；
+// 超时后关闭连接强制中断远端命令并回收部分输出。
+func (c *ctxImpl) SSHExec(hostID uint, command string, timeoutSec int) (string, int, error) {
+	if timeoutSec <= 0 {
+		timeoutSec = 3600
+	}
+	client, err := terminal.DialHostByID(c.mgr.db, c.mgr.box, hostID)
+	if err != nil {
+		return "", -1, err
+	}
+	sess, err := client.NewSession()
+	if err != nil {
+		_ = client.Close()
+		return "", -1, fmt.Errorf("创建 SSH 会话失败: %w", err)
+	}
+	q := "'" + strings.ReplaceAll(command, "'", `'\''`) + "'"
+	wrapped := "if command -v bash >/dev/null 2>&1; then exec bash -lc " + q + "; else exec sh -lc " + q + "; fi"
+	type result struct {
+		out []byte
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		out, err := sess.CombinedOutput(wrapped)
+		done <- result{out: out, err: err}
+	}()
+	select {
+	case r := <-done:
+		_ = sess.Close()
+		_ = client.Close()
+		if r.err == nil {
+			return string(r.out), 0, nil
+		}
+		var ee *ssh.ExitError
+		if errors.As(r.err, &ee) {
+			return string(r.out), ee.ExitStatus(), r.err
+		}
+		return string(r.out), -1, r.err
+	case <-time.After(time.Duration(timeoutSec) * time.Second):
+		_ = sess.Close()
+		_ = client.Close() // 断开底层连接，解除输出读取阻塞
+		timeoutErr := fmt.Errorf("%w（>%ds）", sdk.ErrExecTimeout, timeoutSec)
+		select {
+		case r := <-done:
+			return string(r.out), -1, timeoutErr
+		case <-time.After(5 * time.Second):
+			return "", -1, timeoutErr
+		}
+	}
 }
 
 func (c *ctxImpl) SubscribeEvent(topic string, fn func(payload map[string]any)) {
