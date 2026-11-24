@@ -1,6 +1,6 @@
 <template>
   <a-card size="small" class="terminal-card" :body-style="{ padding: '12px' }">
-    <a-space style="margin-bottom: 10px" wrap>
+    <a-space v-if="tabs.length" style="margin-bottom: 10px" wrap>
       <a-dropdown>
         <a-button type="primary">新建 SSH 会话 <DownOutlined /></a-button>
         <template #overlay>
@@ -24,19 +24,21 @@
     </a-space>
 
     <!-- 常用命令条 -->
-    <TermQuickCmds v-if="qcOpen" class="qc-strip" :disabled="!activeSshTab" @exec="sendQuickCmd" />
+    <TermQuickCmds v-if="qcOpen && tabs.length" class="qc-strip" :disabled="!activeSshTab" @exec="sendQuickCmd" />
 
     <!-- 工作台主体：左终端 + 右文件面板 -->
     <div class="term-body">
       <div class="term-main">
-        <a-tabs v-model:activeKey="activeTab" type="editable-card" hide-add size="small" class="term-tabs" @edit="closeTab">
+        <!-- 无会话时不渲染空标签栏，改为占满终端区的引导空态 -->
+        <a-tabs v-if="tabs.length" v-model:activeKey="activeTab" type="editable-card" hide-add size="small" class="term-tabs" @edit="closeTab">
           <a-tab-pane v-for="t in tabs" :key="t.id" :tab="t.label + (t.down ? ' ⚠' : '')" class="term-pane">
             <div :ref="el => setTermBox(t.id, el)" class="term-box" :style="{ background: boxBg() }"></div>
             <StatusStrip :stats="t.stats" />
           </a-tab-pane>
         </a-tabs>
+        <TermEmpty v-else :hosts="hosts" @connect="newSsh" @local="newLocal" @manage="showHostMgr = true" />
       </div>
-      <template v-if="fileOpen">
+      <template v-if="fileOpen && tabs.length">
         <div class="fm-divider" @pointerdown="startDividerDrag" title="拖拽调整宽度"></div>
         <div class="fm-side" :style="fmSideStyle">
           <TermFilePanel :host-id="activeHostId" />
@@ -96,6 +98,7 @@ import { useTermTheme } from '../utils/termTheme'
 import StatusStrip from '../components/StatusStrip.vue'
 import TermFilePanel from '../components/TermFilePanel.vue'
 import TermQuickCmds from '../components/TermQuickCmds.vue'
+import TermEmpty from '../components/TermEmpty.vue'
 import type { Terminal as XtermTerminal } from '@xterm/xterm'
 
 const { ui, current: termTheme, boxBg } = useTermTheme()

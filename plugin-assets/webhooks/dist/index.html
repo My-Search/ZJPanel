@@ -33,6 +33,7 @@
   .url-box { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
   .url-box code { background: var(--bg); border: 1px solid var(--border); padding: 4px 8px; border-radius: 6px; font-size: 12px; word-break: break-all; flex: 1; min-width: 200px; }
   .secret { color: var(--dim); }
+  .secret-mask { letter-spacing: 1px; user-select: none; }
   table.logs { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
   table.logs th, table.logs td { border-top: 1px solid var(--border); padding: 6px 8px; text-align: left; }
   .ok { color: var(--green); } .fail { color: var(--red); }
@@ -139,13 +140,35 @@ function render() {
         ${h.notifyMail ? '· 通知：' + esc(h.notifyMail) : ''}</div>
       <div class="url-box">
         <code>POST /api/pub/plugin/webhooks/hook/${esc(h.id)}</code>
-        <span class="secret">Secret: <code>${esc(h.secret)}</code></span>
+        <span class="secret">Secret: <code class="secret-mask">••••••••••••</code></span>
+        <button class="btn small" onclick="copySecret('${esc(h.id)}')">复制 Secret</button>
         <button class="btn small" onclick="copyText(location.origin+'/api/pub/plugin/webhooks/hook/${esc(h.id)}')">复制 URL</button>
       </div>
       <div id="logs-${esc(h.id)}"></div>
     </div>`).join('');
 }
-function copyText(t) { navigator.clipboard.writeText(t).then(() => toast('已复制')); }
+function copySecret(id) {
+  const h = hooks.find(x => x.id === id);
+  if (!h || !h.secret) { toast('该 Hook 没有 Secret'); return; }
+  copyText(h.secret);
+}
+// 面板常用 http 访问（非安全上下文），navigator.clipboard 不可用时走 execCommand 兜底
+function copyText(t) {
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(t).then(() => toast('已复制'), () => legacyCopy(t));
+    return;
+  }
+  legacyCopy(t);
+}
+function legacyCopy(t) {
+  const ta = document.createElement('textarea');
+  ta.value = t;
+  ta.style.position = 'fixed'; ta.style.top = '0'; ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try { document.execCommand('copy'); toast('已复制'); } catch (e) { toast('复制失败'); }
+  ta.remove();
+}
 
 function openEditor(id) {
   const h = hooks.find(x => x.id === id) || {};
