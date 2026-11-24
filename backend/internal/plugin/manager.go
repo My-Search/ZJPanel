@@ -415,6 +415,9 @@ func (m *Manager) ServeAsset(w http.ResponseWriter, r *http.Request, id, path st
 		return
 	}
 	w.Header().Set("X-Frame-Options", "SAMEORIGIN")
+	// 协商缓存：禁用浏览器启发式缓存（无 Cache-Control 时浏览器会按 Last-Modified 推算保鲜期，
+	// 面板升级后 iframe 仍可能吃到旧 HTML）；每次带 If-Modified-Since 协商，未变更走 304。
+	w.Header().Set("Cache-Control", "no-cache")
 	roots := []string{filepath.Join(m.cfg.AppDir, "plugin-assets", id, "dist"), filepath.Join(m.extDir(id), "dist")}
 	// 未启用也允许加载资产页面（页面内可提示）
 	for _, root := range roots {

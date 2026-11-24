@@ -2,19 +2,29 @@
 <!-- 卡片高度不再用 calc(100vh - 130px) 魔法数字：布局层已让页面根撑满剩余视口
      （MainLayout .content），这里整条链用 flex 填满即可，顶栏/边距怎么改都不会再留空档。 -->
   <a-card class="plugin-frame-card" :body-style="{ padding: 0 }">
-    <iframe :src="frameSrc" :key="frameSrc" />
+    <iframe v-if="ready" :src="frameSrc" :key="frameSrc" />
   </a-card>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
+import { get } from '../api'
 
 const route = useRoute()
+// 面板版本号做 iframe 缓存戳：升级后 URL 变化，绕过浏览器/中间层对旧 HTML 的缓存。
+// 先取版本再挂 iframe，避免同一页面加载两次。
+const ver = ref('')
+const ready = ref(false)
+onMounted(async () => {
+  try { ver.value = (await get<any>('/api/update/current')).version || '' } catch { /* 取不到则不加戳 */ }
+  ready.value = true
+})
 const frameSrc = computed(() => {
   const id = route.params.id as string
   const sub = (route.query.path as string) || '/'
-  return `/plugin-assets/${id}${sub}`
+  const bust = ver.value ? (sub.includes('?') ? '&' : '?') + 'v=' + encodeURIComponent(ver.value) : ''
+  return `/plugin-assets/${id}${sub}${bust}`
 })
 </script>
 
