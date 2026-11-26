@@ -2,13 +2,8 @@
   <div class="request-map" :class="{ fill }">
     <a-space class="map-toolbar" wrap>
       <a-tag :color="geoLoaded ? 'green' : 'orange'">{{ geoLoaded ? 'GeoIP 已加载' : 'GeoIP 未加载' }}</a-tag>
-      <span class="dim">实时流向</span>
-      <a-switch v-model:checked="realtime" size="small" />
-      <a-tag v-if="realtime" color="blue">实时 {{ rate }} req/s（近 5s 滑窗）</a-tag>
-      <a-button v-if="chartReady && roamed" size="small" @click="resetView">复位视角</a-button>
-      <span v-if="compact" class="dim">悬停流向可暂停并查看请求明细</span>
-      <!-- compact（仪表盘卡片）不放统计窗口选择：紧挨「实时」标签会被误读为实时开关。
-           仪表盘固定用最近 60 分钟聚合（流星本身是实时推送，不受窗口影响），完整地图页保留选择器 -->
+      <a-tag color="blue">实时 {{ rate }} req/s</a-tag>
+      <!-- compact（仪表盘卡片）只保留 GeoIP 状态与实时请求数；完整地图页保留管理工具 -->
       <template v-if="!compact">
         <a-button size="small" @click="downloadGeo">下载 GeoLite2 数据库</a-button>
         <a-upload :show-upload-list="false" :custom-request="uploadGeo"><a-button size="small">上传 mmdb</a-button></a-upload>
@@ -32,11 +27,11 @@
             </div>
           </template>
         </a-popover>
-        <span class="dim">日志由 nginx access log 增量解析（SSE 逐条实时推送，一次请求一条流星；悬停流向可暂停并查看请求明细）</span>
+        <span class="dim">日志由 nginx access log 增量解析（SSE 逐条实时推送，一次请求一条流星）</span>
       </template>
     </a-space>
 
-    <div class="map-wrap">
+    <div class="map-wrap" @mouseleave="onMapLeave">
       <div ref="mapBox" class="map-box" :style="{ '--map-height': height + 'px' }"></div>
 
       <!-- 悬停流向 → 冻结画面 + 实时请求树。数据只来自本页 SSE 内存缓冲，不落库 -->
@@ -236,7 +231,6 @@ let treeTimer: any = null
 
 const geoLoaded = ref(false)
 const chartReady = ref(false)
-const roamed = ref(false) // 是否缩放过/拖拽过：只有偏离默认全球视角时才显示「复位视角」
 const mapBox = ref<HTMLElement | null>(null)
 const detailsOpen = ref<string[]>([]) // 默认收纳详细信息
 let chart: any = null
@@ -531,7 +525,6 @@ const onInspectSelect = (_keys: any, info: any) => {
   if (e) { detailEntry.value = e; detailOpen.value = true }
 }
 
-const realtime = ref(true)
 // 实时速率：记录每条请求的到达时间，近 5s 滑窗计数 ÷ 5（req/s）。
 // 统计走全部请求（含无地理信息的），不用流星列表——它有 120 条封顶且寿命 4.3s，拿它算速率会低估。
 const entryTimes = ref<number[]>([])
@@ -543,8 +536,7 @@ const LIVE_FLOW_CAP = 120
 
 const handleEntry = (e: any) => {
   const entry = normalizeEntry(e, true)
-  pushCapture(entry) // 无论「实时流向」开关如何，SSE 到达即进本地缓冲（悬停明细的数据源）
-  if (!realtime.value) return
+  pushCapture(entry) // SSE 到达即进本地缓冲（悬停明细的数据源）
   entryTimes.value.push(Date.now())
   if (inspectRoute.value) {
     // 悬停期间画面冻结：不新增流星，保证悬停目标稳定；该流向的新请求实时追加进树
@@ -627,13 +619,6 @@ const isGeoRoamed = () => {
   const z = Number(g?.zoom)
   return (Number.isFinite(z) && Math.abs(z - 1) > 0.001) || (Array.isArray(g?.center) && g.center.length === 2)
 }
-let roamSyncTimer: any = null
-const syncRoamed = () => {
-  if (!chart) return
-  roamed.value = true // 交互瞬间先显示，避免 getOption 尚未同步时按钮闪一下不出现
-  clearTimeout(roamSyncTimer)
-  roamSyncTimer = setTimeout(() => { if (chart) roamed.value = isGeoRoamed() }, 120)
-}
 
 const ensureChart = async () => {
   if (chart) return
@@ -645,8 +630,6 @@ const ensureChart = async () => {
     chart = echarts.init(mapBox.value)
     // 悬停流星线 → 暂停流向并展开该来源的请求树（点击空处/继续按钮恢复）
     chart.on('mouseover', onChartOver)
-    // 滚轮缩放/拖拽后按实际视角决定是否展示「复位视角」，默认全球视角下不占工具栏
-    chart.on('georoam', syncRoamed)
   })().finally(() => { initPromise = null })
   return initPromise
 }
@@ -665,30 +648,26 @@ const renderMap = async (force = false, reset = false) => {
   const paused = !!inspectRoute.value
   const flowSrc = paused ? frozenFlows.value : liveFlows.value
   const flowKey = inspectRoute.value?.key
-  const flows = realtime.value
-    ? flowSrc.map(f => paused
-      ? {
-          name: f.label,
-          coords: f.coords,
-          lineStyle: f.key === flowKey
-            ? { color: '#fbbf24', width: 2.6, opacity: 1, shadowBlur: 10, shadowColor: 'rgba(251,191,36,.5)' }
-            : { color: '#3b82f6', width: 1, opacity: 0.07 },
-        }
-      : { name: f.label, coords: f.coords })
-    : []
+  const flows = flowSrc.map(f => paused
+    ? {
+        name: f.label,
+        coords: f.coords,
+        lineStyle: f.key === flowKey
+          ? { color: '#fbbf24', width: 2.6, opacity: 1, shadowBlur: 10, shadowColor: 'rgba(251,191,36,.5)' }
+          : { color: '#3b82f6', width: 1, opacity: 0.07 },
+      }
+    : { name: f.label, coords: f.coords })
   // 来源点按「国家|城市|坐标桶」聚合：同一来源城市的一批请求只留一个黄点/一圈涟漪。
   // 之前一次请求一个 effectScatter 点，同城几十条请求的涟漪叠在一起就成了黄色光斑。
   const srcMap = new Map<string, { value: [number, number]; name: string; flowCount: number; focus: boolean }>()
-  if (realtime.value) {
-    for (const f of flowSrc) {
-      let p = srcMap.get(f.key)
-      if (!p) {
-        p = { value: f.coords[0], name: f.label, flowCount: 0, focus: false }
-        srcMap.set(f.key, p)
-      }
-      p.flowCount++
-      if (f.key === flowKey) p.focus = true
+  for (const f of flowSrc) {
+    let p = srcMap.get(f.key)
+    if (!p) {
+      p = { value: f.coords[0], name: f.label, flowCount: 0, focus: false }
+      srcMap.set(f.key, p)
     }
+    p.flowCount++
+    if (f.key === flowKey) p.focus = true
   }
   const srcPoints = [...srcMap.values()].map(p => ({
     value: p.value,
@@ -783,11 +762,14 @@ const renderMap = async (force = false, reset = false) => {
   lastGeoKey = geoKey
 }
 
-// 手动复位视角：只有用户点「复位视角」才回到全球视角，缩放/拖拽结果不再被鼠标移出或定时刷新清掉
+// 鼠标移出地图后自动回到全球视角；没有偏移时不重绘，避免无谓闪烁
 const resetView = () => {
   if (!chartReady.value) return
-  roamed.value = false
   renderMap(true, true)
+}
+const onMapLeave = () => {
+  if (!chartReady.value) return
+  if (isGeoRoamed()) resetView()
 }
 
 // 悬停一条流星线：冻结当前画面（快照），回溯该来源的历史请求，并开始接收后续新请求。
@@ -929,8 +911,6 @@ const connectStream = () => sseTopic(
   onStreamMsg,
 )
 watch(minutes, () => { if (active) { stopStream?.(); stopStream = connectStream() } })
-// 关掉实时流向 = 没有可悬停的线：收起明细并恢复普通渲染
-watch(realtime, (v) => { if (!v && inspectRoute.value) closeInspect() })
 
 const start = () => {
   if (active) return
@@ -969,7 +949,7 @@ const stop = () => {
 onMounted(start)
 onActivated(start)
 onDeactivated(stop)
-onUnmounted(() => { stop(); resizeObserver?.disconnect(); resizeObserver = null; chart?.dispose(); chart = null; chartReady.value = false; clearTimeout(roamSyncTimer) })
+onUnmounted(() => { stop(); resizeObserver?.disconnect(); resizeObserver = null; chart?.dispose(); chart = null; chartReady.value = false })
 </script>
 
 <style scoped>

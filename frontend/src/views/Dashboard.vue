@@ -1,5 +1,4 @@
 <template>
-  <a-spin :spinning="loading">
   <div class="dash">
     <a-row :gutter="24">
       <a-col :span="6">
@@ -109,7 +108,6 @@
       </a-col>
     </a-row>
   </div>
-  </a-spin>
 </template>
 
 <script setup lang="ts">
@@ -125,7 +123,6 @@ const sites = ref<any[]>([])
 const sitesErr = ref('')
 const nginxRunning = ref(false)
 const version = ref('')
-const loading = ref(true)
 
 const uptimeText = computed(() => {
   const s = snap.value?.uptime || 0
@@ -187,7 +184,6 @@ const loadAll = async () => {
   }
   if (nginxRes.status === 'fulfilled') nginxRunning.value = nginxRes.value.running
   if (verRes.status === 'fulfilled') version.value = verRes.value.version
-  loading.value = false
 }
 
 // 轮询统一管理：keep-alive 切走暂停，切回/标签恢复时立即补一次加载。
