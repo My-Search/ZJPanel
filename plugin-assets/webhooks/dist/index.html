@@ -56,6 +56,7 @@
   /* 执行状态徽标 / 实时日志 */
   .badge { display: inline-block; font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--primary-weak); color: var(--primary); }
   .badge.running::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 5px; vertical-align: 1px; animation: blink 1.2s infinite; }
+  .badge.hook-badge::before { display: none; }
   .badge.success { background: transparent; border: 1px solid var(--green); color: var(--green); }
   .badge.failed { background: transparent; border: 1px solid var(--red); color: var(--red); }
   .badge.timeout { background: transparent; border: 1px solid var(--orange); color: var(--orange); }
@@ -193,6 +194,7 @@ function render() {
       <div class="hook-head">
         <span class="hook-id">${esc(h.id)}</span>
         <span class="hook-dot ${h.enabled ? 'on' : ''}" title="${h.enabled ? '已启用' : '已停用'}" aria-label="${h.enabled ? '已启用' : '已停用'}"></span>
+        <span class="badge running hook-badge" data-hook-badge="${esc(h.id)}" style="display:none"></span>
         <div class="hook-actions">
           <button class="btn small" onclick="runHook('${esc(h.id)}')">立即执行</button>
           <button class="btn small" onclick="toggleHook('${esc(h.id)}', ${!h.enabled})">${h.enabled ? '停用' : '启用'}</button>
@@ -212,6 +214,18 @@ function render() {
       </div>
       <div id="logs-${esc(h.id)}"></div>
     </div>`).join('');
+  renderHookBadges();
+}
+// 卡片头部按 Hook 汇总进行中的执行次数（同一 Hook 可由 GitHub 并发触发多次）
+function renderHookBadges() {
+  const counts = new Map();
+  activeRuns.forEach(r => counts.set(r.hookId, (counts.get(r.hookId) || 0) + 1));
+  document.querySelectorAll('[data-hook-badge]').forEach(el => {
+    const n = counts.get(el.dataset.hookBadge) || 0;
+    el.style.display = n ? 'inline-block' : 'none';
+    el.textContent = n ? `处理中 x${n}` : '';
+    el.title = n ? `${n} 个执行正在进行中，可在顶部「正在执行的任务」中实时查看` : '';
+  });
 }
 function copySecret(id) {
   const h = hooks.find(x => x.id === id);
@@ -296,6 +310,7 @@ async function pollActive() {
     activeRuns = Array.isArray(list) ? list : [];
     lastActive = activeRuns;
     renderActive();
+    renderHookBadges();
     // 执行刚结束：刷新已经打开的历史列表，让“运行中”行立刻变成结果行
     prev.forEach(p => {
       if (!activeRuns.some(x => x.runId === p.runId)) {

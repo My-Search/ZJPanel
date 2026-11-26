@@ -5,7 +5,7 @@
       <span class="dim">实时流向</span>
       <a-switch v-model:checked="realtime" size="small" />
       <a-tag v-if="realtime" color="blue">实时 {{ rate }} req/s（近 5s 滑窗）</a-tag>
-      <a-button v-if="chartReady" size="small" @click="resetView">复位视角</a-button>
+      <a-button v-if="chartReady && roamed" size="small" @click="resetView">复位视角</a-button>
       <span v-if="compact" class="dim">悬停流向可暂停并查看请求明细</span>
       <!-- compact（仪表盘卡片）不放统计窗口选择：紧挨「实时」标签会被误读为实时开关。
            仪表盘固定用最近 60 分钟聚合（流星本身是实时推送，不受窗口影响），完整地图页保留选择器 -->
@@ -236,6 +236,7 @@ let treeTimer: any = null
 
 const geoLoaded = ref(false)
 const chartReady = ref(false)
+const roamed = ref(false) // 是否缩放过/拖拽过：只有偏离默认全球视角时才显示「复位视角」
 const mapBox = ref<HTMLElement | null>(null)
 const detailsOpen = ref<string[]>([]) // 默认收纳详细信息
 let chart: any = null
@@ -620,6 +621,20 @@ const preload = () => {
 }
 preload()
 
+// 当前视角是否已偏离默认全球视角：zoom 不等于 1 或设置了 center。默认 center 为 null。
+const isGeoRoamed = () => {
+  const g = (chart?.getOption() as any)?.geo?.[0]
+  const z = Number(g?.zoom)
+  return (Number.isFinite(z) && Math.abs(z - 1) > 0.001) || (Array.isArray(g?.center) && g.center.length === 2)
+}
+let roamSyncTimer: any = null
+const syncRoamed = () => {
+  if (!chart) return
+  roamed.value = true // 交互瞬间先显示，避免 getOption 尚未同步时按钮闪一下不出现
+  clearTimeout(roamSyncTimer)
+  roamSyncTimer = setTimeout(() => { if (chart) roamed.value = isGeoRoamed() }, 120)
+}
+
 const ensureChart = async () => {
   if (chart) return
   if (initPromise) return initPromise
@@ -630,6 +645,8 @@ const ensureChart = async () => {
     chart = echarts.init(mapBox.value)
     // 悬停流星线 → 暂停流向并展开该来源的请求树（点击空处/继续按钮恢复）
     chart.on('mouseover', onChartOver)
+    // 滚轮缩放/拖拽后按实际视角决定是否展示「复位视角」，默认全球视角下不占工具栏
+    chart.on('georoam', syncRoamed)
   })().finally(() => { initPromise = null })
   return initPromise
 }
@@ -769,6 +786,7 @@ const renderMap = async (force = false, reset = false) => {
 // 手动复位视角：只有用户点「复位视角」才回到全球视角，缩放/拖拽结果不再被鼠标移出或定时刷新清掉
 const resetView = () => {
   if (!chartReady.value) return
+  roamed.value = false
   renderMap(true, true)
 }
 
@@ -951,7 +969,7 @@ const stop = () => {
 onMounted(start)
 onActivated(start)
 onDeactivated(stop)
-onUnmounted(() => { stop(); resizeObserver?.disconnect(); resizeObserver = null; chart?.dispose(); chart = null; chartReady.value = false })
+onUnmounted(() => { stop(); resizeObserver?.disconnect(); resizeObserver = null; chart?.dispose(); chart = null; chartReady.value = false; clearTimeout(roamSyncTimer) })
 </script>
 
 <style scoped>

@@ -7,9 +7,12 @@ package cronjobs
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -18,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/robfig/cron/v3"
 
@@ -39,13 +43,44 @@ type Task struct {
 }
 
 type RunLog struct {
-	TaskID   string `json:"taskId"`
-	StartAt  string `json:"startAt"`
-	Duration string `json:"duration"`
-	ExitCode int    `json:"exitCode"`
-	Timeout  bool   `json:"timeout"`
-	Target   string `json:"target,omitempty"` // 执行目标：空=本机；ssh:<主机ID>
-	Output   string `json:"output"`
+	RunID      string `json:"runId,omitempty"`
+	TaskID     string `json:"taskId"`
+	StartAt    string `json:"startAt"`
+	Duration   string `json:"duration"`
+	DurationMs int64  `json:"durationMs,omitempty"`
+	ExitCode   int    `json:"exitCode"`
+	Timeout    bool   `json:"timeout"`
+	Status     string `json:"status,omitempty"` // running | success | failed | timeout（旧记录为空按退出码判定）
+	Target     string `json:"target,omitempty"` // 执行目标：空=本机；ssh:<主机ID>
+	Output     string `json:"output"`
+}
+
+// liveRun 一次执行（进行中或刚结束）：buf 是实时输出缓冲，SSE/轮询从这里读。
+// 所有可变字段由 Plugin.mu 保护。
+type liveRun struct {
+	RunID    string
+	TaskID   string
+	StartAt  string
+	Target   string
+	started  time.Time
+	buf      []byte
+	status   string
+	exitCode int
+	timeout  bool
+	subs     map[chan struct{}]struct{}
+	done     chan struct{}
+	closed   bool
+}
+
+func (r *liveRun) durationMsLocked() int64 { return time.Since(r.started).Milliseconds() }
+
+func (r *liveRun) snapshot() RunLog {
+	d := time.Since(r.started).Round(time.Millisecond)
+	return RunLog{
+		RunID: r.RunID, TaskID: r.TaskID, StartAt: r.StartAt, Duration: d.String(),
+		DurationMs: d.Milliseconds(), ExitCode: r.exitCode, Timeout: r.timeout,
+		Status: r.status, Target: r.Target, Output: string(r.buf),
+	}
 }
 
 type Plugin struct {
@@ -54,19 +89,24 @@ type Plugin struct {
 	mu       sync.Mutex
 	tasks    map[string]*Task
 	entryIDs map[string]cron.EntryID
-	logs     map[string][]RunLog // 每 task 环形保留最近 20 次
+	logs     map[string][]RunLog // 每 task 环形保留最近 20 次（已结束）
+	runs     map[string]*liveRun // runId → 执行（含刚结束，供断线重连/历史查看）
+	runOrder []string            // run 插入顺序，用于淘汰旧记录
 }
 
 func New() sdk.Plugin {
-	return &Plugin{tasks: map[string]*Task{}, entryIDs: map[string]cron.EntryID{}, logs: map[string][]RunLog{}}
+	return &Plugin{
+		tasks: map[string]*Task{}, entryIDs: map[string]cron.EntryID{}, logs: map[string][]RunLog{},
+		runs: map[string]*liveRun{},
+	}
 }
 
 func (p *Plugin) Meta() sdk.Meta {
 	return sdk.Meta{
 		ID:          "cronjobs",
 		Name:        "定时任务",
-		Version:     "0.2.0",
-		Description: "定时任务管理：cron 调度 / 手动执行 / 超时控制 / 执行日志 / 绑定 SSH 主机远端执行；替代独立 crontab 管理",
+		Version:     "0.3.0",
+		Description: "定时任务管理：cron 调度 / 手动执行 / 执行中实时日志（SSE + 轮询降级）/ 超时控制 / 历史记录 / 绑定 SSH 主机远端执行；替代独立 crontab 管理",
 		Permissions: []string{"exec"},
 		Menu:        []sdk.Menu{{Title: "定时任务", Icon: "clock-circle", Path: "/"}},
 	}
@@ -85,6 +125,10 @@ func (p *Plugin) OnInit(ctx sdk.Context) error {
 	api("POST", "/tasks/*/run", p.apiRun)
 	api("POST", "/tasks/*/toggle", p.apiToggle)
 	api("GET", "/logs/*", p.apiLogs)
+	api("GET", "/active", p.apiActive)
+	// /runs/* 是尾通配，会吞掉 /runs/x/stream，流式路由必须先注册。
+	api("GET", "/runs/*/stream", p.apiRunStream)
+	api("GET", "/runs/*", p.apiRunGet)
 
 	ctx.RegisterMCPTool("cronjobs_list", "列出定时任务插件中的全部任务（名称/表达式/启停/下次执行时间）",
 		map[string]any{"type": "object", "properties": map[string]any{}},
@@ -311,50 +355,302 @@ func (p *Plugin) apiToggle(w http.ResponseWriter, r *http.Request) {
 func (p *Plugin) apiRun(w http.ResponseWriter, r *http.Request) {
 	id := seg(pluginPath(r), 1)
 	id = strings.TrimSuffix(id, "/run")
-	out, err := p.runTask(id)
-	writeJSON(w, http.StatusOK, ginH("output", out, "error", errStr(err)))
+	// wait=1 保留旧的同步语义（MCP/旧调用方可直接拿完整输出）；默认立即返回 runId 并后台执行。
+	if r.URL.Query().Get("wait") == "1" {
+		out, err := p.runTask(id)
+		writeJSON(w, http.StatusOK, ginH("output", out, "error", errStr(err)))
+		return
+	}
+	run, err := p.startRun(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, ginH("ok", true, "runId", run.RunID, "startAt", run.StartAt, "target", run.Target))
 }
 
 func (p *Plugin) apiLogs(w http.ResponseWriter, r *http.Request) {
 	id := seg(pluginPath(r), 1)
 	p.mu.Lock()
-	logs := append([]RunLog{}, p.logs[id]...)
+	out := make([]RunLog, 0, 22)
+	// 进行中的执行优先展示（历史环形里只有已结束记录）
+	for _, rid := range p.runOrder {
+		if run := p.runs[rid]; run != nil && run.TaskID == id && run.status == "running" {
+			out = append(out, run.snapshot())
+		}
+	}
+	out = append(out, p.logs[id]...)
 	p.mu.Unlock()
-	writeJSON(w, http.StatusOK, logs)
+	writeJSON(w, http.StatusOK, out)
 }
+
+func (p *Plugin) apiActive(w http.ResponseWriter, r *http.Request) {
+	p.mu.Lock()
+	out := make([]RunLog, 0, 4)
+	for _, rid := range p.runOrder {
+		if run := p.runs[rid]; run != nil && run.status == "running" {
+			rl := run.snapshot()
+			rl.Output = "" // 横幅只需要元信息，避免高输出任务每 2.5s 全量回传
+			out = append(out, rl)
+		}
+	}
+	p.mu.Unlock()
+	writeJSON(w, http.StatusOK, out)
+}
+
+// apiRunGet 单次执行快照：前端断线/轮询降级、历史记录查看用。
+func (p *Plugin) apiRunGet(w http.ResponseWriter, r *http.Request) {
+	runID := strings.Trim(strings.TrimPrefix(pluginPath(r), "/runs/"), "/")
+	p.mu.Lock()
+	var found *RunLog
+	if run, ok := p.runs[runID]; ok {
+		rl := run.snapshot()
+		found = &rl
+	} else {
+		for _, ls := range p.logs {
+			for _, l := range ls {
+				if l.RunID == runID {
+					l := l
+					found = &l
+					break
+				}
+			}
+		}
+	}
+	p.mu.Unlock()
+	if found == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "执行记录不存在或已过期"})
+		return
+	}
+	writeJSON(w, http.StatusOK, *found)
+}
+
+// apiRunStream SSE 实时输出：连接建立先补发缓冲全量，之后增量推送，结束发 done 事件。
+func (p *Plugin) apiRunStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "当前连接不支持流式输出"})
+		return
+	}
+	runID := strings.TrimSuffix(strings.Trim(strings.TrimPrefix(pluginPath(r), "/runs/"), "/"), "/stream")
+	p.mu.Lock()
+	run, ok := p.runs[runID]
+	if !ok {
+		p.mu.Unlock()
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "执行记录不存在或已过期"})
+		return
+	}
+	ch := make(chan struct{}, 1)
+	if run.status == "running" {
+		run.subs[ch] = struct{}{}
+	}
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		delete(run.subs, ch)
+		p.mu.Unlock()
+	}()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // 走反代时禁缓冲
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	off := 0
+	var pending []byte // 跨事件未凑齐的 UTF-8 半字符
+	ping := time.NewTicker(15 * time.Second)
+	defer ping.Stop()
+	for {
+		p.mu.Lock()
+		n := len(run.buf)
+		var chunk []byte
+		if n > off {
+			end := n
+			if end-off > 64<<10 { // 单条事件不超过 64KB，避免历史输出很大时一次性灌给浏览器
+				end = off + 64<<10
+			}
+			chunk = append([]byte(nil), run.buf[off:end]...)
+			off = end
+		}
+		more := n > off
+		status, exitCode, durMs := run.status, run.exitCode, run.durationMsLocked()
+		p.mu.Unlock()
+
+		data := append(pending, chunk...)
+		whole, rest := splitUTF8(data)
+		pending = rest
+		finished := status != "running"
+		if finished && !more {
+			whole = data // 收尾且无积压：剩余字节一并送出（不完整字节由 JSON 转义兜底）
+			pending = nil
+		}
+		if len(whole) > 0 {
+			if err := writeSSEEvent(w, "out", map[string]any{"text": string(whole)}); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+		if more {
+			continue
+		}
+		if !finished {
+			select {
+			case <-ch:
+			case <-ping.C:
+				if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
+					return
+				}
+				flusher.Flush()
+			case <-r.Context().Done():
+				return
+			}
+			continue
+		}
+		_ = writeSSEEvent(w, "done", map[string]any{
+			"status": status, "exitCode": exitCode, "durationMs": durMs,
+		})
+		flusher.Flush()
+		return
+	}
+}
+
+func writeSSEEvent(w io.Writer, typ string, data any) error {
+	b, err := json.Marshal(map[string]any{"type": typ, "data": data})
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "data: %s\n\n", b)
+	return err
+}
+
+// splitUTF8 把末尾不完整的 UTF-8 序列留到下一次拼接，避免跨块截断中文输出。
+func splitUTF8(b []byte) (whole, rest []byte) {
+	if len(b) == 0 || utf8.Valid(b) {
+		return b, nil
+	}
+	for i := 1; i <= 3 && i <= len(b); i++ {
+		size := utf8SeqLen(b[len(b)-i])
+		if size == 0 || i >= size {
+			continue
+		}
+		ok := true
+		for j := len(b) - i + 1; j < len(b); j++ {
+			if !utf8Cont(b[j]) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return b[:len(b)-i], b[len(b)-i:]
+		}
+		return b, nil
+	}
+	return b, nil
+}
+
+func utf8SeqLen(c byte) int {
+	switch {
+	case c >= 0xC2 && c <= 0xDF:
+		return 2
+	case c >= 0xE0 && c <= 0xEF:
+		return 3
+	case c >= 0xF0 && c <= 0xF4:
+		return 4
+	}
+	return 0
+}
+
+func utf8Cont(c byte) bool { return c >= 0x80 && c <= 0xBF }
 
 // ---- 执行 ----
 
-// runTask 同步执行任务命令（带超时控制）并记录日志。
-// 绑定 SSH 主机（sshHostId>0）→ 远端登录 shell 执行；否则面板本机 bash -c。
-func (p *Plugin) runTask(id string) (string, error) {
+func genRunID() string {
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// startRun 后台执行一次任务，立即返回 run（前端拿 runId 订阅实时输出）。
+// 同一任务允许并发执行（cron 周期短于任务耗时时不会互相吞掉），历史逐条可见。
+func (p *Plugin) startRun(id string) (*liveRun, error) {
 	p.mu.Lock()
 	t, ok := p.tasks[id]
-	p.mu.Unlock()
 	if !ok {
-		return "", fmt.Errorf("任务不存在: %s", id)
+		p.mu.Unlock()
+		return nil, fmt.Errorf("任务不存在: %s", id)
 	}
+	hc := *t
+	now := time.Now()
+	run := &liveRun{
+		RunID: genRunID(), TaskID: id, StartAt: now.Format("2006-01-02 15:04:05"),
+		started: now, status: "running", subs: map[chan struct{}]struct{}{}, done: make(chan struct{}),
+	}
+	if hc.SSHHostID > 0 {
+		run.Target = fmt.Sprintf("ssh:%d", hc.SSHHostID)
+	}
+	p.runs[run.RunID] = run
+	p.runOrder = append(p.runOrder, run.RunID)
+	p.trimRunsLocked()
+	p.mu.Unlock()
+	go p.execute(hc, run)
+	return run, nil
+}
+
+// trimRunsLocked 淘汰已结束的旧 run（保留最近 40 条；进行中的永不淘汰）。需持 p.mu。
+func (p *Plugin) trimRunsLocked() {
+	for len(p.runOrder) > 40 {
+		idx := -1
+		for i, rid := range p.runOrder {
+			if r := p.runs[rid]; r != nil && r.status != "running" {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			break
+		}
+		rid := p.runOrder[idx]
+		p.runOrder = append(p.runOrder[:idx], p.runOrder[idx+1:]...)
+		delete(p.runs, rid)
+	}
+}
+
+// runTask 同步执行（MCP/旧调用方用）：等执行结束返回完整输出与错误。
+func (p *Plugin) runTask(id string) (string, error) {
+	run, err := p.startRun(id)
+	if err != nil {
+		return "", err
+	}
+	<-run.done
+	p.mu.Lock()
+	rl := run.snapshot()
+	p.mu.Unlock()
+	if rl.Status == "success" {
+		return rl.Output, nil
+	}
+	return rl.Output, fmt.Errorf("执行失败（%s，exit %d）", rl.Status, rl.ExitCode)
+}
+
+// execute 真正执行任务命令：输出边到边写入 run.buf（SSE/轮询据此读取）。
+// 绑定 SSH 主机（sshHostId>0）→ 远端登录 shell 执行；否则面板本机 bash -c。
+func (p *Plugin) execute(t Task, run *liveRun) {
 	timeout := t.Timeout
 	if timeout <= 0 {
 		timeout = 3600
 	}
-	start := time.Now()
 	var (
-		outBytes []byte
 		err      error
 		exitCode int
 		timedOut bool
-		target   string
 	)
 	if t.SSHHostID > 0 {
-		target = fmt.Sprintf("ssh:%d", t.SSHHostID)
 		cmdStr := t.Command
 		if t.WorkDir != "" {
 			cmdStr = "cd '" + strings.ReplaceAll(t.WorkDir, "'", `'\''`) + "' && " + cmdStr
 		}
-		var out string
-		out, exitCode, err = p.ctx.SSHExec(t.SSHHostID, cmdStr, timeout)
-		outBytes = []byte(out)
+		exitCode, err = p.ctx.SSHExecStream(t.SSHHostID, cmdStr, timeout, func(b []byte) { p.appendOut(run, b) })
 		timedOut = errors.Is(err, sdk.ErrExecTimeout)
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
@@ -364,32 +660,42 @@ func (p *Plugin) runTask(id string) (string, error) {
 			cmd.Dir = t.WorkDir
 		}
 		cmd.Env = append(os.Environ(), "HOME=/root")
-		outBytes, err = cmd.CombinedOutput()
+		cmd.Stdout = runOutput{p: p, run: run}
+		cmd.Stderr = runOutput{p: p, run: run}
+		err = cmd.Run()
 		timedOut = ctx.Err() == context.DeadlineExceeded
 		if err != nil {
 			exitCode = 1
-			if ee, ok := err.(*exec.ExitError); ok {
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
 				exitCode = ee.ExitCode()
 			}
 		}
 	}
-	rl := RunLog{
-		TaskID:   id,
-		StartAt:  start.Format("2006-01-02 15:04:05"),
-		Duration: time.Since(start).Round(time.Millisecond).String(),
-		ExitCode: exitCode,
-		Timeout:  timedOut,
-		Target:   target,
-		Output:   string(outBytes),
+	status := "success"
+	switch {
+	case timedOut:
+		status, exitCode = "timeout", -1
+	case err != nil:
+		status = "failed"
+		if exitCode == 0 {
+			exitCode = -1
+		}
+	case exitCode != 0:
+		status = "failed"
 	}
-	p.mu.Lock()
-	p.logs[id] = append([]RunLog{rl}, p.logs[id]...)
-	if len(p.logs[id]) > 20 {
-		p.logs[id] = p.logs[id][:20]
+	// 连接失败/超时/本机无 bash 等“没有输出”的失败，补一条面板侧说明，避免日志空白。
+	if err != nil && exitCode <= 0 {
+		if timedOut {
+			p.appendOut(run, []byte("[面板] 执行超时，已中断: "+err.Error()+"\n"))
+		} else {
+			p.appendOut(run, []byte("[面板] 执行失败: "+err.Error()+"\n"))
+		}
 	}
-	p.mu.Unlock()
+	rl := p.finishRun(run, status, exitCode, timedOut)
+	p.ctx.Logf("任务 %s(%s) 执行完成 status=%s exit=%d", t.Name, t.ID, status, exitCode)
 	// 失败 → 统一通知（站内信 + 按订阅邮件）；成功不通知，避免刷屏
-	if err != nil || timedOut {
+	if status != "success" {
 		detail := ""
 		if err != nil {
 			detail = err.Error()
@@ -397,10 +703,10 @@ func (p *Plugin) runTask(id string) (string, error) {
 		if timedOut {
 			detail = fmt.Sprintf("执行超时（>%ds）", timeout)
 		}
-		if target != "" {
-			detail = fmt.Sprintf("[执行目标 %s] %s", target, detail)
+		if rl.Target != "" {
+			detail = fmt.Sprintf("[执行目标 %s] %s", rl.Target, detail)
 		}
-		out := string(outBytes)
+		out := rl.Output
 		if len(out) > 500 {
 			out = out[len(out)-500:] + "（尾部 500 字符）"
 		}
@@ -408,7 +714,60 @@ func (p *Plugin) runTask(id string) (string, error) {
 			fmt.Sprintf("定时任务失败: %s（exit %d）", t.Name, exitCode),
 			detail+"\n输出：\n"+out)
 	}
-	return rl.Output, err
+}
+
+// runOutput 承接本机命令的 stdout/stderr，写入实时缓冲（exec 内部会并发调用，appendOut 加锁）。
+type runOutput struct {
+	p   *Plugin
+	run *liveRun
+}
+
+func (w runOutput) Write(b []byte) (int, error) {
+	w.p.appendOut(w.run, b)
+	return len(b), nil
+}
+
+func (p *Plugin) appendOut(run *liveRun, b []byte) {
+	if len(b) == 0 {
+		return
+	}
+	p.mu.Lock()
+	if !run.closed { // 超时后远端可能仍回吐尾部数据，结束后一律丢弃
+		run.buf = append(run.buf, b...)
+		for ch := range run.subs {
+			select {
+			case ch <- struct{}{}:
+			default:
+			}
+		}
+	}
+	p.mu.Unlock()
+}
+
+// finishRun 定稿状态/耗时/历史并唤醒所有订阅者与等待者。
+func (p *Plugin) finishRun(run *liveRun, status string, exitCode int, timedOut bool) RunLog {
+	p.mu.Lock()
+	if run.closed {
+		rl := run.snapshot()
+		p.mu.Unlock()
+		return rl
+	}
+	run.status, run.exitCode, run.timeout = status, exitCode, timedOut
+	run.closed = true
+	rl := run.snapshot()
+	p.logs[run.TaskID] = append([]RunLog{rl}, p.logs[run.TaskID]...)
+	if len(p.logs[run.TaskID]) > 20 {
+		p.logs[run.TaskID] = p.logs[run.TaskID][:20]
+	}
+	close(run.done)
+	for ch := range run.subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	p.mu.Unlock()
+	return rl
 }
 
 // ---- MCP ----

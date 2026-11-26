@@ -94,7 +94,7 @@ func (p *Plugin) Meta() sdk.Meta {
 	return sdk.Meta{
 		ID:          "webhooks",
 		Name:        "Webhooks 服务",
-		Version:     "0.3.1",
+		Version:     "0.3.2",
 		Description: "Webhook 接收端（GitHub 签名校验）+ 部署执行 + 运行日志（执行中实时输出）+ 邮件通知 + 绑定 SSH 主机远端执行；替代独立 webhook 服务",
 		Permissions: []string{"http", "exec"},
 		Menu:        []sdk.Menu{{Title: "Webhooks", Icon: "thunderbolt", Path: "/"}},
@@ -273,7 +273,9 @@ func (p *Plugin) apiActive(w http.ResponseWriter, r *http.Request) {
 	out := make([]RunLog, 0, 4)
 	for _, rid := range p.runOrder {
 		if run := p.runs[rid]; run != nil && run.status == "running" {
-			out = append(out, run.snapshot())
+			rl := run.snapshot()
+			rl.Output = "" // 横幅/卡片徽标只需要元信息，避免高输出任务每 2.5s 全量回传
+			out = append(out, rl)
 		}
 	}
 	p.mu.Unlock()
