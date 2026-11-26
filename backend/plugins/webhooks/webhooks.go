@@ -260,7 +260,7 @@ func (p *Plugin) apiLogs(w http.ResponseWriter, r *http.Request) {
 	// 进行中的执行优先展示（历史环形里只有已结束记录）
 	for _, rid := range p.runOrder {
 		if run := p.runs[rid]; run != nil && run.HookID == id && run.status == "running" {
-			out = append(out, run.snapshot())
+			out = append(out, run.meta())
 		}
 	}
 	out = append(out, p.logs[id]...)
@@ -273,9 +273,7 @@ func (p *Plugin) apiActive(w http.ResponseWriter, r *http.Request) {
 	out := make([]RunLog, 0, 4)
 	for _, rid := range p.runOrder {
 		if run := p.runs[rid]; run != nil && run.status == "running" {
-			rl := run.snapshot()
-			rl.Output = "" // 横幅/卡片徽标只需要元信息，避免高输出任务每 2.5s 全量回传
-			out = append(out, rl)
+			out = append(out, run.meta()) // 横幅/卡片徽标只需要元信息，避免高输出任务每 2.5s 全量回传
 		}
 	}
 	p.mu.Unlock()
@@ -574,11 +572,18 @@ func genRunID() string {
 	return hex.EncodeToString(b)
 }
 
-func (r *liveRun) snapshot() RunLog {
+// meta 只返回运行态元信息，不复制输出缓冲（横幅/日志列表轮询用）。
+func (r *liveRun) meta() RunLog {
 	return RunLog{
 		RunID: r.RunID, HookID: r.HookID, StartAt: r.StartAt, ExitCode: r.exitCode,
-		Status: r.status, DurationMs: r.durMs, Target: r.Target, Output: string(r.buf),
+		Status: r.status, DurationMs: r.durMs, Target: r.Target,
 	}
+}
+
+func (r *liveRun) snapshot() RunLog {
+	rl := r.meta()
+	rl.Output = string(r.buf)
+	return rl
 }
 
 // startRun 后台执行一次 Hook，立即返回 run（前端拿 runId 订阅实时输出）。

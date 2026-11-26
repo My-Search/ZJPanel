@@ -357,8 +357,7 @@ function openLogByIndex(id, i) {
   const l = (logsCache[id] || [])[i];
   if (!l) return;
   if (l.status === 'running') return openLiveRun(l.runId, id, l.startAt, l.target);
-  if (l.runId) return openPastRun(l.runId, id);
-  // 旧记录没有 runId 时直接展示已保存的输出
+  // 历史记录自带 output，直接展示；不再按 runId 回查内存（run 被淘汰后仍能看日志）
   stopLive();
   $('#logMask').classList.add('open');
   setLogHead(id, l.target, l.startAt);
@@ -473,18 +472,6 @@ function stopLive() {
   live = null;
 }
 function closeRunLog() { stopLive(); $('#logMask').classList.remove('open'); }
-async function openPastRun(runId, hookId) {
-  stopLive();
-  const r = await api('/runs/' + runId);
-  if (r.error) { toast(r.error); return; }
-  if (r.status === 'running') return openLiveRun(runId, hookId, r.startAt, r.target);
-  $('#logMask').classList.add('open');
-  setLogHead(hookId, r.target, r.startAt);
-  setLogStatus(r.status || (r.exitCode === 0 ? 'success' : 'failed'), r.exitCode);
-  setLogText(r.output || '');
-  $('#logDur').textContent = r.durationMs ? '用时 ' + fmtDur(r.durationMs) : '';
-  $('#logHint').textContent = '历史输出';
-}
 
 // 每秒刷新“已运行”计时与进行中列表
 setInterval(() => {
