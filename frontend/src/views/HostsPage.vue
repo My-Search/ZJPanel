@@ -29,7 +29,7 @@
               <a-tag v-if="h.local" class="mini-tag">内置</a-tag>
               <a-tag v-else-if="!h.claimed" class="mini-tag" color="orange">待认领</a-tag>
             </div>
-            <div class="host-addr mono">{{ h.local ? '面板所在机器' : `${h.username}@${h.host}:${h.port}` }}</div>
+            <div class="host-addr mono">{{ h.local ? '面板所在机器' : (h.host ? `${h.username}@${h.host}:${h.port}` : '待回连，地址未上报') }}</div>
           </div>
           <div class="host-right">
             <a-tag v-if="h.outdated" color="orange" class="mini-tag">可升级</a-tag>
@@ -51,13 +51,13 @@
               <a-tag v-if="current.outdated" color="orange">Agent 落后：{{ current.agentVersion }} → {{ current.panelVersion }}</a-tag>
             </div>
             <div class="dh-sub mono">
-              {{ current.local ? '127.0.0.1（面板容器）' : `${current.username}@${current.host}:${current.port}` }}
+              {{ current.local ? '127.0.0.1（面板容器）' : (current.host ? `${current.username}@${current.host}:${current.port}` : '等待 Agent 回连后上报地址') }}
               <span v-if="current.remoteIp"> · 回连 IP {{ current.remoteIp }}</span>
               <span v-if="current.lastSeen"> · 最后在线 {{ fmtTime(current.lastSeen) }}</span>
             </div>
           </div>
-          <a-space wrap>
-            <a-button size="small" @click="testHost" :loading="testing">测试连接</a-button>
+          <a-space wrap class="dh-actions">
+            <a-button size="small" v-if="!current.local" @click="testHost" :loading="testing">测试连接</a-button>
             <a-button size="small" type="primary" ghost @click="openTerminal">打开终端</a-button>
             <a-button v-if="canInstall" size="small" type="primary" :loading="installing" @click="installAgent">安装 Agent</a-button>
             <a-button v-if="current.online && !current.local" size="small" @click="upgradeAgent" :loading="upgrading">升级 Agent</a-button>
@@ -83,6 +83,7 @@
                   <a-card size="small" title="监听端口" :body-style="{ padding: '0 8px 8px' }">
                     <a-table
                       :data-source="ports" :columns="portCols" row-key="key" size="small"
+                      :scroll="narrow ? undefined : { x: 380 }"
                       :pagination="{ pageSize: 8, size: 'small' }" :locale="{ emptyText: '未采集到端口（Agent 在线后自动上报）' }"
                     />
                   </a-card>
@@ -119,7 +120,7 @@
                 </div>
                 <a-table
                   v-if="findings.length" :data-source="findings" :columns="checkCols" row-key="key" size="small"
-                  :pagination="false" style="margin-top: 10px"
+                  :pagination="false" :scroll="{ x: 520 }" style="margin-top: 10px"
                 >
                   <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'risk'">
@@ -144,7 +145,7 @@
             <div class="pane">
               <a-table
                 :data-source="events" :columns="eventCols" row-key="id" size="small"
-                :pagination="false" :locale="{ emptyText: '暂无事件' }"
+                :pagination="false" :scroll="{ x: 560 }" :locale="{ emptyText: '暂无事件' }"
               >
                 <template #bodyCell="{ column, record }">
                   <template v-if="column.key === 'time'">{{ fmtTime(record.time) }}</template>
@@ -176,8 +177,8 @@
             <div class="pane">
               <a-form layout="vertical" style="max-width: 720px">
                 <a-row :gutter="12">
-                  <a-col :span="12"><a-form-item label="名称"><a-input v-model:value="edit.name" /></a-form-item></a-col>
-                  <a-col :span="12"><a-form-item label="分组"><a-input v-model:value="edit.group" placeholder="如 生产 / 边缘" /></a-form-item></a-col>
+                  <a-col :xs="24" :sm="12"><a-form-item label="名称"><a-input v-model:value="edit.name" /></a-form-item></a-col>
+                  <a-col :xs="24" :sm="12"><a-form-item label="分组"><a-input v-model:value="edit.group" placeholder="如 生产 / 边缘" /></a-form-item></a-col>
                 </a-row>
                 <a-form-item label="面板地址（目标机访问面板用的地址）">
                   <a-input v-model:value="panelUrl" placeholder="https://panel.example.com" />
@@ -204,19 +205,19 @@
     </a-card>
 
     <!-- 添加主机 -->
-    <a-modal v-model:open="addOpen" title="SSH 添加主机" :confirm-loading="addSaving" @ok="saveNewHost" ok-text="保存">
+    <a-modal v-model:open="addOpen" title="SSH 添加主机" :width="narrow ? '94vw' : 520" :confirm-loading="addSaving" @ok="saveNewHost" ok-text="保存">
       <a-form layout="vertical">
         <a-row :gutter="12">
-          <a-col :span="12"><a-form-item label="名称"><a-input v-model:value="form.name" placeholder="可留空，默认用地址" /></a-form-item></a-col>
-          <a-col :span="12"><a-form-item label="分组"><a-input v-model:value="form.group" placeholder="可留空" /></a-form-item></a-col>
+          <a-col :xs="24" :sm="12"><a-form-item label="名称"><a-input v-model:value="form.name" placeholder="可留空，默认用地址" /></a-form-item></a-col>
+          <a-col :xs="24" :sm="12"><a-form-item label="分组"><a-input v-model:value="form.group" placeholder="可留空" /></a-form-item></a-col>
         </a-row>
         <a-row :gutter="12">
           <a-col :span="16"><a-form-item label="地址" required><a-input v-model:value="form.host" placeholder="1.2.3.4 或域名" /></a-form-item></a-col>
           <a-col :span="8"><a-form-item label="端口"><a-input-number v-model:value="form.port" :min="1" :max="65535" style="width: 100%" /></a-form-item></a-col>
         </a-row>
         <a-row :gutter="12">
-          <a-col :span="12"><a-form-item label="用户" required><a-input v-model:value="form.username" placeholder="root" /></a-form-item></a-col>
-          <a-col :span="12">
+          <a-col :xs="24" :sm="12"><a-form-item label="用户" required><a-input v-model:value="form.username" placeholder="root" /></a-form-item></a-col>
+          <a-col :xs="24" :sm="12">
             <a-form-item label="认证">
               <a-radio-group v-model:value="form.authType">
                 <a-radio-button value="password">密码</a-radio-button>
@@ -238,11 +239,11 @@
     </a-modal>
 
     <!-- 命令安装 -->
-    <a-modal v-model:open="regOpen" title="命令安装 Agent" :footer="null" width="720px">
+    <a-modal v-model:open="regOpen" title="命令安装 Agent" :footer="null" :width="narrow ? '94vw' : 720">
       <a-form layout="vertical">
         <a-row :gutter="12">
-          <a-col :span="12"><a-form-item label="名称（可留空）"><a-input v-model:value="reg.name" /></a-form-item></a-col>
-          <a-col :span="12"><a-form-item label="分组（可留空）"><a-input v-model:value="reg.group" /></a-form-item></a-col>
+          <a-col :xs="24" :sm="12"><a-form-item label="名称（可留空）"><a-input v-model:value="reg.name" /></a-form-item></a-col>
+          <a-col :xs="24" :sm="12"><a-form-item label="分组（可留空）"><a-input v-model:value="reg.group" /></a-form-item></a-col>
         </a-row>
         <a-form-item label="面板地址（目标机访问面板用的地址）">
           <a-input v-model:value="reg.panelUrl" :placeholder="defaultPanelUrl" />
@@ -260,7 +261,7 @@
     </a-modal>
 
     <!-- 安装输出 -->
-    <a-modal v-model:open="outOpen" title="安装输出" :footer="null" width="760px">
+    <a-modal v-model:open="outOpen" title="安装输出" :footer="null" :width="narrow ? '94vw' : 760">
       <pre class="out-box mono">{{ output }}</pre>
     </a-modal>
   </div>
@@ -517,11 +518,18 @@ const copyCmd = async () => {
 }
 
 let unsub: (() => void) | null = null
+// 移动端（<768）与桌面共用一套模板：只把弹窗宽度、列表形态和留白降级。
+const narrow = ref(false)
+const mq = window.matchMedia('(max-width: 767px)')
+const syncNarrow = () => { narrow.value = mq.matches }
+
 onMounted(async () => {
+  syncNarrow()
+  mq.addEventListener('change', syncNarrow)
   await load()
   unsub = wsTopic('host-event', () => { load(); if (current.value) loadDetail() })
 })
-onUnmounted(() => unsub?.())
+onUnmounted(() => { unsub?.(); mq.removeEventListener('change', syncNarrow) })
 watch(() => current.value?.id, () => loadDetail())
 </script>
 
@@ -565,7 +573,30 @@ watch(() => current.value?.id, () => loadDetail())
 .cmd-box { margin-top: 12px; padding: 10px; border-radius: 8px; background: rgba(15,23,42,.06); font-size: 12px; word-break: break-all; }
 .out-box { max-height: 60vh; overflow: auto; padding: 10px; border-radius: 8px; background: rgba(15,23,42,.06); font-size: 12px; white-space: pre-wrap; }
 @media (max-width: 900px) {
-  .hosts-page { flex-direction: column; }
-  .list-card { width: 100%; max-height: 260px; }
+  .hosts-page { flex-direction: column; height: auto; gap: 8px; }
+  .list-card { width: 100%; max-height: none; flex: none; }
+  /* 列表降级为横向滑动的「主机胶囊」：不占纵向空间，也不会把详情挤到屏幕外 */
+  .list-body { display: flex; gap: 8px; overflow-x: auto; overflow-y: hidden; padding-bottom: 4px; margin-top: 8px; }
+  .list-body :deep(.ant-empty) { margin: 4px auto; }
+  .host-item { flex: 0 0 auto; max-width: 70vw; padding: 6px 10px; border: 1px solid rgba(148,163,184,.18); background: rgba(148,163,184,.06); }
+  .host-item.active { border-color: rgba(22,119,255,.35); }
+  .host-addr { display: none; }
+  .detail-card { width: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+  .detail-head { flex-direction: column; align-items: stretch; gap: 8px; padding: 12px 12px 0; }
+  .dh-title { font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
+  .dh-sub { font-size: 11px; overflow-wrap: anywhere; }
+  .dh-actions { width: 100%; flex-wrap: wrap; }
+  .detail-tabs { padding: 0 12px; }
+  .check-row { flex-direction: column; align-items: flex-start; }
+  .pane { padding-bottom: 12px; }
+}
+@media (max-width: 767px) {
+  .stat { height: auto; min-height: 76px; }
+  .stat-value { font-size: 20px; }
+  .cmd-box, .out-box { font-size: 11px; }
+  .detail-head { padding-top: 10px; }
+  .detail-tabs :deep(.ant-tabs-nav) { margin-bottom: 8px; }
+  .detail-tabs :deep(.ant-tabs-nav-list) { flex-wrap: nowrap; }
+  .detail-tabs :deep(.ant-tabs-tab) { padding: 8px 0; font-size: 13px; }
 }
 </style>

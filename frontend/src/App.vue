@@ -127,10 +127,13 @@ html[data-theme='light'] .nav-drawer .ant-drawer-body { background: #fff; }
   .toolbar { flex-wrap: wrap; }
   .toolbar > * { max-width: 100%; }
   .toolbar .dim { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
-  /* 栅格列窄屏全宽堆叠（页面向下排布，不出横向滚动） */
+  /* 栅格列窄屏全宽堆叠：只作用于「固定 span」的旧列，显式写了 xs/sm/md/lg 的列保留自己的断点，
+     否则会把 2x2 统计卡这类本来合理的窄屏栅格强行拉成 100%。 */
   .ant-row { row-gap: 10px; }
-  .ant-col { max-width: 100% !important; }
-  .ant-col[class*='ant-col-']:not(.ant-col-24) { flex: 0 0 100% !important; width: 100% !important; }
+  .ant-col { max-width: 100% !important; min-width: 0; }
+  .ant-col[class*='ant-col-']:not([class*='ant-col-xs-']):not([class*='ant-col-sm-']):not([class*='ant-col-md-']):not([class*='ant-col-lg-']):not([class*='ant-col-xl-']):not(.ant-col-24) {
+    flex: 0 0 100% !important; width: 100% !important;
+  }
   /* 描述列表、标签组换行防溢出 */
   .ant-descriptions-item { padding-bottom: 8px; }
   .ant-space { flex-wrap: wrap; }

@@ -35,7 +35,7 @@ func InstallScript(p ScriptParams) string {
 	if p.SHA256 != "" {
 		shaCheck = fmt.Sprintf(`
   want=%q
-  got=$(sha256sum "$tmp" | awk '{print $1}')
+  got=$(sha256sum "$TMP" | awk '{print $1}')
   [ "$want" = "$got" ] || { echo "[zjagent] 二进制校验失败"; exit 12; }`, p.SHA256)
 	}
 	return fmt.Sprintf(`#!/bin/sh
