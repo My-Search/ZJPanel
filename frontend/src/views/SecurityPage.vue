@@ -84,8 +84,12 @@
                 </template>
                 <template v-else-if="column.key === 'kind'">{{ record.kind }}</template>
                 <template v-else-if="column.key === 'source'">
-                  <span class="mono">{{ record.ip || '-' }}</span>
-                  <a-tag v-if="record.country" class="cc">{{ record.country }}</a-tag>
+                  <div v-if="record.site" class="mono" :title="record.site">{{ record.site }}</div>
+                  <div v-if="record.ip">
+                    <span class="mono">{{ record.ip }}</span>
+                    <a-tag v-if="record.country" class="cc">{{ record.country }}</a-tag>
+                  </div>
+                  <span v-if="!record.site && !record.ip && !record.country" class="dim">-</span>
                 </template>
                 <template v-else-if="column.key === 'detail'">
                   <span class="detail">{{ record.detail }}</span>
@@ -422,6 +426,7 @@ const fmtBps = (v: any) => fmtBytes(Math.round(Number(v) || 0)) + '/s'
 .stat-sub { color: var(--color-slate); font-size: 12px; }
 .chart { height: 240px; }
 .hint { color: var(--color-slate); font-size: 12px; margin-top: 4px; }
+.dim { color: var(--color-slate); font-size: 12px; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 .cc { margin-left: 4px; }
 .pct { color: var(--color-slate); font-size: 12px; }

@@ -566,8 +566,24 @@ func (s *Service) detect(w *win, l4 L4Stat, now time.Time) []autoBan {
 		if len(top) > 0 {
 			p = top[0].Name
 		}
-		s.emit("站点失血", "critical", "全站", "", "", p, "",
-			fmt.Sprintf("60s 内 5xx 占 %.1f%%（%d 次），站点可能已被打挂", rate, w.s5), int(w.s5), now)
+		// 失血定位到具体站点：取 5xx 次数最多的非停用站点，来源列直接显示域名，
+		// 不再只写「全站」让用户自己猜是哪个站被打挂。
+		siteName := "全站"
+		var worst *siteTick
+		for name, st := range w.sites {
+			if name == "" || name == "-" || s.isIgnoredSite(name) || st.e5 <= 0 {
+				continue
+			}
+			if worst == nil || st.e5 > worst.e5 {
+				worst, siteName = st, name
+			}
+		}
+		detail := fmt.Sprintf("60s 内 5xx 占 %.1f%%（%d 次），站点可能已被打挂", rate, w.s5)
+		if worst != nil && worst.total > 0 {
+			detail = fmt.Sprintf("60s 内全站 5xx 占 %.1f%%（%d 次），该站 %d 次（%.1f%%），站点可能已被打挂",
+				rate, w.s5, worst.e5, float64(worst.e5)*100/float64(worst.total))
+		}
+		s.emit("站点失血", "critical", siteName, "", "", p, "", detail, int(w.s5), now)
 	}
 
 	for c, n := range w.countries {

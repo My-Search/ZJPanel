@@ -5,6 +5,7 @@
       <span class="dim">实时流向</span>
       <a-switch v-model:checked="realtime" size="small" />
       <a-tag v-if="realtime" color="blue">实时 {{ rate }} req/s（近 5s 滑窗）</a-tag>
+      <span v-if="compact" class="dim">悬停流向可暂停并查看请求明细</span>
       <!-- compact（仪表盘卡片）不放统计窗口选择：紧挨「实时」标签会被误读为实时开关。
            仪表盘固定用最近 60 分钟聚合（流星本身是实时推送，不受窗口影响），完整地图页保留选择器 -->
       <template v-if="!compact">
@@ -735,7 +736,7 @@ const renderMap = async (resetView = false, force = false) => {
 
 // 悬停一条流星线：冻结当前画面（快照），回溯该来源的历史请求，并开始接收后续新请求。
 const openInspect = (f: LiveFlow) => {
-  if (props.compact || inspectRoute.value?.key === f.key) return
+  if (inspectRoute.value?.key === f.key) return
   if (!inspectRoute.value) frozenFlows.value = liveFlows.value.slice()
   const matching = captureSnapshot().filter(e => e.key === f.key).slice(0, INSPECT_SEED_CAP).reverse()
   inspectEntries.value = matching
@@ -774,7 +775,7 @@ const closeInspect = () => {
 
 // ECharts 的 lines 系列可命中（默认非 silent）：params.dataIndex 对应当前渲染数组（实时/冻结快照二选一）
 const onChartOver = (p: any) => {
-  if (props.compact || p?.seriesType !== 'lines') return
+  if (p?.seriesType !== 'lines') return
   const list = inspectRoute.value ? frozenFlows.value : liveFlows.value
   const f = list[p.dataIndex]
   if (f?.key) openInspect(f)
@@ -795,9 +796,9 @@ const load = async () => {
   summary.value = await get('/api/logmap/summary', {
     minutes: minutes.value,
     recent: 50,
-    ...(props.compact ? {} : { detail: 1 }), // 地图页：recent 带 UA/Referer，用于悬停明细回溯
+    detail: 1, // 仪表盘与地图页都要能悬停查看请求明细（UA/Referer 随 recent 返回）
   })
-  if (!props.compact) seedCapture(summary.value.recent)
+  seedCapture(summary.value.recent)
   geoLoaded.value = summary.value.geoLoaded
   if (summary.value.serverLoc?.length === 2) {
     const [lon, lat] = summary.value.serverLoc
@@ -870,16 +871,16 @@ watch(() => props.height, () => chart?.resize())
  * keep-alive 缓存页（仪表盘/请求地图页）的后代，onMounted 与 onActivated 都会触发。
  */
 // SSE 实时流：entry 逐条即时推送；summary 推送跟随所选统计窗口，窗口切换时重连。
-// 地图页带 detail=1：entry/recent 携带 UA/Referer（悬停明细）；仪表盘轻量模式不付这份流量。
+// 仪表盘与地图页都带 detail=1：悬停流向后的请求树/详情抽屉需要 UA/Referer。
 const onStreamMsg = (m: any) => {
   if (m.type === 'summary') {
     summary.value = m.data
-    if (!props.compact) seedCapture(m.data.recent) // 断线重连/页面刚打开时补齐历史请求
+    seedCapture(m.data.recent) // 断线重连/页面刚打开时补齐历史请求
     renderMap()
   } else if (m.type === 'entry') handleEntry(m.data)
 }
 const connectStream = () => sseTopic(
-  `/api/logmap/stream?minutes=${minutes.value}${props.compact ? '' : '&detail=1'}`,
+  `/api/logmap/stream?minutes=${minutes.value}&detail=1`,
   onStreamMsg,
 )
 watch(minutes, () => { if (active) { stopStream?.(); stopStream = connectStream() } })
