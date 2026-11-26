@@ -77,6 +77,7 @@ type ComposeProject struct {
 	Services  string    `gorm:"type:text" json:"services"`       // JSON: [{name,image,ports:[]}]
 	SiteID    *uint     `json:"siteId"`
 	Imported  bool      `json:"imported"`
+	Hidden    bool      `gorm:"index;default:false" json:"hidden"` // 已从面板删除：扫描/列表跳过，重新导入或「恢复」后可见
 	CreatedAt time.Time `json:"createdAt"`
 }
 

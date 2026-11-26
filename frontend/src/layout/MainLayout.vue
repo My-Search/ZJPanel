@@ -110,7 +110,7 @@ const themeLabel = computed(() => ({ light: '浅色', dark: '深色', system: '�
 
 const selected = computed(() => {
   const p = route.path
-  const hit = ['/dashboard', '/apps', '/nginx', '/terminal', '/certs', '/map', '/monitor', '/mcp', '/plugins', '/settings']
+  const hit = ['/dashboard', '/apps', '/nginx', '/terminal', '/certs', '/map', '/monitor', '/security', '/mcp', '/plugins', '/settings']
     .find(k => p.startsWith(k))
   if (hit) return [hit]
   if (p.startsWith('/plugin/')) return ['/plugin/' + route.params.id]

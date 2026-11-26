@@ -5,8 +5,9 @@
       <!-- ============ Compose 应用（主视图） ============ -->
       <a-tab-pane key="compose" tab="Compose 应用">
         <div class="toolbar">
-          <a-button type="primary" @click="openImport"><PlusOutlined /> 导入 docker-compose 应用</a-button>
+          <a-button type="primary" @click="openImport"><PlusOutlined /> 通过 docker-compose.yml 文件导入</a-button>
           <a-button @click="scan"><SyncOutlined /> 重新扫描</a-button>
+          <a-button v-if="hiddenList.length" type="link" size="small" @click="hiddenOpen = true">已删除 {{ hiddenList.length }}</a-button>
           <span class="dim">
             宿主机目录经挂载映射进容器（默认 <code>/opt:/opt</code>），在向导中选择含 docker-compose.yml 的目录导入；
             每个项目一个/多个网站，站点声明写入目录下 <code>zjpanel.json</code>（导入时优先读取，面板变化自动写回，可迁移恢复）
@@ -43,6 +44,8 @@
                           <a-menu-item key="decl" @click="showDecl">查看 zjpanel.json</a-menu-item>
                           <a-menu-item key="sync" @click="syncDecl">按声明同步站点</a-menu-item>
                           <a-menu-item key="write" @click="writeDecl">立即写出声明文件</a-menu-item>
+                          <a-menu-divider />
+                          <a-menu-item key="delete" danger :disabled="projBusy" @click="removeProj">删除</a-menu-item>
                         </a-menu>
                       </template>
                     </a-dropdown>
@@ -152,8 +155,8 @@
     </a-tabs>
     </a-spin>
 
-    <!-- 导入 docker-compose 应用（文件夹选择向导） -->
-    <a-modal v-model:open="importOpen" title="导入 docker-compose 应用" :width="680" :footer="null">
+    <!-- 通过 docker-compose.yml 文件导入（文件夹选择向导） -->
+    <a-modal v-model:open="importOpen" title="通过 docker-compose.yml 文件导入" :width="680" :footer="null">
       <!-- 第一步：选择目录 -->
       <template v-if="!importForm.parsed">
         <a-breadcrumb style="margin-bottom: 10px">
@@ -189,6 +192,18 @@
 
       <!-- 第二步：选择服务与域名 -->
       <template v-else>
+        <!-- 目录里已有 zjpanel.json：删除/迁移后重新导入，可直接按声明恢复全部站点 -->
+        <a-alert v-if="declSites.length" type="info" show-icon style="margin-bottom: 14px">
+          <template #message>检测到 zjpanel.json：{{ declSites.length }} 个站点声明</template>
+          <template #description>
+            <div>{{ declSites.map(s => s.domain).join('、') }}</div>
+            <div style="margin-top: 6px">按声明恢复后，域名、反代端口、HTTPS 均以声明为准，无需重新填写。</div>
+            <a-button size="small" type="primary" style="margin-top: 8px" :loading="declImporting" @click="doImportDecl">
+              按声明恢复（{{ declSites.length }} 个站点）
+            </a-button>
+          </template>
+        </a-alert>
+        <a-divider v-if="declSites.length" style="margin: 4px 0 14px">或新增一个站点</a-divider>
         <a-form layout="vertical">
           <a-form-item label="应用目录"><a-input :value="importForm.dir" disabled /></a-form-item>
           <a-form-item label="服务">
@@ -228,6 +243,21 @@
       <pre class="decl">{{ declContent }}</pre>
     </a-modal>
 
+    <!-- 已删除的项目（恢复入口） -->
+    <a-modal v-model:open="hiddenOpen" title="已删除的项目" :footer="null" :width="660">
+      <a-table :data-source="hiddenList" :columns="hiddenCols" size="small" row-key="id" :pagination="false">
+        <template #emptyText><a-empty description="没有已删除的项目" /></template>
+        <template #bodyCell="{ column, record }">
+          <template v-if="column.key === 'action'">
+            <a-button size="small" type="primary" ghost :disabled="!record.exists" @click="restoreProj(record)">恢复</a-button>
+          </template>
+        </template>
+      </a-table>
+      <p class="dim" style="margin-top: 10px">
+        删除只解除面板关联：项目目录、docker-compose.yml、容器与 zjpanel.json 均保留。恢复后回到列表（未导入状态），可点「按声明同步站点」或用导入向导按声明恢复站点。
+      </p>
+    </a-modal>
+
     <!-- 操作输出 -->
     <a-modal v-model:open="outOpen" :footer="null" :width="720">
       <template #title>
@@ -256,8 +286,8 @@
 
 <script setup lang="ts">
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
-import { message } from 'ant-design-vue'
-import { get, getQuiet, post, fmtBytes, wsTopic } from '../api'
+import { message, Modal } from 'ant-design-vue'
+import { get, getQuiet, post, del, fmtBytes, wsTopic } from '../api'
 import { useTermTheme } from '../utils/termTheme'
 import { wsMessageToText } from '../utils/wsMessage'
 import Sites from './Sites.vue'
@@ -273,6 +303,14 @@ const sites = ref<any[]>([])
 const containers = ref<any[]>([])
 const selected = ref<any>(null)
 const scanning = ref(true)
+// 已从面板删除的项目（hidden）：列表不展示，工具栏「已删除 N」提供恢复入口
+const hiddenList = ref<any[]>([])
+const hiddenOpen = ref(false)
+const hiddenCols = [
+  { title: '名称', dataIndex: 'name', key: 'name', width: 160 },
+  { title: '目录', dataIndex: 'dir', key: 'dir', ellipsis: true },
+  { title: '操作', key: 'action', width: 90 },
+]
 
 const addOpen = ref(false)
 const addForm = ref<any>({})
@@ -324,7 +362,7 @@ const pickDir = async (d: any) => {
     dir: d.path, parsed: true, name: r.name,
     service: r.services?.[0]?.name,
     port: r.services?.[0]?.ports?.[0]?.split(':')[0],
-    domain: '', ssl: false,
+    domain: '', ssl: false, decl: r.decl || null,
   }
   importServiceOpts.value = (r.services || []).map((s: any) => ({ label: s.name, value: s.name }))
   const ports: string[] = []
@@ -348,6 +386,18 @@ const doImport = async () => {
   message.success('已导入并创建网站（zjpanel.json 已写出）')
   importOpen.value = false
   scan()
+}
+// 目录里已有 zjpanel.json（删除/迁移后重新导入）：直接按声明恢复全部站点
+const declSites = computed<any[]>(() => importForm.value?.decl?.sites || [])
+const declImporting = ref(false)
+const doImportDecl = async () => {
+  declImporting.value = true
+  try {
+    const r = await post<any>('/api/compose/import-decl', { dir: importForm.value.dir })
+    message.success(r?.message || '已按声明恢复')
+    importOpen.value = false
+    await scan()
+  } finally { declImporting.value = false }
 }
 const declOpen = ref(false)
 const declContent = ref('')
@@ -484,16 +534,18 @@ const scan = () => {
       void loadStats()
       // 四路首屏数据互不依赖，全部并发：等待 ≈ 最慢一路，而不是四路串行之和。
       // allSettled 而非 all：Docker 不可用时仍要展示项目/站点，反之亦然。
-      const [projRes, sitesRes, ctrRes, setRes] = await Promise.allSettled([
+      const [projRes, sitesRes, ctrRes, setRes, hiddenRes] = await Promise.allSettled([
         get('/api/compose/scan'),
         get('/api/sites'),
         getQuiet<any>('/api/docker/containers'),
         getQuiet<any>('/api/settings'),
+        getQuiet<any>('/api/compose/hidden'),
       ])
       if (projRes.status === 'fulfilled') projects.value = (projRes.value as any[]) || []
       if (sitesRes.status === 'fulfilled') sites.value = (sitesRes.value as any[]) || []
       if (ctrRes.status === 'fulfilled') containers.value = (ctrRes.value as any[]) || []
       if (setRes.status === 'fulfilled') composeRoot.value = setRes.value?.composeRoot || composeRoot.value
+      if (hiddenRes.status === 'fulfilled') hiddenList.value = (hiddenRes.value as any[]) || []
       // 选中项依赖项目列表，必须等并发结果落地后再对齐
       if (projRes.status === 'fulfilled') {
         if (selected.value) {
@@ -660,6 +712,39 @@ const writeDecl = async () => {
   await post(`/api/compose/${selected.value.id}/write-decl`, {})
   message.success('zjpanel.json 已写出')
   scan()
+}
+// 删除项目：解除导入并从列表移除（关联网站 + zjpanel.json 一并删除），目录与容器保持原样。
+// 破坏性操作走二次确认；确认文案写清「不动容器/目录」，可经「已删除」恢复。
+const removeProj = () => {
+  const p = selected.value
+  if (!p?.id) { message.warning('项目尚未登记，先点「重新扫描」'); return }
+  const count = siteCount(p)
+  const parts: string[] = []
+  if (count) parts.push(`删除 ${count} 个关联网站（nginx 配置一并移除）`)
+  parts.push('把项目从列表移除')
+  Modal.confirm({
+    title: `删除「${p.name}」？`,
+    content: `将${parts.join('、')}；容器照常运行，目录与 docker-compose.yml 不受影响。`
+      + (p.hasDecl ? ' zjpanel.json 保留在目录里，下次导入可按它恢复站点管理。' : '')
+      + ' 也可在「已删除」里恢复。',
+    okText: '删除',
+    okType: 'danger',
+    cancelText: '取消',
+    async onOk() {
+      const res = await del<any>(`/api/compose/${p.id}`)
+      message.success(res?.message || '已删除')
+      orphanList.value = []
+      await scan()
+    },
+  })
+}
+const restoreProj = async (p: any) => {
+  try {
+    await post(`/api/compose/${p.id}/restore`, {})
+    message.success('已恢复到项目列表（未导入状态）')
+    hiddenOpen.value = false
+    await scan()
+  } catch { /* 失败提示已由 axios 拦截器输出 */ }
 }
 
 const openAddSite = () => {

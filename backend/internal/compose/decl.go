@@ -56,6 +56,31 @@ func (s *Service) ReadDecl(dir string) (*DeclFile, error) {
 	return &d, nil
 }
 
+// applyImportedState 让 imported/site_id 跟随关联网站数量（无变化不写库，避免放大 SQLite 写）。
+// site_id 保留原指向；原站点已不在关联集合里则退到第一个站点。
+func (s *Service) applyImportedState(rec *model.ComposeProject, sites []model.Site) {
+	imported := len(sites) > 0
+	var siteID *uint
+	if imported {
+		siteID = &sites[0].ID
+		for _, st := range sites {
+			if rec.SiteID != nil && st.ID == *rec.SiteID {
+				siteID = rec.SiteID
+				break
+			}
+		}
+	}
+	changed := rec.Imported != imported
+	if siteID == nil {
+		changed = changed || rec.SiteID != nil
+	} else {
+		changed = changed || rec.SiteID == nil || *rec.SiteID != *siteID
+	}
+	if changed {
+		s.db.Model(rec).Updates(map[string]any{"imported": imported, "site_id": siteID})
+	}
+}
+
 // WriteDecl 把项目当前关联站点写出到 zjpanel.json（面板侧变化时同步）。
 func (s *Service) WriteDecl(projectID uint) error {
 	var rec model.ComposeProject
@@ -66,6 +91,9 @@ func (s *Service) WriteDecl(projectID uint) error {
 	if err := s.db.Where("compose_project_id = ?", projectID).Find(&sites).Error; err != nil {
 		return err
 	}
+	// 导入状态跟随关联网站数量：站点被逐个删完后项目必须回到「未导入」，
+	// 否则 imported/site_id 只在导入时置位、永不回退，卡片会一直挂着「已导入」。
+	s.applyImportedState(&rec, sites)
 	decl := DeclFile{
 		Version:   1,
 		Project:   rec.Name,
@@ -184,6 +212,9 @@ func (s *Service) SyncDecl(projectID uint) (int, int, []string, error) {
 		}
 	}
 	if created+updated > 0 {
+		// 声明恢复/同步后关联网站已变化：同步 imported/site_id（不重写声明，避免覆盖声明里
+		// 归属其它项目的同名站点）
+		s.applyImportedState(&rec, linked)
 		if _, err := s.site.ReloadNginx(); err != nil {
 			return created, updated, orphans, fmt.Errorf("站点已同步，但 nginx 重载失败: %w", err)
 		}
@@ -222,6 +253,50 @@ func (s *Service) WriteDeclIfMissing(projectID uint) error {
 		return nil
 	}
 	return s.WriteDecl(projectID)
+}
+
+// Remove 删除项目：从面板列表移除并解除全部关联，运行中的容器不受影响。
+//   - 删除全部关联网站（nginx conf、sites-enabled 软链、DB 记录）；
+//   - 保留目录下的 zjpanel.json：下次导入按它把站点配置恢复回来管理（声明随目录迁移）；
+//   - 项目标记 hidden：扫描/列表不再出现；项目目录、docker-compose.yml 与容器一律不动；
+//   - 之后可经导入向导重新导入，或在「已删除」列表里恢复。
+//
+// 返回被删除的站点域名列表（前端确认后提示用）。
+func (s *Service) Remove(projectID uint) ([]string, error) {
+	var rec model.ComposeProject
+	if err := s.db.First(&rec, projectID).Error; err != nil {
+		return nil, fmt.Errorf("项目不存在")
+	}
+	var sites []model.Site
+	if err := s.db.Where("compose_project_id = ?", rec.ID).Find(&sites).Error; err != nil {
+		return nil, err
+	}
+	// 先备份声明文件：删站点会经 OnChange 回写 zjpanel.json（删到最后一个会写成空声明），
+	// 删除完成后必须还原，下次导入才能按原声明恢复站点。
+	declPath := s.declPath(rec.Dir)
+	declBackup, _ := os.ReadFile(declPath)
+	removed := make([]string, 0, len(sites))
+	for _, st := range sites {
+		// site.Delete 会下线站点、删 conf 并重载 nginx，同时经 OnChange 回写声明
+		if err := s.site.Delete(st.ID); err != nil {
+			return removed, fmt.Errorf("删除站点 %s 失败: %w", st.Domain, err)
+		}
+		removed = append(removed, st.Domain)
+	}
+	if len(declBackup) > 0 {
+		if err := os.WriteFile(declPath, declBackup, 0o644); err != nil {
+			return removed, fmt.Errorf("还原 %s 失败: %w", DeclFileName, err)
+		}
+	} else {
+		// 原本没有声明：删站点时 OnChange 可能写出空声明，清掉避免留下无站点的 zjpanel.json
+		_ = os.Remove(declPath)
+	}
+	if err := s.db.Model(&rec).Updates(map[string]any{
+		"hidden": true, "imported": false, "site_id": nil,
+	}).Error; err != nil {
+		return removed, err
+	}
+	return removed, nil
 }
 
 var _ = gorm.ErrRecordNotFound

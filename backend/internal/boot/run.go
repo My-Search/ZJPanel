@@ -25,6 +25,7 @@ import (
 	"zjpanel/backend/internal/notify"
 	"zjpanel/backend/internal/pkg"
 	"zjpanel/backend/internal/plugin"
+	"zjpanel/backend/internal/security"
 	"zjpanel/backend/internal/sftp"
 	"zjpanel/backend/internal/site"
 	"zjpanel/backend/internal/sitecheck"
@@ -32,7 +33,7 @@ import (
 	"zjpanel/backend/internal/update"
 	"zjpanel/backend/internal/ws"
 	"zjpanel/backend/plugins/cronjobs"
-	"zjpanel/backend/plugins/mysqladmin"
+	"zjpanel/backend/plugins/dbadmin"
 	"zjpanel/backend/plugins/notifywebhook"
 	"zjpanel/backend/plugins/webhooks"
 )
@@ -114,6 +115,10 @@ func Run() {
 	logmapSvc := logmap.New(cfg)
 	logmapSvc.Start()
 
+	// 安全中心：订阅日志做秒级判定（P0 观测）+ 策略下发（P1 处置）+ 自动封禁告警（P2）
+	securitySvc := security.New(cfg, logmapSvc, nginxSvc, hub)
+	securitySvc.Start()
+
 	// 证书管线（certd 式）
 	cronSvc := newCronWrap()
 	certSvc := cert.New(cfg, db, box, eventBus, hub, cronSvc)
@@ -132,6 +137,10 @@ func Run() {
 	// 统一通知（先于插件装配：插件 ctx.Notify 依赖它）
 	notifySvc := notify.New(db, box, hub, eventBus)
 	notifySvc.Start() // 订阅面板事件主题（cert/sitecheck/plugin）+ 每日过期清理
+	// 安全中心严重事件 → 统一通知（同类事件 5 分钟内只推一次，由 security 内部节流）
+	securitySvc.SetNotify(func(title, body string) {
+		notifySvc.Send("core", notify.Input{Type: "security.alert", Level: "warn", Title: title, Body: body})
+	})
 
 	// 插件运行时
 	pluginMgr := plugin.New(cfg, db, box, eventBus, mcpReg, certSvc.DNS, certSvc.Targets,
@@ -141,7 +150,7 @@ func Run() {
 	pluginMgr.SetNotify(notifySvc)
 	pluginMgr.RegisterBuiltin(notifywebhook.New())
 	pluginMgr.RegisterBuiltin(webhooks.New())
-	pluginMgr.RegisterBuiltin(mysqladmin.New())
+	pluginMgr.RegisterBuiltin(dbadmin.New())
 	pluginMgr.RegisterBuiltin(cronjobs.New())
 	pluginMgr.StartAll()
 
@@ -183,6 +192,7 @@ func Run() {
 	srv.Docker = dockerSvc
 	srv.Metrics = metricsSvc
 	srv.Logmap = logmapSvc
+	srv.Security = securitySvc
 	srv.Cert = certSvc
 	srv.Updater = updater
 	srv.Plugins = pluginMgr

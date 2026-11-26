@@ -6,6 +6,7 @@
     <a-menu-item key="/terminal"><template #icon><TerminalIcon /></template>终端</a-menu-item>
     <a-menu-item key="/certs"><template #icon><SafetyCertificateOutlined /></template>证书</a-menu-item>
     <a-menu-item key="/monitor"><template #icon><DashboardOutlined /></template>监控</a-menu-item>
+    <a-menu-item key="/security"><template #icon><SafetyOutlined /></template>安全</a-menu-item>
     <a-menu-item key="/mcp"><template #icon><ApiOutlined /></template>MCP</a-menu-item>
     <a-menu-item key="/plugins"><template #icon><AppstoreAddOutlined /></template>插件</a-menu-item>
     <a-menu-item key="/settings"><template #icon><SettingOutlined /></template>设置</a-menu-item>
@@ -21,7 +22,7 @@ import { useTheme } from '../store/theme'
 import TerminalIcon from './icons/TerminalIcon.vue'
 import {
   AppstoreOutlined, ClusterOutlined, CodeOutlined,
-  SafetyCertificateOutlined, DashboardOutlined,
+  SafetyCertificateOutlined, DashboardOutlined, SafetyOutlined,
   ApiOutlined, AppstoreAddOutlined, SettingOutlined,
   // 插件菜单图标池（icon 名来自插件 manifest 的 menu.icon，kebab-case）
   ThunderboltOutlined, DatabaseOutlined, ClockCircleOutlined,

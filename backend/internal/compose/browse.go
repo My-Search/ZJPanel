@@ -72,6 +72,16 @@ func (s *Service) ParseDir(dir string) ([]ServiceInfo, string, error) {
 	return servicesOf(f), firstNonEmpty(f.Name, filepath.Base(clean)), nil
 }
 
+// ParseDirWithDecl 解析目录服务并附带声明文件（导入向导判断能否按 zjpanel.json 恢复）。
+func (s *Service) ParseDirWithDecl(dir string) ([]ServiceInfo, string, *DeclFile, error) {
+	services, name, err := s.ParseDir(dir)
+	if err != nil {
+		return nil, "", nil, err
+	}
+	decl, _ := s.ReadDecl(filepath.Clean(dir))
+	return services, name, decl, nil
+}
+
 // isAbsPath 跨平台绝对路径判断：Windows 下 "/opt"（容器内 Linux 路径）也视为绝对。
 func isAbsPath(p string) bool {
 	return filepath.IsAbs(p) || strings.HasPrefix(p, "/") || strings.HasPrefix(p, "\\")

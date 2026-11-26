@@ -24,6 +24,7 @@ import (
 	"zjpanel/backend/internal/notify"
 	"zjpanel/backend/internal/pkg"
 	"zjpanel/backend/internal/plugin"
+	"zjpanel/backend/internal/security"
 	"zjpanel/backend/internal/sftp"
 	"zjpanel/backend/internal/site"
 	"zjpanel/backend/internal/sitecheck"
@@ -51,6 +52,7 @@ type Server struct {
 	Docker  *docker.Service
 	Metrics *metrics.Service
 	Logmap  *logmap.Service
+	Security *security.Service
 	Cert    *cert.Service
 	Updater *update.Service
 	Plugins *plugin.Manager

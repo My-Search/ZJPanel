@@ -26,6 +26,7 @@ func (s *Server) RegisterRoutes() {
 	s.registerSettingsRoutes()
 	s.registerMetricsRoutes()
 	s.registerLogmapRoutes()
+	s.registerSecurityRoutes()
 	s.registerCertRoutes()
 	s.registerMCPRoutes()
 	s.registerUpdateRoutes()
@@ -259,14 +260,14 @@ func (s *Server) registerComposeRoutes() {
 		}
 		c.JSON(http.StatusOK, res)
 	})
-	// 解析指定目录的 compose 服务
+	// 解析指定目录的 compose 服务（含 zjpanel.json 声明，供向导「按声明恢复」）
 	g.GET("/parse", func(c *gin.Context) {
-		services, name, err := s.Compose.ParseDir(c.Query("dir"))
+		services, name, decl, err := s.Compose.ParseDirWithDecl(c.Query("dir"))
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"services": services, "name": name})
+		c.JSON(http.StatusOK, gin.H{"services": services, "name": name, "decl": decl})
 	})
 	g.GET("/scan", func(c *gin.Context) {
 		list, err := s.Compose.SyncDB()
@@ -300,6 +301,24 @@ func (s *Server) registerComposeRoutes() {
 		}
 		s.audit(c, "compose.import", req.Domain+" ← "+req.Dir)
 		c.JSON(http.StatusOK, siteRec)
+	})
+	// 按目录下的 zjpanel.json 恢复站点（删除/迁移后重新导入；不覆盖声明）
+	g.POST("/import-decl", func(c *gin.Context) {
+		var req struct{ Dir string }
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		created, updated, err := s.Compose.ImportDecl(req.Dir)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		s.audit(c, "compose.import-decl", fmt.Sprintf("%s 新建 %d 更新 %d", req.Dir, created, updated))
+		c.JSON(http.StatusOK, gin.H{
+			"ok": true, "created": created, "updated": updated,
+			"message": fmt.Sprintf("已按 zjpanel.json 恢复：新建 %d 个站点，更新 %d 个", created, updated),
+		})
 	})
 	g.POST("/:id/action", func(c *gin.Context) {
 		var req struct{ Action string }
@@ -362,6 +381,37 @@ func (s *Server) registerComposeRoutes() {
 			return
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+	// 已从面板删除的项目（恢复入口）
+	g.GET("/hidden", func(c *gin.Context) {
+		list, err := s.Compose.HiddenProjects()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, list)
+	})
+	// 恢复已删除的项目（仅回到列表，不重建站点）
+	g.POST("/:id/restore", func(c *gin.Context) {
+		if err := s.Compose.Restore(idParam(c)); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		s.audit(c, "compose.restore", c.Param("id"))
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+	// 删除项目：删关联网站 + zjpanel.json，并从面板列表移除（目录与容器不动，可恢复/重新导入）
+	g.DELETE("/:id", func(c *gin.Context) {
+		removed, err := s.Compose.Remove(idParam(c))
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "removed": removed})
+			return
+		}
+		s.audit(c, "compose.remove", fmt.Sprintf("删除站点 %d 个", len(removed)))
+		c.JSON(http.StatusOK, gin.H{
+			"ok": true, "removed": removed,
+			"message": fmt.Sprintf("已删除 %d 个关联网站，项目已从列表移除（容器照常运行，zjpanel.json 已保留）", len(removed)),
+		})
 	})
 }
 

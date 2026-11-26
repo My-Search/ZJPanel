@@ -30,11 +30,42 @@
             </div>
           </template>
         </a-popover>
-        <span class="dim">日志由 nginx access log 增量解析（SSE 逐条实时推送，一次请求一条流星）</span>
+        <span class="dim">日志由 nginx access log 增量解析（SSE 逐条实时推送，一次请求一条流星；悬停流向可暂停并查看请求明细）</span>
       </template>
     </a-space>
 
-    <div ref="mapBox" class="map-box" :style="{ '--map-height': height + 'px' }" @mouseleave="resetRoamView"></div>
+    <div class="map-wrap">
+      <div ref="mapBox" class="map-box" :style="{ '--map-height': height + 'px' }" @mouseleave="resetRoamView"></div>
+
+      <!-- 悬停流向 → 冻结画面 + 实时请求树。数据只来自本页 SSE 内存缓冲，不落库 -->
+      <div v-if="inspectRoute" class="flow-inspect">
+        <div class="fi-head">
+          <div class="fi-title">
+            <span class="fi-pulse"></span>
+            <span class="fi-city">{{ inspectRoute.label }}</span>
+            <a-tag color="gold" class="fi-tag">流向已暂停</a-tag>
+          </div>
+          <a-button type="text" size="small" @click="closeInspect">继续流动</a-button>
+        </div>
+        <div class="fi-meta">
+          站点 {{ inspectSiteCount }} · 路径 {{ inspectPathCount }} · 请求 {{ inspectEntries.length }}
+          <span v-if="inspectLiveTotal" class="fi-live">悬停后 +{{ inspectLiveTotal }}</span>
+        </div>
+        <div class="fi-tip">仅本页内存缓冲（最近 {{ captureCap }} 条 SSE），不落库；新请求实时追加</div>
+        <div class="fi-tree">
+          <a-tree
+            v-if="inspectTree.length"
+            :tree-data="inspectTree"
+            :expanded-keys="inspectExpanded"
+            :selectable="true"
+            block-node
+            @expand="(keys: any) => (inspectExpanded = keys)"
+            @select="onInspectSelect"
+          />
+          <a-empty v-else description="等待该流向的请求…" :image-style="{ height: '40px' }" />
+        </div>
+      </div>
+    </div>
 
     <!-- 统计时间范围放在地图下方（与详细统计同区），避免误读为地图实时数据的过滤条件；compact 模式已并入上方工具条 -->
     <div v-if="!compact" class="stats-range">
@@ -120,13 +151,47 @@
         </a-row>
       </a-collapse-panel>
     </a-collapse>
+
+    <!-- 请求详情：字段全部来自 SSE 推送，不查库 -->
+    <a-drawer v-model:open="detailOpen" title="请求详情" placement="right" :width="460">
+      <template v-if="detailEntry">
+        <div class="det-line">
+          <a-tag :color="statusColor(Math.floor(detailEntry.status / 100) + 'xx')">{{ detailEntry.status }}</a-tag>
+          <span class="det-method">{{ detailEntry.method || '-' }}</span>
+          <span class="det-path">{{ detailEntry.path || '-' }}</span>
+        </div>
+        <a-descriptions :column="1" size="small" bordered class="det-desc">
+          <a-descriptions-item label="时间">{{ fmtTime(detailEntry.time) }}</a-descriptions-item>
+          <a-descriptions-item label="来源 IP">{{ detailEntry.ip || '-' }}</a-descriptions-item>
+          <a-descriptions-item label="地区">{{ detailEntry.city ? detailEntry.city + ', ' : '' }}{{ countryName(detailEntry.country) }}</a-descriptions-item>
+          <a-descriptions-item label="站点">{{ detailEntry.site }}</a-descriptions-item>
+          <a-descriptions-item label="方法">{{ detailEntry.method || '-' }}</a-descriptions-item>
+          <a-descriptions-item label="路径">
+            <a-typography-text copyable class="det-path-full">{{ detailEntry.path || '-' }}</a-typography-text>
+          </a-descriptions-item>
+          <a-descriptions-item label="状态码">{{ detailEntry.status }}</a-descriptions-item>
+          <a-descriptions-item label="响应大小">{{ fmtBytes(detailEntry.bytes) }}</a-descriptions-item>
+          <a-descriptions-item label="流向">{{ inspectRoute ? inspectRoute.label : '-' }}</a-descriptions-item>
+        </a-descriptions>
+        <div class="det-block">
+          <div class="det-label">Referer</div>
+          <a-typography-text v-if="detailEntry.referer" copyable class="det-value">{{ detailEntry.referer }}</a-typography-text>
+          <span v-else class="dim">（日志未记录）</span>
+        </div>
+        <div class="det-block">
+          <div class="det-label">User-Agent</div>
+          <a-typography-text v-if="detailEntry.ua" copyable class="det-value">{{ detailEntry.ua }}</a-typography-text>
+          <span v-else class="dim">（日志未记录）</span>
+        </div>
+      </template>
+    </a-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onActivated, onDeactivated, onMounted, onUnmounted, ref, nextTick, watch } from 'vue'
 import { message } from 'ant-design-vue'
-import { get, post, sseTopic, fmtBytes, upload } from '../api'
+import { get, post, sseTopic, fmtBytes, fmtTime, upload } from '../api'
 import { useTheme } from '../store/theme'
 
 /** 请求地图（地图 + 流向 + 详细统计）。仪表盘与「请求地图」页共用，避免两套逻辑。 */
@@ -223,6 +288,241 @@ const serverLabel = computed(() => {
   return '服务器'
 })
 
+/**
+ * 悬停明细的数据链路（全部只在前端内存，不写数据库）：
+ * SSE entry → captureRing（去重环形缓冲，含 UA/Referer 明细）→ 悬停某条流向时按 routeKey
+ * 截取该来源的历史请求 + 悬停后新请求，按「站点 → 路径 → 请求」组装成树；点叶子看详情。
+ * routeKey 用来源坐标 2 位小数的 bucket（与后端城市聚合一致），同一城市的多条流星归为一条流向。
+ */
+type LiveEntry = {
+  id: number
+  ip: string
+  country: string
+  city: string
+  lat: number
+  lon: number
+  site: string
+  status: number
+  bytes: number
+  method: string
+  path: string
+  time: string
+  ua: string
+  referer: string
+  ts: number
+  key: string
+  point: [number, number] | null
+  dedupe: string
+}
+
+type LiveFlow = {
+  id: number
+  key: string
+  label: string
+  coords: [number, number][]
+  ts: number
+}
+
+type InspectNode = {
+  key: string
+  title: string
+  selectable?: boolean
+  isLeaf?: boolean
+  reqId?: number
+  children?: InspectNode[]
+}
+
+const CAPTURE_MAX = 2000
+const INSPECT_SEED_CAP = 300 // 悬停瞬间回溯的请求条数上限（新→旧取最近）
+const INSPECT_MAX = 500 // 悬停期间面板最多保留的请求条数（防长时间悬停无上限增长）
+const captureCap = CAPTURE_MAX
+
+let nextEntryId = 1
+const pointOf = (e: any): [number, number] | null => (e.lat || e.lon) ? [e.lon, e.lat] : (centroids[e.country] || null)
+const routeKeyOf = (e: any, pt: [number, number] | null) =>
+  pt ? `${e.country || 'unknown'}|${e.city || ''}|${pt[0].toFixed(2)},${pt[1].toFixed(2)}` : ''
+const labelOf = (e: any) => e.city ? `${e.city}, ${countryName(e.country)}` : countryName(e.country)
+const clockOf = (t: string) => {
+  const d = new Date(t)
+  return Number.isNaN(d.getTime()) ? '-' : d.toLocaleTimeString('zh-CN', { hour12: false })
+}
+// live=true：实时 SSE 条目，ts 用接收时刻驱动流星寿命；false：摘要回填，ts 用日志时间。
+const normalizeEntry = (raw: any, live: boolean): LiveEntry => {
+  const pt = pointOf(raw)
+  const parsed = raw.time ? new Date(raw.time).getTime() : NaN
+  return {
+    id: nextEntryId++,
+    ip: raw.ip || '',
+    country: raw.country || 'unknown',
+    city: raw.city || '',
+    lat: raw.lat || 0,
+    lon: raw.lon || 0,
+    site: raw.site || 'default',
+    status: raw.status || 0,
+    bytes: raw.bytes || 0,
+    method: raw.method || '',
+    path: raw.path || '',
+    time: raw.time || new Date().toISOString(),
+    ua: raw.ua || '',
+    referer: raw.referer || '',
+    ts: live || !Number.isFinite(parsed) ? Date.now() : parsed,
+    key: routeKeyOf(raw, pt),
+    point: pt,
+    dedupe: `${raw.ip}|${raw.time}|${raw.status}|${raw.method}|${raw.path}|${raw.bytes}`,
+  }
+}
+
+// 捕获环形缓冲：页面打开期间收到的全部请求（含摘要回填），按 ip+时间+路径去重。
+const captureRing: (LiveEntry | null)[] = new Array(CAPTURE_MAX).fill(null)
+const captureKeys = new Set<string>()
+let captureHead = 0
+let captureCount = 0
+const pushCapture = (e: LiveEntry) => {
+  if (!e.key || captureKeys.has(e.dedupe)) return
+  const old = captureRing[captureHead]
+  if (old) captureKeys.delete(old.dedupe)
+  captureRing[captureHead] = e
+  captureHead = (captureHead + 1) % CAPTURE_MAX
+  if (captureCount < CAPTURE_MAX) captureCount++
+}
+// 新→旧
+const captureSnapshot = (): LiveEntry[] => {
+  const out: LiveEntry[] = []
+  for (let i = 0; i < captureCount; i++) {
+    out.push(captureRing[(captureHead - 1 - i + CAPTURE_MAX) % CAPTURE_MAX]!)
+  }
+  return out
+}
+// 摘要回填：页面刚打开/SSE 断线期间的历史请求也能被悬停面板看到（按去重键合并）
+const seedCapture = (list: any[] | undefined) => {
+  if (!list?.length) return
+  for (let i = list.length - 1; i >= 0; i--) {
+    const e = normalizeEntry(list[i], false)
+    if (e.key) pushCapture(e)
+  }
+}
+
+const liveFlows = ref<LiveFlow[]>([])
+const inspectRoute = ref<{ key: string; label: string; coords: [number, number][] } | null>(null)
+const inspectEntries = ref<LiveEntry[]>([])
+const frozenFlows = ref<LiveFlow[]>([])
+const inspectFocusId = ref(0)
+const inspectLiveTotal = ref(0)
+const inspectExpanded = ref<(string | number)[]>([])
+const detailOpen = ref(false)
+const detailEntry = ref<LiveEntry | null>(null)
+let inspectPending: LiveEntry[] = []
+const expandedSeen = new Set<string>()
+
+const flowFromEntry = (e: LiveEntry, ts = Date.now()): LiveFlow | null =>
+  e.point ? { id: e.id, key: e.key, label: labelOf(e), coords: [e.point, serverPoint.value], ts } : null
+
+const inspectTree = computed<InspectNode[]>(() => {
+  const sites = new Map<string, { count: number; paths: Map<string, { method: string; path: string; count: number; reqs: LiveEntry[] }> }>()
+  for (const e of inspectEntries.value) {
+    let s = sites.get(e.site)
+    if (!s) { s = { count: 0, paths: new Map() }; sites.set(e.site, s) }
+    s.count++
+    const clean = (e.path || '-').split('?')[0] || '/'
+    const pk = `${e.method} ${clean}`
+    let p = s.paths.get(pk)
+    if (!p) { p = { method: e.method || '-', path: clean, count: 0, reqs: [] }; s.paths.set(pk, p) }
+    p.count++
+    p.reqs.push(e)
+  }
+  const focus = inspectEntries.value.find((e) => e.id === inspectFocusId.value)
+  const focusSite = focus?.site || ''
+  const focusPathKey = focus
+    ? `path:${focus.site}:${focus.method || '-'}:${(focus.path || '-').split('?')[0] || '/'}`
+    : ''
+  return [...sites.entries()]
+    // 悬停请求所属站点置顶：先让用户看到“这条线对应的请求”，其余站点按量排序
+    .sort((a, b) => {
+      if (focusSite) {
+        if (a[0] === focusSite && b[0] !== focusSite) return -1
+        if (b[0] === focusSite && a[0] !== focusSite) return 1
+      }
+      return b[1].count - a[1].count
+    })
+    .map(([site, s]) => ({
+      key: 'site:' + site,
+      title: `${site} · ${s.count} 次`,
+      selectable: false,
+      children: [...s.paths.values()]
+        // 悬停请求所在路径置顶，保证首屏直接看到悬停那一刻的请求
+        .sort((a, b) => {
+          if (focusPathKey) {
+            const ak = `path:${site}:${a.method}:${a.path}`
+            const bk = `path:${site}:${b.method}:${b.path}`
+            if (ak === focusPathKey && bk !== focusPathKey) return -1
+            if (bk === focusPathKey && ak !== focusPathKey) return 1
+          }
+          return b.count - a.count
+        })
+        .map((p) => ({
+          key: `path:${site}:${p.method}:${p.path}`,
+          title: `${p.method} ${p.path} · ${p.count} 次`,
+          selectable: false,
+          children: (() => {
+            const pathReqs = [...p.reqs].reverse()
+            const shown = pathReqs.slice(0, 50)
+            // 悬停那一条如果被单路径 50 条上限挤出，补回末尾，保证首屏能看到「悬停请求」
+            const focusReq = pathReqs.find((e) => e.id === inspectFocusId.value)
+            if (focusReq && !shown.some((e) => e.id === focusReq.id)) {
+              if (shown.length >= 50) shown[shown.length - 1] = focusReq
+              else shown.push(focusReq)
+            }
+            return shown.map((e) => ({
+              key: 'req:' + e.id,
+              title: `${clockOf(e.time)} · ${e.status} · ${e.ip}${e.id === inspectFocusId.value ? ' · 悬停请求' : ''}`,
+              isLeaf: true,
+              selectable: true,
+              reqId: e.id,
+            }))
+          })(),
+        })),
+    }))
+})
+const inspectSiteCount = computed(() => inspectTree.value.length)
+const inspectPathCount = computed(() => inspectTree.value.reduce((n, s) => n + (s.children?.length || 0), 0))
+
+// 默认只展开站点和「悬停请求所在路径」，其余路径折叠；用户手动折叠后不反复弹开。
+// 这样首屏就能看到悬停那一刻的请求，同时保留站点/路径的总次数作为分类索引。
+watch(inspectTree, (nodes) => {
+  const focus = inspectEntries.value.find((e) => e.id === inspectFocusId.value)
+  const focusPathKey = focus
+    ? `path:${focus.site}:${focus.method || '-'}:${(focus.path || '-').split('?')[0] || '/'}`
+    : ''
+  const added: string[] = []
+  let focusFound = false
+  const walk = (list: InspectNode[], depth: number) => {
+    for (const n of list) {
+      if (!n.children?.length) continue
+      if (n.key === focusPathKey) focusFound = true
+      if (!expandedSeen.has(n.key)) {
+        expandedSeen.add(n.key)
+        // 站点层全展开；路径层只弹悬停请求所在的那一条
+        if (depth === 0 || (depth === 1 && n.key === focusPathKey)) added.push(n.key)
+      }
+      walk(n.children, depth + 1)
+    }
+  }
+  walk(nodes, 0)
+  // 悬停请求被单路径 50 条上限截掉时，至少展开第一条路径，避免首屏空树
+  if (!focusFound) {
+    const fallback = nodes[0]?.children?.[0]?.key
+    if (fallback && !inspectExpanded.value.includes(fallback)) added.push(fallback)
+  }
+  if (added.length) inspectExpanded.value = [...new Set([...inspectExpanded.value, ...added])]
+})
+
+const onInspectSelect = (_keys: any, info: any) => {
+  const id = info?.node?.reqId
+  if (!id) return
+  const e = inspectEntries.value.find((x) => x.id === id)
+  if (e) { detailEntry.value = e; detailOpen.value = true }
+}
+
 const realtime = ref(true)
 // 实时速率：记录每条请求的到达时间，近 5s 滑窗计数 ÷ 5（req/s）。
 // 统计走全部请求（含无地理信息的），不用流星列表——它有 120 条封顶且寿命 4.3s，拿它算速率会低估。
@@ -231,23 +531,31 @@ const rate = ref(0) // 近 5s 请求速率（req/s）
 // 实时流向：一次请求 = 一条「来源黄点 → 服务器」的流星（飞一次后消散）。
 // SSE 逐条推送，每个请求即刻生成一条流星；请求频率由流星出现的密集程度表达，
 // 不做合并计数，也不按次数缩放线宽/光点大小。总量上限防高 QPS 爆量。
-const liveFlows = ref<{ label: string; coords: [number, number][]; ts: number }[]>([])
 const LIVE_FLOW_CAP = 120
 
 const handleEntry = (e: any) => {
+  const entry = normalizeEntry(e, true)
+  pushCapture(entry) // 无论「实时流向」开关如何，SSE 到达即进本地缓冲（悬停明细的数据源）
   if (!realtime.value) return
   entryTimes.value.push(Date.now())
-  const c: [number, number] | undefined = (e.lat || e.lon) ? [e.lon, e.lat] : centroids[e.country]
-  if (c) {
-    const label = e.city ? `${e.city}, ${countryName(e.country)}` : countryName(e.country)
-    liveFlows.value.push({ label, coords: [c, serverPoint.value] as [number, number][], ts: Date.now() })
-    // 超出上限时丢弃最早的流星（高 QPS 下视觉密度封顶，避免渲染爆炸）
-    if (liveFlows.value.length > LIVE_FLOW_CAP) {
-      liveFlows.value = liveFlows.value.slice(-LIVE_FLOW_CAP)
+  if (inspectRoute.value) {
+    // 悬停期间画面冻结：不新增流星，保证悬停目标稳定；该流向的新请求实时追加进树
+    if (entry.key && entry.key === inspectRoute.value.key) {
+      inspectPending.push(entry)
+      inspectLiveTotal.value++
+    }
+  } else {
+    const f = flowFromEntry(entry)
+    if (f) {
+      liveFlows.value.push(f)
+      // 超出上限时丢弃最早的流星（高 QPS 下视觉密度封顶，避免渲染爆炸）
+      if (liveFlows.value.length > LIVE_FLOW_CAP) {
+        liveFlows.value = liveFlows.value.slice(-LIVE_FLOW_CAP)
+      }
     }
   }
   summary.value.recent = [e, ...(summary.value.recent || [])].slice(0, 100)
-  scheduleRender()
+  if (!inspectRoute.value) scheduleRender()
 }
 
 // 高 QPS 下逐条 setOption 会卡顿：合并到动画帧，每帧最多渲染一次
@@ -261,16 +569,26 @@ const scheduleRender = () => {
   })
 }
 
-// 飞线寿命清扫：超过一个动画周期的线移除（一个请求只飞一次），顺带更新请求速率
+// 飞线寿命清扫：超过一个动画周期的线移除（一个请求只飞一次），顺带更新请求速率；
+// 悬停冻结期间不清理流星、不重绘地图，只把新请求批量灌进明细树（500ms 一帧，防高 QPS 重渲染）。
 const FLOW_LIFETIME = 4300
 const startSweep = () => {
   sweepTimer = setInterval(() => {
     const now = Date.now()
-    const len = liveFlows.value.length
-    if (len) {
-      const cut = now - FLOW_LIFETIME
-      const keep = liveFlows.value.filter(f => f.ts > cut)
-      if (keep.length !== len) { liveFlows.value = keep; renderMap() }
+    if (inspectRoute.value) {
+      if (inspectPending.length) {
+        const merged = inspectEntries.value.concat(inspectPending)
+        inspectPending = []
+        if (merged.length > INSPECT_MAX) merged.splice(0, merged.length - INSPECT_MAX)
+        inspectEntries.value = merged
+      }
+    } else {
+      const len = liveFlows.value.length
+      if (len) {
+        const cut = now - FLOW_LIFETIME
+        const keep = liveFlows.value.filter(f => f.ts > cut)
+        if (keep.length !== len) { liveFlows.value = keep; renderMap() }
+      }
     }
     // 速率统计基于 entryTimes（全部请求），流星列表有封顶且寿命只有 4.3s，不能拿来算速率
     if (entryTimes.value.length) entryTimes.value = entryTimes.value.filter(t => t > now - 5000)
@@ -303,12 +621,15 @@ const ensureChart = async () => {
     if (!mapBox.value || !active) return // 初始化期间页面已被切走
     if (geo) echarts.registerMap('world', geo as any)
     chart = echarts.init(mapBox.value)
+    // 悬停流星线 → 暂停流向并展开该来源的请求树（点击空处/继续按钮恢复）
+    chart.on('mouseover', onChartOver)
   })().finally(() => { initPromise = null })
   return initPromise
 }
 
-const renderMap = async (resetView = false) => {
+const renderMap = async (resetView = false, force = false) => {
   if (!mapBox.value || !active) return
+  if (inspectRoute.value && !force) return // 冻结期间其余刷新（摘要/定时 load/主题）一律不重绘，悬停目标不丢
   await ensureChart()
   if (!chart || !active) return
   // 视角保留：setOption(notMerge) 会整体替换 geo 配置，导致缩放/拖拽后的视角被复位。
@@ -325,16 +646,28 @@ const renderMap = async (resetView = false) => {
   const maxCount = Math.max(1, ...countries.map((c: any) => c.count))
   const shades = ['#dbe9ff', '#9dbdff', '#5c8dff', '#2f5fe0', '#1c3fd6']
   const colorFor = (n: number) => shades[Math.min(shades.length - 1, Math.floor((n / maxCount) * shades.length))]
-  // 实时流向：统一线宽/亮度，频率感来自「流星出现的密集程度」本身（一次请求一条流星）
+  // 实时流向：统一线宽/亮度，频率感来自「流星出现的密集程度」本身（一次请求一条流星）。
+  // 悬停冻结时切到静态快照：目标流速高亮、其余压暗，effect 关掉 = 画面真正停住。
+  const paused = !!inspectRoute.value
+  const flowSrc = paused ? frozenFlows.value : liveFlows.value
+  const flowKey = inspectRoute.value?.key
   const flows = realtime.value
-    ? liveFlows.value.map(f => ({ coords: f.coords }))
+    ? flowSrc.map(f => paused
+      ? {
+          name: f.label,
+          coords: f.coords,
+          lineStyle: f.key === flowKey
+            ? { color: '#fbbf24', width: 2.6, opacity: 1, shadowBlur: 10, shadowColor: 'rgba(251,191,36,.5)' }
+            : { color: '#3b82f6', width: 1, opacity: 0.07 },
+        }
+      : { name: f.label, coords: f.coords })
     : []
   const srcPoints = realtime.value
-    ? liveFlows.value.map(f => ({
+    ? flowSrc.map(f => ({
         value: f.coords[0],
         name: f.label,
-        symbolSize: 6,
-        itemStyle: { color: '#ffd54d' },
+        symbolSize: f.key === flowKey ? 8 : 6,
+        itemStyle: { color: f.key === flowKey ? '#fbbf24' : '#ffd54d' },
       }))
     : []
   // 城市级聚合点（统计窗口内）：统一尺寸的标记点（数量信息放 tooltip，不用大小表达）
@@ -369,10 +702,11 @@ const renderMap = async (resetView = false) => {
     },
     series: [
       {
-        // 数据流：沿线流动的圆形光点带短拖尾（数据流点效果）
-        type: 'lines', coordinateSystem: 'geo', zlevel: 2,
-        effect: { show: true, period: 4, trailLength: 0.2, symbol: 'circle', symbolSize: 6, color: '#ffd54d' },
+        // 数据流：沿线流动的圆形光点带短拖尾（数据流点效果）；悬停冻结时关闭 effect，留下静态高亮线
+        type: 'lines', coordinateSystem: 'geo', zlevel: 2, silent: paused,
+        effect: { show: !paused, period: 4, trailLength: 0.2, symbol: 'circle', symbolSize: 6, color: '#ffd54d' },
         lineStyle: { color: '#3b82f6', width: 1.2, opacity: 0.35, curveness: 0.35 },
+        emphasis: { disabled: true }, // 高亮由数据项 lineStyle 控制，避免 hover 过渡与冻结渲染互相打架
         data: flows,
       },
       {
@@ -381,16 +715,17 @@ const renderMap = async (resetView = false) => {
         data: cityPoints,
       },
       {
-        // 请求来源点：黄色小数据点（实时请求落点）
-        type: 'effectScatter', coordinateSystem: 'geo', zlevel: 3,
-        rippleEffect: { scale: 2.2, brushType: 'stroke' },
+        // 请求来源点：实时脉动；悬停冻结时降级为静态点，确保画面真的停住
+        type: paused ? 'scatter' : 'effectScatter', coordinateSystem: 'geo', zlevel: 3,
+        ...(paused ? {} : { rippleEffect: { scale: 2.2, brushType: 'stroke' } }),
         itemStyle: { color: '#ffd54d' },
         data: srcPoints,
       },
       {
         // 服务器位置：红色小点（缩小，避免喧宾夺主）；探测不到位置时不渲染
-        type: 'effectScatter', coordinateSystem: 'geo', zlevel: 3,
-        symbolSize: 7, rippleEffect: { scale: 2 },
+        type: paused ? 'scatter' : 'effectScatter', coordinateSystem: 'geo', zlevel: 3,
+        symbolSize: 7,
+        ...(paused ? {} : { rippleEffect: { scale: 2 } }),
         itemStyle: { color: '#ff5722' },
         data: serverLocKnown.value ? [{ value: serverPoint.value, name: serverLabel.value }] : [],
       },
@@ -398,18 +733,71 @@ const renderMap = async (resetView = false) => {
   }, true)
 }
 
+// 悬停一条流星线：冻结当前画面（快照），回溯该来源的历史请求，并开始接收后续新请求。
+const openInspect = (f: LiveFlow) => {
+  if (props.compact || inspectRoute.value?.key === f.key) return
+  if (!inspectRoute.value) frozenFlows.value = liveFlows.value.slice()
+  const matching = captureSnapshot().filter(e => e.key === f.key).slice(0, INSPECT_SEED_CAP).reverse()
+  inspectEntries.value = matching
+  inspectPending = []
+  inspectLiveTotal.value = 0
+  inspectFocusId.value = f.id
+  inspectRoute.value = { key: f.key, label: f.label, coords: f.coords }
+  inspectExpanded.value = []
+  expandedSeen.clear()
+  renderMap(false, true)
+}
+
+const resetInspect = () => {
+  inspectRoute.value = null
+  inspectEntries.value = []
+  inspectPending = []
+  inspectLiveTotal.value = 0
+  inspectFocusId.value = 0
+  frozenFlows.value = []
+  detailOpen.value = false
+  detailEntry.value = null
+}
+
+// 恢复流动：用本地缓冲里仍应「活着」的请求重建流星，暂停期间到达的请求不会凭空消失。
+const closeInspect = () => {
+  if (!inspectRoute.value) return
+  resetInspect()
+  const now = Date.now()
+  liveFlows.value = captureSnapshot()
+    .filter(e => e.point && now - e.ts < FLOW_LIFETIME)
+    .slice(0, LIVE_FLOW_CAP)
+    .map(e => flowFromEntry(e, e.ts))
+    .filter((f): f is LiveFlow => !!f)
+  renderMap()
+}
+
+// ECharts 的 lines 系列可命中（默认非 silent）：params.dataIndex 对应当前渲染数组（实时/冻结快照二选一）
+const onChartOver = (p: any) => {
+  if (props.compact || p?.seriesType !== 'lines') return
+  const list = inspectRoute.value ? frozenFlows.value : liveFlows.value
+  const f = list[p.dataIndex]
+  if (f?.key) openInspect(f)
+}
+
 // 鼠标移出地图后视角复位：漫游出的缩放/位置只在光标停留在地图上时保留，
 // 移出即回归默认全局视角，避免拖拽/缩放状态残留到下一次查看。
+// 悬停明细面板覆盖在地图上，移入面板也会触发 mouseleave，此时必须保持当前视角。
 // 未漫游过（zoom 仍为默认 1 且未写入 center）则跳过，避免路过时的多余重渲染。
 const resetRoamView = () => {
-  if (!active || !chart) return
+  if (!active || !chart || inspectRoute.value) return
   const geo = (chart.getOption() as any)?.geo?.[0]
   const roamed = (geo?.zoom != null && Math.abs(geo.zoom - 1) > 1e-6) || geo?.center?.length === 2
   if (roamed) renderMap(true)
 }
 
 const load = async () => {
-  summary.value = await get('/api/logmap/summary', { minutes: minutes.value, recent: 50 })
+  summary.value = await get('/api/logmap/summary', {
+    minutes: minutes.value,
+    recent: 50,
+    ...(props.compact ? {} : { detail: 1 }), // 地图页：recent 带 UA/Referer，用于悬停明细回溯
+  })
+  if (!props.compact) seedCapture(summary.value.recent)
   geoLoaded.value = summary.value.geoLoaded
   if (summary.value.serverLoc?.length === 2) {
     const [lon, lat] = summary.value.serverLoc
@@ -481,13 +869,22 @@ watch(() => props.height, () => chart?.resize())
  * 生命周期统一收敛到幂等 start/stop：组件既可能挂在普通页面，也可能作为
  * keep-alive 缓存页（仪表盘/请求地图页）的后代，onMounted 与 onActivated 都会触发。
  */
-// SSE 实时流：entry 逐条即时推送；summary 推送跟随所选统计窗口，窗口切换时重连
+// SSE 实时流：entry 逐条即时推送；summary 推送跟随所选统计窗口，窗口切换时重连。
+// 地图页带 detail=1：entry/recent 携带 UA/Referer（悬停明细）；仪表盘轻量模式不付这份流量。
 const onStreamMsg = (m: any) => {
-  if (m.type === 'summary') { summary.value = m.data; renderMap() }
-  else if (m.type === 'entry') handleEntry(m.data)
+  if (m.type === 'summary') {
+    summary.value = m.data
+    if (!props.compact) seedCapture(m.data.recent) // 断线重连/页面刚打开时补齐历史请求
+    renderMap()
+  } else if (m.type === 'entry') handleEntry(m.data)
 }
-const connectStream = () => sseTopic(`/api/logmap/stream?minutes=${minutes.value}`, onStreamMsg)
+const connectStream = () => sseTopic(
+  `/api/logmap/stream?minutes=${minutes.value}${props.compact ? '' : '&detail=1'}`,
+  onStreamMsg,
+)
 watch(minutes, () => { if (active) { stopStream?.(); stopStream = connectStream() } })
+// 关掉实时流向 = 没有可悬停的线：收起明细并恢复普通渲染
+watch(realtime, (v) => { if (!v && inspectRoute.value) closeInspect() })
 
 const start = () => {
   if (active) return
@@ -521,6 +918,7 @@ const stop = () => {
   clearInterval(timer); timer = null
   clearInterval(sweepTimer); sweepTimer = null
   clearInterval(treeTimer); treeTimer = null
+  resetInspect() // 页面切走时收起明细，避免 keep-alive 回来后还挂着旧冻结画面
 }
 onMounted(start)
 onActivated(start)
@@ -534,11 +932,61 @@ onUnmounted(() => { stop(); resizeObserver?.disconnect(); resizeObserver = null;
    （补偿换行行的间隙），内联样式会压过普通 CSS，导致地图盒上移 8px 盖住工具条 */
 .map-toolbar { margin-bottom: 12px !important; }
 .stats-range { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; }
+.map-wrap { position: relative; width: 100%; }
 .map-box { width: 100%; height: var(--map-height); }
 /* fill 模式：组件撑满父容器（如仪表盘地图卡），地图区弹性伸缩，溢出交给父容器内部滚动 */
 .request-map.fill { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.request-map.fill .map-wrap { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .request-map.fill .map-box { flex: 1 1 auto; height: auto; min-height: 220px; }
 @media (max-width: 767px) { .map-box { height: min(var(--map-height), 320px); } }
+
+/* 悬停流向明细：覆盖在地图右侧，鼠标可移入面板继续操作（不关闭、不复位视角） */
+.flow-inspect {
+  position: absolute; top: 10px; right: 10px; bottom: 10px;
+  width: min(380px, calc(100% - 20px));
+  z-index: 10;
+  display: flex; flex-direction: column;
+  padding: 10px 12px 8px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-card);
+  border-radius: var(--radius-cards);
+  box-shadow: var(--shadow-hover);
+  overflow: hidden;
+}
+.fi-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fi-title { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.fi-city { font-weight: 600; color: var(--color-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fi-tag { margin-inline-end: 0; flex: none; }
+.fi-pulse {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  background: #f59e0b; animation: fi-pulse 1.6s infinite;
+}
+@keyframes fi-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, .55); }
+  70% { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
+}
+.fi-meta { margin-top: 6px; font-size: 12px; color: var(--color-slate); }
+.fi-live { margin-left: 8px; color: #d97706; font-weight: 600; }
+.fi-tip { margin: 2px 0 6px; font-size: 11px; color: var(--color-slate); }
+.fi-tree { flex: 1 1 auto; min-height: 0; overflow: auto; }
+.fi-tree :deep(.ant-tree) { background: transparent; }
+.fi-tree :deep(.ant-tree-title) {
+  display: inline-block; max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: top;
+}
+@media (max-width: 767px) {
+  .flow-inspect { left: 8px; right: 8px; top: 8px; bottom: 8px; width: auto; }
+}
+
+/* 请求详情抽屉 */
+.det-line { display: flex; align-items: flex-start; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.det-method { font-weight: 600; color: var(--color-ink); }
+.det-path { font-family: ui-monospace, Consolas, monospace; font-size: 12px; color: var(--color-slate); word-break: break-all; }
+.det-desc { margin-bottom: 16px; }
+.det-block { margin-top: 14px; }
+.det-label { font-size: 12px; font-weight: 600; color: var(--color-slate); margin-bottom: 4px; }
+.det-value, .det-path-full { font-size: 12px; word-break: break-all; }
 .details-collapse { margin-top: 8px; }
 .details-title { font-weight: 600; }
 .details-hint { margin-left: 12px; font-weight: 400; }

@@ -154,6 +154,10 @@ func (s *Service) Scan() ([]ProjectInfo, error) {
 			continue
 		}
 		dir := filepath.Join(s.cfg.ComposeRoot, e.Name())
+		// 已从面板删除（hidden）的项目不再出现在列表，目录本身保持原样
+		if rec, ok := recs[dir]; ok && rec.Hidden {
+			continue
+		}
 		f, err := parseCompose(dir)
 		if err != nil {
 			continue
@@ -214,7 +218,7 @@ func (s *Service) SyncDB() ([]ProjectInfo, error) {
 // ListProjects DB 项目记录（含存在性核对）。
 func (s *Service) ListProjects() ([]map[string]any, error) {
 	var recs []model.ComposeProject
-	if err := s.db.Order("id").Find(&recs).Error; err != nil {
+	if err := s.db.Where("hidden = ?", false).Order("id").Find(&recs).Error; err != nil {
 		return nil, err
 	}
 	out := make([]map[string]any, 0, len(recs))
@@ -233,6 +237,46 @@ func (s *Service) ListProjects() ([]map[string]any, error) {
 		})
 	}
 	return out, nil
+}
+
+// HiddenProjects 已从面板删除的项目记录（「已删除」恢复入口用）。
+// 目录仍存在才可恢复；目录已被用户删除的记录只保留在库里，不再展示。
+func (s *Service) HiddenProjects() ([]map[string]any, error) {
+	var recs []model.ComposeProject
+	if err := s.db.Where("hidden = ?", true).Order("id").Find(&recs).Error; err != nil {
+		return nil, err
+	}
+	out := make([]map[string]any, 0, len(recs))
+	for _, r := range recs {
+		_, statErr := os.Stat(r.Dir)
+		out = append(out, map[string]any{
+			"id": r.ID, "name": r.Name, "dir": r.Dir, "exists": statErr == nil,
+		})
+	}
+	return out, nil
+}
+
+// Restore 恢复已删除的项目：仅解除 hidden 标记并回到列表，不重建站点（重新导入才建站）。
+func (s *Service) Restore(projectID uint) error {
+	var rec model.ComposeProject
+	if err := s.db.First(&rec, projectID).Error; err != nil {
+		return fmt.Errorf("项目不存在")
+	}
+	if _, err := os.Stat(rec.Dir); err != nil {
+		return fmt.Errorf("项目目录已不存在，无法恢复: %s", rec.Dir)
+	}
+	if err := s.db.Model(&rec).Update("hidden", false).Error; err != nil {
+		return err
+	}
+	// 恢复后顺手按当前 compose 文件刷新服务解析（删除期间文件可能已改）
+	if f, err := parseCompose(rec.Dir); err == nil {
+		services := servicesOf(f)
+		s.db.Model(&rec).Updates(map[string]any{
+			"services": mustJSON(services),
+			"name":     firstNonEmpty(f.Name, filepath.Base(rec.Dir)),
+		})
+	}
+	return nil
 }
 
 // Import 导入 compose 项目的一个服务为反代站点（目录任意，只需已挂载进容器且含 compose 文件）。
@@ -278,6 +322,15 @@ func (s *Service) Import(dir, serviceName, port, domain string, ssl bool) (*mode
 			return nil, err
 		}
 	}
+	// 先解除删除标记：下面可能按声明恢复站点，失败时也应让项目回到列表（避免站点已恢复但项目仍隐藏）
+	s.db.Model(&rec).Update("hidden", false)
+	// 删除后重新导入：目录里保留着 zjpanel.json，先按声明恢复原有站点，再叠加本次新增；
+	// 否则末尾 WriteDecl 只写新站点，会把旧声明覆盖（下次导入就没得恢复）。
+	if decl, derr := s.ReadDecl(clean); derr == nil && decl != nil && len(decl.Sites) > 0 {
+		if _, _, _, serr := s.SyncDecl(rec.ID); serr != nil {
+			return nil, serr
+		}
+	}
 	siteRec, err := s.site.Create(site.SaveReq{
 		Domain: domain, Type: "proxy", Upstream: upstream, SSL: ssl,
 		ComposeProjectID: &rec.ID, Remark: "compose: " + serviceName,
@@ -285,10 +338,49 @@ func (s *Service) Import(dir, serviceName, port, domain string, ssl bool) (*mode
 	if err != nil {
 		return nil, err
 	}
-	s.db.Model(&rec).Updates(map[string]any{"imported": true, "site_id": siteRec.ID})
+	s.db.Model(&rec).Updates(map[string]any{"imported": true, "site_id": siteRec.ID, "hidden": false})
 	// 兼容导入：写出 zjpanel.json（下次导入/迁移直接读目录）
 	_ = s.WriteDecl(rec.ID)
 	return siteRec, nil
+}
+
+// ImportDecl 按目录下的 zjpanel.json 恢复站点（删除/迁移后重新导入用）。
+// 声明即事实来源：域名、类型、上游端口、SSL 均以声明为准，恢复后项目回到列表并标记已导入。
+func (s *Service) ImportDecl(dir string) (int, int, error) {
+	clean := filepath.Clean(dir)
+	if !isAbsPath(clean) {
+		return 0, 0, fmt.Errorf("需要绝对路径（宿主机目录经挂载映射进容器，默认 /opt:/opt）")
+	}
+	if strings.Contains(clean, "..") {
+		return 0, 0, fmt.Errorf("非法路径")
+	}
+	if _, err := os.Stat(clean); err != nil {
+		return 0, 0, fmt.Errorf("目录不存在（确认已挂载进容器）: %s", clean)
+	}
+	decl, err := s.ReadDecl(clean)
+	if err != nil {
+		return 0, 0, err
+	}
+	if decl == nil {
+		return 0, 0, fmt.Errorf("目录下没有 %s，无法按声明导入", DeclFileName)
+	}
+	f, err := parseCompose(clean)
+	if err != nil {
+		return 0, 0, err
+	}
+	var rec model.ComposeProject
+	if err := s.db.Where("dir = ?", clean).First(&rec).Error; err != nil {
+		rec = model.ComposeProject{Name: firstNonEmpty(f.Name, filepath.Base(clean)), Dir: clean, Services: mustJSON(servicesOf(f))}
+		if err := s.db.Create(&rec).Error; err != nil {
+			return 0, 0, err
+		}
+	}
+	// 解除删除标记：重新导入即回到列表
+	if err := s.db.Model(&rec).Updates(map[string]any{"hidden": false}).Error; err != nil {
+		return 0, 0, err
+	}
+	created, updated, _, err := s.SyncDecl(rec.ID)
+	return created, updated, err
 }
 
 // actionArgs 构建 compose 生命周期命令参数（同步 Action 与异步 StartAction 共用）

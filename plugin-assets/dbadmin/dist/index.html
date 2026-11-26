@@ -1,0 +1,1860 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>数据库管理</title>
+<script>
+// 与面板主题联动（iframe 同源）：首帧前同步，MutationObserver 监听父页面切换，轮询兜底。
+try {
+  const root = document.documentElement;
+  const apply = () => {
+    const dark = window.parent && window.parent.document.documentElement.getAttribute('data-theme');
+    if (dark && root.getAttribute('data-theme') !== dark) root.setAttribute('data-theme', dark);
+  };
+  apply();
+  if (window.parent && window.parent.document && window.parent.document.documentElement) {
+    new MutationObserver(apply).observe(window.parent.document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  }
+  setInterval(apply, 800);
+} catch (e) { /* 跨域降级 */ }
+</script>
+<style>  :root {    --bg: #f0f2f5; --panel: #ffffff; --panel-2: #f7f8fa;    --border: #d9dde3; --border-weak: #e9ecf1;    --text: #24292e; --dim: #7a828c;    --primary: #3d7fd9; --primary-weak: #e8f1fb;    --sel: #cfe3f8; --hover: #eef3fa; --head: #f4f6f8;    --green: #2e9e5b; --red: #e5484d; --orange: #d97c1f;    --shadow: 0 4px 16px rgba(0,0,0,.14);    --radius: 8px;  }  html[data-theme='dark'] {    --bg: #17181a; --panel: #222326; --panel-2: #1d1e20;    --border: #3a3d42; --border-weak: #2c2e32;    --text: #d8dde3; --dim: #8b939d;    --primary: #5a9ce0; --primary-weak: #1c2b3d;    --sel: #28425c; --hover: #2a2d31; --head: #26282c;    --green: #57c26a; --red: #f16a6d; --orange: #e09a4a;    --shadow: 0 4px 16px rgba(0,0,0,.5);  }  * { box-sizing: border-box; }  html, body { height: 100%; }  body { margin: 0; background: var(--bg); color: var(--text); overflow: hidden;    font: 13px/1.5 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }  #app { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }  .icon { width: 16px; height: 16px; flex-shrink: 0; vertical-align: -3px; }  .icon.sm { width: 13px; height: 13px; }  .icon.lg { width: 22px; height: 22px; }  .icon.fill { fill: currentColor; stroke: none; }  .muted { color: var(--dim); }  button { font-family: inherit; }  ::-webkit-scrollbar { width: 9px; height: 9px; }  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }  ::-webkit-scrollbar-thumb:hover { background: var(--dim); background-clip: content-box; }  ::-webkit-scrollbar-corner { background: transparent; }  input, select, textarea { font-family: inherit; }  /* ── 标题栏（仿 Navicat 窗口标题） ─────────────────────────── */  .titlebar { display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px;    background: var(--panel-2); border-bottom: 1px solid var(--border-weak); flex-shrink: 0; }  .titlebar .tb-ic { color: var(--primary); display: flex; }  .titlebar .tb-text { font-size: 12.5px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }  .titlebar .tb-right { margin-left: auto; font-size: 11px; color: var(--dim); opacity: .7; }  /* ── 主工具栏（大图标 + 文字，仿 Navicat 顶部按钮组） ───────── */  .maintoolbar { display: flex; align-items: stretch; gap: 2px; padding: 4px 8px 3px;    background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0; overflow-x: auto; }  .tb-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;    min-width: 58px; padding: 5px 8px 4px; border: none; background: transparent; color: var(--text);    border-radius: 6px; cursor: pointer; font-size: 11.5px; line-height: 1.2; }  .tb-btn .icon { width: 20px; height: 20px; color: var(--primary); }  .tb-btn:hover { background: var(--hover); }  .tb-btn:active { background: var(--primary-weak); }  .tb-btn.disabled { opacity: .38; cursor: default; }  .tb-btn.disabled:hover { background: transparent; }  .tb-btn.danger .icon { color: var(--red); }  .tb-sep { width: 1px; background: var(--border-weak); margin: 6px 6px; flex-shrink: 0; }  /* ── 主区域布局：树 | 内容 | 信息面板 ─────────────────────── */  .main { flex: 1; display: flex; min-height: 0; background: var(--panel); }  .sidebar { width: var(--tree-w, 240px); min-width: 160px; max-width: 560px; display: flex; flex-direction: column;    border-right: 1px solid var(--border); background: var(--panel); flex-shrink: 0; }  .tree { flex: 1; overflow: auto; padding: 6px 4px 10px; }  .tree-empty { color: var(--dim); text-align: center; padding: 40px 12px; font-size: 12.5px; }  .vresizer { width: 5px; cursor: col-resize; flex-shrink: 0; background: transparent; margin-left: -3px; z-index: 2; }  .vresizer:hover, .vresizer.dragging { background: var(--primary-weak); }  /* ── 连接树 ─────────────────────────────────────────────── */  .tnode { display: flex; align-items: center; gap: 5px; height: 25px; padding: 0 6px; border-radius: 5px;    cursor: default; white-space: nowrap; user-select: none; position: relative; }  .tnode:hover { background: var(--hover); }  .tnode.sel { background: var(--sel); }  .tnode .caret { width: 15px; height: 15px; display: flex; align-items: center; justify-content: center;    color: var(--dim); flex-shrink: 0; cursor: pointer; transition: transform .12s; }  .tnode .caret .icon { width: 12px; height: 12px; }  .tnode.open > .caret { transform: rotate(90deg); }  .tnode .caret.leaf { visibility: hidden; }  .tnode .nname { overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }  .tnode .nic { display: flex; flex-shrink: 0; }  .tnode.lv0 .nic { color: var(--primary); }  .tnode.lv1 .nic { color: var(--primary); }  .tnode.lv2 .nic { color: #4a9aa8; }  .tnode .ncnt { font-size: 10.5px; color: var(--dim); flex-shrink: 0; }  .tnode.syslib .nname, .tnode.syslib .nic { opacity: .55; }  .tnode .nacts { margin-left: auto; display: none; gap: 1px; flex-shrink: 0; }  .tnode:hover .nacts { display: flex; }  .tnode.sel .nacts { display: flex; }  .nsub { margin-left: 17px; border-left: 1px solid var(--border-weak); padding-left: 2px; }  .icon-btn { border: none; background: transparent; cursor: pointer; display: flex; align-items: center;    padding: 2px; border-radius: 4px; color: var(--dim); }  .icon-btn .icon { width: 13px; height: 13px; }  .icon-btn:hover { background: var(--primary-weak); color: var(--primary); }  .icon-btn.danger:hover { background: rgba(229,72,77,.12); color: var(--red); }  .tree-msg { color: var(--dim); font-size: 12px; padding: 3px 8px 3px 24px; }  /* ── 内容区：标签栏 + 标签体 + 记录条 + SQL 栏 ─────────────── */  .content { flex: 1; display: flex; flex-direction: column; min-width: 0; }  .tabbar { display: flex; align-items: flex-end; background: var(--panel-2); border-bottom: 1px solid var(--border);    padding: 4px 6px 0; gap: 2px; flex-shrink: 0; overflow-x: auto; }  .tab { display: flex; align-items: center; gap: 6px; padding: 5px 8px 5px 10px; max-width: 230px;    border: 1px solid transparent; border-bottom: none; border-radius: 7px 7px 0 0; cursor: pointer;    font-size: 12.5px; color: var(--dim); flex-shrink: 0; }  .tab .tab-ic { display: flex; color: var(--dim); }  .tab.act { background: var(--panel); border-color: var(--border); color: var(--text); position: relative; }  .tab.act::after { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 2px; background: var(--primary); }  .tab.act .tab-ic { color: var(--primary); }  .tab .tab-tt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }  .tab .tab-x { display: flex; border-radius: 4px; padding: 1px; color: var(--dim); }  .tab .tab-x:hover { background: rgba(229,72,77,.15); color: var(--red); }  .tabbar-right { margin-left: auto; display: flex; align-items: center; gap: 4px; padding: 0 2px 4px; flex-shrink: 0; }  .mini-btn { border: 1px solid var(--border); background: var(--panel); color: var(--dim); border-radius: 5px;    width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; cursor: pointer; }  .mini-btn:hover { color: var(--primary); border-color: var(--primary); }  .mini-btn.on { color: var(--primary); background: var(--primary-weak); border-color: var(--primary); }  .tabbody { flex: 1; display: flex; flex-direction: column; min-height: 0; }  .tabbody > .fill { flex: 1; min-height: 0; display: flex; flex-direction: column; }  /* 视图切换条（数据 | 结构 | DDL）+ 筛选 */  .viewbar { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--border-weak);    background: var(--panel); flex-shrink: 0; flex-wrap: wrap; }  .seg { display: flex; background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; padding: 2px; gap: 2px; }  .seg-item { padding: 2px 12px; border-radius: 5px; font-size: 12px; color: var(--dim); cursor: pointer; border: none; background: transparent; }  .seg-item:hover { color: var(--text); }  .seg-item.on { background: var(--panel); color: var(--primary); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08); }  .filter-box { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 200px; max-width: 520px; }  .filter-box input { flex: 1; border: 1px solid var(--border); background: var(--panel-2); color: var(--text);    border-radius: 6px; padding: 4px 10px; font-size: 12.5px; font-family: ui-monospace, Consolas, monospace; }  .filter-box input:focus { outline: none; border-color: var(--primary); background: var(--panel); }  .viewbar .spacer { flex: 1; }  /* ── 数据网格（仿 Navicat 网格） ─────────────────────────── */  .gridwrap { flex: 1; overflow: auto; background: var(--panel); }  table.grid { border-collapse: separate; border-spacing: 0; font-size: 12.5px; min-width: 100%; }  table.grid th, table.grid td { border-bottom: 1px solid var(--border-weak); border-right: 1px solid var(--border-weak);    padding: 3px 9px; text-align: left; white-space: nowrap; height: 24px; }  table.grid thead th { background: var(--head); position: sticky; top: 0; z-index: 3; font-weight: 600;    font-size: 12px; color: var(--text); user-select: none; border-bottom: 1px solid var(--border); }  table.grid thead th[data-sort] { cursor: pointer; }  table.grid thead th[data-sort]:hover { background: var(--hover); }  table.grid th.rownum-h, table.grid td.rownum { position: sticky; left: 0; z-index: 2; background: var(--head);    color: var(--dim); text-align: center; cursor: pointer; min-width: 34px; width: 34px; padding: 3px 4px;    font-size: 11px; border-right: 1px solid var(--border); }  table.grid thead th.rownum-h { z-index: 4; cursor: default; }  td.rownum .arrow { color: var(--primary); visibility: hidden; display: inline-flex; }  tr.row-sel td.rownum .arrow { visibility: visible; }  tr.row-sel td.rownum { color: var(--primary); font-weight: 700; }  table.grid th .th-in { display: inline-flex; align-items: center; gap: 4px; max-width: 340px; overflow: hidden; }  table.grid th .th-in .nname { overflow: hidden; text-overflow: ellipsis; }  table.grid th .sort-ind { display: inline-flex; color: var(--primary); }  table.grid th .sort-ind .icon { width: 11px; height: 11px; }  table.grid th .sort-ind.desc { transform: rotate(90deg); }  table.grid td { max-width: 360px; overflow: hidden; text-overflow: ellipsis; cursor: default; }  table.grid td.keycell { color: var(--primary); }  table.grid tr:hover td { background: var(--hover); }  table.grid td.cell-sel { background: var(--sel) !important; box-shadow: inset 0 0 0 1.5px var(--primary); }  table.grid td .nullv { color: var(--dim); font-style: italic; font-size: 11.5px; opacity: .8; }  table.grid td input.cell-edit { width: 100%; min-width: 120px; border: none; outline: none; background: var(--panel);    color: var(--text); font: 12.5px ui-monospace, Consolas, monospace; padding: 0; margin: 0; }  table.grid tfoot td { border: none; }  .grid-empty { color: var(--dim); text-align: center; padding: 46px 0; font-size: 12.5px; }  .grid-err { color: var(--red); padding: 14px; font-size: 12.5px; white-space: pre-wrap; word-break: break-all; }  /* ── 记录导航条（仿 Navicat 底部 + − ↻ 与分页） ───────────── */  .recordbar { display: flex; align-items: center; height: 30px; padding: 0 10px; gap: 2px; flex-shrink: 0;    background: var(--panel); border-top: 1px solid var(--border); }  .rb-btn { border: none; background: transparent; color: var(--dim); width: 26px; height: 24px; border-radius: 5px;    display: flex; align-items: center; justify-content: center; cursor: pointer; }  .rb-btn .icon { width: 15px; height: 15px; }  .rb-btn:hover:not(:disabled) { background: var(--hover); color: var(--primary); }  .rb-btn:disabled { opacity: .35; cursor: default; }  .rb-btn.add .icon { color: var(--green); }  .rb-btn.del .icon { color: var(--red); }  .rb-sep { width: 1px; height: 16px; background: var(--border); margin: 0 6px; }  .rb-right { margin-left: auto; display: flex; align-items: center; gap: 2px; }  .rb-page { width: 44px; text-align: center; border: 1px solid var(--border); background: var(--panel-2);    color: var(--text); border-radius: 5px; height: 22px; font-size: 12px; }  .rb-size { border: 1px solid var(--border); background: var(--panel-2); color: var(--text); border-radius: 5px;    height: 22px; font-size: 12px; margin-left: 6px; }  .rb-info { color: var(--dim); font-size: 11.5px; margin-left: 10px; white-space: nowrap; }  .rb-ro { color: var(--orange); font-size: 11.5px; margin-left: 8px; }  /* ── SQL 预览栏（仿 Navicat 底部 SQL 条） ─────────────────── */  .sqlbar { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 10px; flex-shrink: 0;    background: var(--panel-2); border-top: 1px solid var(--border-weak); font: 12px ui-monospace, Consolas, monospace; }  .sqlbar .sb-ic { color: var(--primary); display: flex; }  .sqlbar .sb-text { color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }  .sqlbar .sb-copy { border: none; background: transparent; color: var(--dim); cursor: pointer; display: flex;    padding: 2px; border-radius: 4px; }  .sqlbar .sb-copy:hover { color: var(--primary); background: var(--hover); }  /* ── 信息面板（右侧字段属性，仿 Navicat 信息窗格） ─────────── */  .infopanel { width: 230px; flex-shrink: 0; border-left: 1px solid var(--border); background: var(--panel);    overflow: auto; padding: 12px 14px; }  .infopanel.hidden { display: none; }  .ip-title { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: 13px; margin-bottom: 10px; }  .ip-title .icon { color: var(--primary); }  .ip-badge { font-size: 10px; padding: 0 6px; border-radius: 8px; background: var(--primary-weak); color: var(--primary); font-weight: 600; }  .ip-field { margin-bottom: 9px; }  .ip-label { font-size: 11px; color: var(--dim); margin-bottom: 1px; }  .ip-val { font-size: 12.5px; word-break: break-all; font-family: ui-monospace, Consolas, monospace; }  .ip-hint { color: var(--dim); font-size: 12px; padding: 8px 0; line-height: 1.7; }  .ip-cols { margin-top: 12px; border-top: 1px solid var(--border-weak); padding-top: 8px; }  .ip-col { display: flex; align-items: center; gap: 6px; padding: 2px 6px; border-radius: 4px; cursor: pointer;    font-size: 12px; font-family: ui-monospace, Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }  .ip-col:hover { background: var(--hover); }  .ip-col.on { background: var(--sel); }  .ip-col .icon { width: 12px; height: 12px; color: var(--dim); }  .ip-col .t { color: var(--dim); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; }  /* ── 查询标签（SQL 控制台） ──────────────────────────────── */  .qwrap { flex: 1; display: flex; flex-direction: column; min-height: 0; }  .qbar { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border-bottom: 1px solid var(--border-weak); flex-shrink: 0; flex-wrap: wrap; }  .qbar select { border: 1px solid var(--border); background: var(--panel-2); color: var(--text); border-radius: 6px;    padding: 4px 8px; font-size: 12.5px; min-width: 160px; }  .btn { border: 1px solid var(--border); background: var(--panel); color: var(--text); padding: 4px 14px;    border-radius: 6px; cursor: pointer; font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; }  .btn:hover { border-color: var(--primary); color: var(--primary); }  .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; }  .btn.primary:hover { opacity: .9; color: #fff; }  .btn.danger { color: var(--red); }  .btn.danger:hover { border-color: var(--red); }  .btn.small { padding: 2px 10px; font-size: 12px; }  .btn:disabled { opacity: .5; cursor: not-allowed; }  .qeditor { border-bottom: 1px solid var(--border-weak); flex-shrink: 0; }  .qeditor textarea { width: 100%; height: 130px; border: none; background: var(--panel); color: var(--text);    padding: 10px 12px; font: 13px/1.6 ui-monospace, Consolas, monospace; resize: vertical; outline: none; }  .qresult { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }  .qmeta { padding: 4px 12px; font-size: 12px; color: var(--dim); border-bottom: 1px solid var(--border-weak);    display: flex; gap: 12px; align-items: center; flex-shrink: 0; }  .qmeta .okm { color: var(--green); }  .qmeta .errm { color: var(--red); white-space: pre-wrap; word-break: break-all; }  .qgrid { flex: 1; overflow: auto; }  .qhist { flex-shrink: 0; border-top: 1px solid var(--border-weak); max-height: 180px; overflow: auto; }  .qhist .hhead { display: flex; align-items: center; gap: 6px; padding: 4px 12px; font-size: 12px; color: var(--dim); cursor: pointer; user-select: none; }  .qhist .hhead:hover { color: var(--primary); }  .qhist .item { display: flex; gap: 8px; align-items: baseline; padding: 3px 12px; font-size: 12px; cursor: pointer; border-top: 1px solid var(--border-weak); }  .qhist .item:hover { background: var(--hover); }  .qhist .sql-txt { font-family: ui-monospace, Consolas, monospace; word-break: break-all; flex: 1;    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }  .qhist .st { flex-shrink: 0; }  .qhist .st.ok { color: var(--green); }  .qhist .st.bad { color: var(--red); }  .qhist .tm { color: var(--dim); font-size: 10.5px; flex-shrink: 0; }  /* ── 结构 / DDL 视图 ────────────────────────────────────── */  .structwrap { flex: 1; overflow: auto; padding: 12px 14px; }  .structwrap h4 { margin: 14px 0 6px; font-size: 13px; }  .structwrap h4:first-child { margin-top: 0; }  pre.ddl { background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px;    font: 12px/1.7 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; margin: 0; }  /* ── 欢迎页（无标签时） ─────────────────────────────────── */  .welcome { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--dim); }  .welcome .icon { width: 52px; height: 52px; color: var(--border); margin-bottom: 6px; }  .welcome .w-actions { display: flex; gap: 10px; margin-top: 10px; }  /* ── 右键菜单（仿 Navicat 连接右键） ───────────────────────── */  .ctxmenu { position: fixed; z-index: 80; min-width: 190px; background: var(--panel); border: 1px solid var(--border);    border-radius: 8px; box-shadow: var(--shadow); padding: 5px; display: none; user-select: none; }  .ctxmenu.open { display: block; }  .ctxmenu .ci { display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 5px; cursor: pointer;    font-size: 12.5px; color: var(--text); white-space: nowrap; }  .ctxmenu .ci:hover { background: var(--hover); color: var(--primary); }  .ctxmenu .ci.danger { color: var(--red); }  .ctxmenu .ci.danger:hover { background: rgba(229,72,77,.12); color: var(--red); }  .ctxmenu .csep { height: 1px; background: var(--border-weak); margin: 4px 6px; }  /* ── 运行 SQL 文件弹窗 ──────────────────────────────────── */  .ckline { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--text); margin-top: 2px; cursor: pointer; }  .sf-file { border: 1px dashed var(--border); border-radius: 8px; padding: 16px 14px; text-align: center; color: var(--dim);    cursor: pointer; font-size: 12.5px; display: block; transition: border-color .15s, color .15s; }  .sf-file:hover { border-color: var(--primary); color: var(--primary); }  .sf-file input { display: none; }  .sf-file.has { border-style: solid; border-color: var(--green); color: var(--green); }  .sf-res { margin-top: 12px; border-top: 1px solid var(--border-weak); padding-top: 10px; font-size: 12.5px; max-height: 210px; overflow: auto; }  .sf-res .sum { display: flex; gap: 14px; margin-bottom: 6px; flex-wrap: wrap; }  .sf-res .eitem { border-top: 1px solid var(--border-weak); padding: 5px 2px; }  .sf-res .eitem:first-child { border-top: none; }  .sf-res .estmt { font-family: ui-monospace, Consolas, monospace; color: var(--dim); word-break: break-all; }  .sf-res .eerr { color: var(--red); word-break: break-all; }  /* ── 弹窗 / Toast ──────────────────────────────────────── */  .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: center;    justify-content: center; padding: 16px; z-index: 50; }  .modal-mask.open { display: flex; }  .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 18px;    width: 560px; max-width: 100%; max-height: 90vh; overflow: auto; box-shadow: var(--shadow); }  .modal.sm { width: 420px; }  .modal h3 { margin: 0 0 14px; font-size: 15px; }  .modal-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; align-items: center; }  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }  .form-grid.one { grid-template-columns: 1fr; }  @media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } }  label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 3px; }  .fld input[type=text], .fld input[type=password], .fld select {    width: 100%; border: 1px solid var(--border); background: var(--panel-2); color: var(--text);    border-radius: 6px; padding: 6px 10px; font-size: 13px; }  .fld input:focus, .fld select:focus { outline: none; border-color: var(--primary); background: var(--panel); }  .rowfld { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; margin-bottom: 8px; }  .rowfld label { margin: 0; font-family: ui-monospace, Consolas, monospace; }  .rowfld label .t { color: var(--dim); font-size: 10.5px; margin-left: 6px; }  .rowfld .nullck { display: flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--dim); cursor: pointer; }  .rowfld input[type=text] { border: 1px solid var(--border); background: var(--panel-2); color: var(--text);    border-radius: 6px; padding: 5px 9px; font-size: 12.5px; width: 100%; }  .rowfld input[type=text]:disabled { opacity: .45; }  .toast { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); background: var(--panel);    border: 1px solid var(--border); color: var(--text); padding: 8px 18px; border-radius: 8px;    box-shadow: var(--shadow); display: none; z-index: 99; max-width: 70vw; word-break: break-all; font-size: 12.5px; }  /* ── 移动端抽屉（标题栏 ☰ / 遮罩；桌面隐藏） ─────────────── */  .tb-menu { display: none; border: none; background: transparent; color: var(--dim); cursor: pointer;    padding: 5px; margin-left: -6px; border-radius: 6px; align-items: center; justify-content: center; flex-shrink: 0; }  .tb-menu:hover { background: var(--hover); color: var(--primary); }  .tb-menu .icon { width: 18px; height: 18px; }  .m-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 60; display: none; }  .m-backdrop.open { display: block; }  /* ── 移动端适配（≤767px，与面板断点一致） ──────────────────     连接树 → 左侧滑抽屉；信息面板 → 右侧覆盖层；触控目标加大；     树节点动作按钮常显；长按弹右键菜单；点已选中单元格进入编辑。 */  @media (max-width: 767px) {    .tb-menu { display: flex; }    /* 标题栏提到遮罩/抽屉之上，抽屉打开时汉堡按钮仍可点关闭 */    .titlebar { height: 38px; padding: 0 8px; position: relative; z-index: 80; }    .titlebar .tb-right { display: none; }    .vresizer { display: none; }    .main { position: relative; }    /* 抽屉从标题栏下方滑出，不遮住汉堡按钮 */    .sidebar { position: fixed; left: 0; top: 38px; bottom: 0; width: min(84vw, 320px);      min-width: 0; max-width: none; z-index: 70; transform: translateX(-102%);      transition: transform .18s ease; box-shadow: var(--shadow); }    .sidebar.m-open { transform: none; }    .infopanel { position: fixed; right: 0; top: 38px; bottom: 0; width: min(84vw, 320px); z-index: 70;      transform: translateX(102%); transition: transform .18s ease; box-shadow: var(--shadow); }    .infopanel.m-open { transform: none; }    /* 触控目标加大 */    .maintoolbar { padding: 4px 6px; -webkit-overflow-scrolling: touch; }    .tb-btn { min-width: 54px; padding: 7px 8px 6px; white-space: nowrap; }    .tb-btn .icon { width: 22px; height: 22px; }    .tab { padding: 7px 8px 7px 10px; max-width: 56vw; }    .mini-btn { width: 30px; height: 30px; }    .btn { padding: 8px 14px; }    .btn.small { padding: 7px 12px; }    .icon-btn { padding: 6px; }    .icon-btn .icon { width: 15px; height: 15px; }    /* 其余小按钮补到 ≥30px 触控区 */    .tab .tab-x { min-width: 30px; min-height: 30px; justify-content: center; }    .tab .tab-x .icon { width: 15px; height: 15px; }    .ctxmenu .ci { padding: 10px 14px; font-size: 13px; }    .ip-col { padding: 8px 6px; }    .qhist .item { padding: 8px 12px; }    .sb-copy, .tnode .nacts .icon-btn { min-width: 30px; min-height: 30px; justify-content: center; }    /* iOS Safari：输入控件字号 <16px 聚焦时会强制放大整页（body overflow:hidden 难缩回），统一提到 16px */    .fld input[type=text], .fld input[type=password], .fld select,    .rowfld input[type=text], .filter-box input, .qbar select, .rb-page, .rb-size,    .qeditor textarea, table.grid td input.cell-edit { font-size: 16px; }    /* 连接树：行高加大，动作按钮常显（触屏无 hover） */    .tree { padding: 8px 6px 16px; -webkit-overflow-scrolling: touch; }    .tnode { height: 36px; gap: 7px; padding: 0 8px; }    .tnode .caret { width: 22px; height: 22px; }    .tnode .caret .icon { width: 14px; height: 14px; }    .tnode .nacts { display: flex; }    .nsub { margin-left: 22px; }    /* 数据网格：行高加大便于触控 */    table.grid th, table.grid td { height: 34px; padding: 6px 10px; }    .gridwrap, .qgrid, .qhist, .structwrap, .sf-res { -webkit-overflow-scrolling: touch; }    /* 记录条允许换行，分页不再横向溢出 */    .recordbar { height: auto; min-height: 40px; flex-wrap: wrap; padding: 5px 8px; row-gap: 2px; }    .rb-btn { width: 34px; height: 32px; }    .rb-right { flex-wrap: wrap; row-gap: 4px; margin-left: auto; }    .rb-page { width: 52px; height: 28px; }    .rb-size { height: 28px; }    .rb-info { margin-left: 6px; white-space: normal; flex-basis: 100%; }    /* 视图条：筛选独占一行 */    .viewbar { padding: 6px 8px; gap: 6px; }    .viewbar .spacer { display: none; }    .filter-box { flex: 1 1 100%; max-width: none; order: 9; }    .filter-box input { padding: 8px 10px; }    .seg-item { padding: 6px 12px; }    /* 查询 */    .qbar { padding: 6px 8px; }    .qbar select { min-width: 0; flex: 1; max-width: 45vw; padding: 7px 8px; }    .qeditor textarea { height: 160px; }    /* 弹窗：max-height 需扣掉遮罩上下 padding(16px×2) 并留余量，否则矮屏底部按钮被裁 */    .modal { padding: 14px; max-height: calc(100dvh - 40px); }    .modal-foot { flex-wrap: wrap; }    .structwrap { padding: 10px; }  }  /* ── 横屏 / 矮视口（手机横屏约 844×390）：三栏虽在，但压缩纵向占用，避免网格被工具栏挤没 ── */  @media (max-height: 520px) and (min-width: 768px) {    .titlebar { height: 24px; }    .maintoolbar { padding: 2px 8px; }    .tb-btn { padding: 2px 6px; font-size: 10px; gap: 1px; }    .tb-btn .icon { width: 16px; height: 16px; }    .tabbar { padding: 2px 6px 0; }    .tab { padding: 3px 8px; }    .viewbar { padding: 3px 10px; }    .recordbar { height: 24px; }    .rb-btn { height: 20px; }    .sqlbar { height: 22px; }    .qeditor textarea { height: 70px; }    .qhist { max-height: 90px; }  }</style>
+<style>
+  .type-badge { font-size: 10px; line-height: 1; padding: 3px 5px; border-radius: 4px; color: #fff; font-weight: 600; letter-spacing: .2px; flex-shrink: 0; }
+  .redis-val { width: 100%; min-height: 74px; resize: vertical; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); border-radius: 6px; padding: 6px 8px; font: 12px/1.6 ui-monospace, Consolas, monospace; }
+  .redis-val:focus { outline: none; border-color: var(--primary); background: var(--panel); }
+  .ip-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .json-editor textarea { width: 100%; height: 320px; resize: vertical; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); border-radius: 8px; padding: 10px 12px; font: 12.5px/1.6 ui-monospace, Consolas, monospace; }
+  .json-editor textarea:focus { outline: none; border-color: var(--primary); background: var(--panel); }
+  .json-hint { font-size: 11.5px; color: var(--dim); margin-top: 6px; }
+  .kbd { font-size: 10.5px; color: var(--dim); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+  .type-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="titlebar">
+    <button class="tb-menu" id="btnTree" title="连接列表"><span data-ic="list"></span></button>
+    <span class="tb-ic" id="tbIcon"></span>
+    <span class="tb-text" id="tbText">数据库管理</span>
+    <span class="tb-right">ZJPanel · 数据库管理</span>
+  </div>
+  <div class="maintoolbar" id="maintoolbar">
+    <button class="tb-btn" data-action="newconn"><span data-ic="plug"></span>新建连接</button>
+    <span class="tb-sep"></span>
+    <button class="tb-btn" data-action="opentable" id="btnOpenTable"><span data-ic="table"></span>打开表</button>
+    <button class="tb-btn" data-action="newquery" id="btnNewQuery"><span data-ic="query"></span>新建查询</button>
+    <button class="tb-btn" data-action="newdb" id="btnNewDb"><span data-ic="db-plus"></span>新建数据库</button>
+    <button class="tb-btn" data-action="open-sqlfile" id="btnSqlFile"><span data-ic="doc"></span>SQL 文件</button>
+    <span class="tb-sep"></span>
+    <button class="tb-btn" data-action="refresh" id="btnRefresh"><span data-ic="refresh"></span>刷新</button>
+    <button class="tb-btn danger" data-action="delnode" id="btnDelete"><span data-ic="trash"></span>删除</button>
+  </div>
+  <div class="main">
+    <div class="sidebar" id="sidebar">
+      <div class="tree" id="tree"></div>
+    </div>
+    <div class="vresizer" id="vresizer" title="拖拽调整宽度"></div>
+    <div class="content">
+      <div class="tabbar">
+        <div style="display:flex;gap:2px;align-items:stretch" id="tabs"></div>
+        <div class="tabbar-right">
+          <button class="mini-btn" data-action="toggle-info" id="btnInfo" title="字段信息面板"></button>
+        </div>
+      </div>
+      <div class="tabbody" id="tabBody"></div>
+      <div class="recordbar" id="recordbar" style="display:none"></div>
+      <div class="sqlbar" id="sqlbar" style="display:none"></div>
+    </div>
+    <div class="infopanel hidden" id="infopanel"></div>
+  </div>
+</div>
+<div class="m-backdrop" id="mBackdrop"></div>
+
+<!-- 新建/编辑连接 -->
+<div class="modal-mask" id="connMask">
+  <div class="modal">
+    <h3 id="connTitle">新建连接</h3>
+    <div class="form-grid">
+      <div class="fld">
+        <label>数据库类型</label>
+        <select id="c_type"></select>
+      </div>
+      <div class="fld">
+        <label>标识（小写字母/数字/短横线）</label>
+        <input id="c_id" type="text" placeholder="local-mysql">
+      </div>
+      <div class="fld" id="fldName">
+        <label>名称</label>
+        <input id="c_name" type="text" placeholder="本机数据库">
+      </div>
+      <div class="fld" id="fldDb">
+        <label id="lbDb">默认数据库（可选）</label>
+        <input id="c_database" type="text">
+      </div>
+      <div class="fld" id="fldHost">
+        <label>主机</label>
+        <input id="c_host" type="text" placeholder="127.0.0.1">
+      </div>
+      <div class="fld" id="fldPort">
+        <label>端口</label>
+        <input id="c_port" type="text" placeholder="3306">
+      </div>
+      <div class="fld" id="fldUser">
+        <label>用户名</label>
+        <input id="c_user" type="text" placeholder="root">
+      </div>
+      <div class="fld" id="fldPass">
+        <label>密码（编辑留空沿用旧密码）</label>
+        <input id="c_pass" type="password">
+      </div>
+      <div class="fld" id="fldPath" style="grid-column:1/-1;display:none">
+        <label>SQLite 文件路径（绝对路径）</label>
+        <input id="c_path" type="text" placeholder="D:\data\app.db">
+      </div>
+      <div class="fld" style="grid-column:1/-1">
+        <label>备注（可选）</label>
+        <input id="c_comment" type="text">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <span id="testResult" style="font-size:12px;margin-right:auto"></span>
+      <button class="btn" data-action="testconn">测试连接</button>
+      <button class="btn" data-action="close-modal" data-modal="connMask">取消</button>
+      <button class="btn primary" data-action="saveconn">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新建数据库 -->
+<div class="modal-mask" id="dbMask">
+  <div class="modal sm">
+    <h3>新建数据库</h3>
+    <div class="form-grid one">
+      <div class="fld">
+        <label>库名</label>
+        <input id="db_name" type="text" placeholder="my_database">
+      </div>
+      <div class="fld" id="dbCharsetWrap">
+        <label>字符集</label>
+        <select id="db_charset">
+          <option value="utf8mb4">utf8mb4（推荐）</option>
+          <option value="utf8">utf8</option>
+          <option value="latin1">latin1</option>
+        </select>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn" data-action="close-modal" data-modal="dbMask">取消</button>
+      <button class="btn primary" data-action="createdb">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新增行（关系型） -->
+<div class="modal-mask" id="rowMask">
+  <div class="modal">
+    <h3 id="rowTitle">新增行</h3>
+    <div id="rowFields"></div>
+    <div class="modal-foot">
+      <button class="btn" data-action="close-modal" data-modal="rowMask">取消</button>
+      <button class="btn primary" data-action="insertrow">插入</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新增/编辑文档（MongoDB） -->
+<div class="modal-mask" id="jsonMask">
+  <div class="modal">
+    <h3 id="jsonTitle">新增文档</h3>
+    <div class="json-editor">
+      <textarea id="jsonText" spellcheck="false" placeholder='{ "name": "Alice", "age": 30 }'></textarea>
+    </div>
+    <div class="json-hint">支持 MongoDB Extended JSON（如 {"$oid":"..."} / {"$date":"..."}）。编辑时按 _id 替换整篇文档。</div>
+    <div class="modal-foot">
+      <button class="btn" data-action="close-modal" data-modal="jsonMask">取消</button>
+      <button class="btn primary" data-action="save-doc">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 通用确认 -->
+<div class="modal-mask" id="confirmMask">
+  <div class="modal sm">
+    <h3 id="cfTitle">确认</h3>
+    <div id="cfBody" style="font-size:13px;color:var(--dim);line-height:1.7"></div>
+    <div class="modal-foot">
+      <button class="btn" data-action="close-modal" data-modal="confirmMask">取消</button>
+      <button class="btn primary" id="cfOk" style="background:var(--red);border-color:var(--red)">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- 右键菜单 -->
+<div class="ctxmenu" id="ctxmenu"></div>
+
+<!-- 运行 SQL 文件 -->
+<div class="modal-mask" id="sqlFileMask">
+  <div class="modal">
+    <h3 id="sfTitle">运行 SQL 文件</h3>
+    <div class="form-grid one">
+      <div>
+        <label class="sf-file" id="sfDrop">点击选择 SQL 文件（支持 .sql / .txt / .gz 压缩）<input id="sf_file" type="file" accept=".sql,.txt,.gz"></label>
+        <div id="sfFileInfo" class="muted" style="font-size:12px;margin-top:4px"></div>
+      </div>
+      <div class="fld">
+        <label>目标数据库（留空 = 由文件内 USE 语句决定）</label>
+        <select id="sf_db"></select>
+      </div>
+      <div class="fld">
+        <label>文件编码</label>
+        <select id="sf_enc">
+          <option value="utf-8">UTF-8</option>
+          <option value="gbk">GBK</option>
+        </select>
+      </div>
+      <label class="ckline"><input type="checkbox" id="sf_cont"> 遇到错误继续执行后面的语句</label>
+    </div>
+    <div class="sf-res" id="sfResult" style="display:none"></div>
+    <div class="modal-foot">
+      <span id="sfMeta" class="muted" style="font-size:12px;margin-right:auto"></span>
+      <button class="btn" data-action="close-modal" data-modal="sqlFileMask">关闭</button>
+      <button class="btn primary" id="sfRun" data-action="run-sqlfile">开始执行</button>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+'use strict';
+/* ================= 基础 ================= */
+const BASE = '/api/plugin/dbadmin';
+const TYPES = {
+  mysql:     { label: 'MySQL / MariaDB', short: 'MySQL', port: '3306', color: '#3d7fd9', sql: true,  createDb: true,  sqlFile: true },
+  postgres:  { label: 'PostgreSQL',      short: 'PG',    port: '5432', color: '#3d7fd9', sql: true,  createDb: true,  sqlFile: true },
+  sqlite:    { label: 'SQLite',          short: 'SQLite',port: '',     color: '#7a828c', sql: true,  createDb: false, sqlFile: true, file: true },
+  sqlserver: { label: 'SQL Server',      short: 'MSSQL', port: '1433', color: '#3d7fd9', sql: true,  createDb: true,  sqlFile: true },
+  oracle:    { label: 'Oracle',          short: 'Oracle',port: '1521', color: '#d94a4a', sql: true,  createDb: false, sqlFile: true },
+  redis:     { label: 'Redis',           short: 'Redis', port: '6379', color: '#d94a4a', kv: true },
+  mongodb:   { label: 'MongoDB',         short: 'Mongo', port: '27017',color: '#2e9e5b', doc: true,  createDb: true },
+};
+const SYS_DBS = new Set(['information_schema', 'performance_schema', 'sys', 'mysql', 'pg_catalog', 'postgres', 'admin', 'local', 'config']);
+
+const $ = (s, r) => (r || document).querySelector(s);
+const $$ = (s, r) => Array.from((r || document).querySelectorAll(s));
+const esc = (s) => String(s === null || s === undefined ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmtSize = (n) => {
+  n = +n || 0;
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  if (n < 1073741824) return (n / 1048576).toFixed(1) + ' MB';
+  return (n / 1073741824).toFixed(2) + ' GB';
+};
+
+function toast(msg) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  clearTimeout(t._tm);
+  t._tm = setTimeout(() => { t.style.display = 'none'; }, 2600);
+}
+
+async function api(p, opt) {
+  try {
+    const r = await fetch(BASE + p, opt);
+    const text = await r.text();
+    try { return JSON.parse(text); }
+    catch (e) { return { error: text.slice(0, 200) || ('HTTP ' + r.status) }; }
+  } catch (e) {
+    return { error: '请求失败: ' + e.message };
+  }
+}
+const JSON_HDR = { 'Content-Type': 'application/json' };
+const API = (p, method, body) => api(p, body !== undefined
+  ? { method, headers: JSON_HDR, body: JSON.stringify(body) }
+  : { method });
+
+/* ================= 图标 ================= */
+const ICONS = {
+  caret: '<path d="M9 18l6-6-6-6"/>',
+  plug: '<path d="M9 7V3M15 7V3"/><path d="M7 7h10v4a5 5 0 0 1-10 0V7z"/><path d="M12 16v5"/>',
+  db: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"/>',
+  'db-plus': '<ellipse cx="9" cy="5" rx="6.5" ry="2.6"/><path d="M2.5 5v12c0 1.44 2.9 2.6 6.5 2.6s6.5-1.16 6.5-2.6V5"/><path d="M2.5 11c0 1.44 2.9 2.6 6.5 2.6"/><path d="M18 13v8M14 17h8"/>',
+  table: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M10 10v10"/>',
+  query: '<path d="M4 17l6-5-6-5"/><path d="M12 19h8"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  minus: '<path d="M5 12h14"/>',
+  x: '<path d="M18 6L6 18M6 6l12 12"/>',
+  check: '<path d="M20 6L9 17l-5-5"/>',
+  trash: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/>',
+  eraser: '<path d="M20 20H7L3 15.9a1 1 0 0 1 0-1.4L13.6 4a1 1 0 0 1 1.4 0l6 6a1 1 0 0 1 0 1.4L14 18.5"/>',
+  pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>',
+  filter: '<path d="M22 3H2l8 9.5V19l4 2v-8.5L22 3z"/>',
+  key: '<circle cx="7.5" cy="15.5" r="4.5"/><path d="M11 12l9-9M15 6l3 3"/>',
+  first: '<path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/>',
+  prev: '<path d="M15 18l-6-6 6-6"/>',
+  next: '<path d="M9 18l6-6-6-6"/>',
+  last: '<path d="M13 17l5-5-5-5M6 17l5-5-5-5"/>',
+  info: '<circle cx="12" cy="12" r="9"/><path d="M12 8h.01M12 12v5"/>',
+  list: '<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3 6h.01M3 12h.01M3 18h.01"/>',
+  code: '<path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  play: '<path d="M6 4l14 8-14 8V4z"/>',
+  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
+  doc: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+};
+function I(name, cls) {
+  return '<svg class="icon ' + (cls || '') + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + (ICONS[name] || '') + '</svg>';
+}
+$$('[data-ic]').forEach(el => { el.innerHTML = I(el.dataset.ic); });
+
+/* ================= 状态 ================= */
+const S = {
+  conns: [],
+  tree: {},
+  tabs: [],
+  active: null,
+  seq: 0,
+  sel: null,
+  confirmFn: null,
+  editingConn: null,
+  docCtx: null,
+};
+const activeTab = () => S.tabs.find(t => t.id === S.active) || null;
+const connOf = (id) => S.conns.find(c => c.id === id);
+const connName = (id) => { const c = connOf(id); return (c && (c.name || c.id)) || id; };
+const connKind = (id) => { const c = connOf(id); return (c && c.type) || 'mysql'; };
+const typeOf = (id) => TYPES[connKind(id)] || TYPES.mysql;
+const isSQLKind = (id) => !!(typeOf(id).sql);
+const isDocKind = (id) => !!(typeOf(id).doc);
+const isKVKind = (id) => !!(typeOf(id).kv);
+const canCreateDb = (id) => !!(typeOf(id).createDb);
+const dbDeletable = (id) => ['mysql', 'postgres', 'sqlserver', 'mongodb'].includes(connKind(id));
+
+/* ================= 移动端 ================= */
+const isMobile = () => window.matchMedia('(max-width: 767px)').matches;
+function syncBackdrop() {
+  const open = $('#sidebar').classList.contains('m-open') || $('#infopanel').classList.contains('m-open');
+  $('#mBackdrop').classList.toggle('open', open);
+}
+function toggleTreeDrawer(force) {
+  const sb = $('#sidebar');
+  sb.classList.toggle('m-open', force !== undefined ? force : !sb.classList.contains('m-open'));
+  if (sb.classList.contains('m-open')) $('#infopanel').classList.remove('m-open');
+  syncBackdrop();
+}
+function closeMobileOverlays() {
+  $('#sidebar').classList.remove('m-open');
+  $('#infopanel').classList.remove('m-open');
+  syncBackdrop();
+}
+$('#btnTree').addEventListener('click', () => toggleTreeDrawer());
+$('#mBackdrop').addEventListener('click', closeMobileOverlays);
+window.matchMedia('(max-width: 767px)').addEventListener('change', (e) => { if (!e.matches) closeMobileOverlays(); });
+
+/* ================= 标题 / 工具栏 ================= */
+function renderTitle() {
+  const t = activeTab();
+  const el = $('#tbText');
+  if (!t) { el.textContent = '数据库管理'; $('#tbIcon').innerHTML = I('db'); return; }
+  $('#tbIcon').innerHTML = I(tabIcon(t));
+  if (t.kind === 'table') el.textContent = t.table + ' @' + t.db + ' (' + connName(t.conn) + ')';
+  else if (t.kind === 'doc') el.textContent = t.coll + ' @' + t.db + ' (' + connName(t.conn) + ') - 集合';
+  else if (t.kind === 'keys') el.textContent = t.db + ' · 键空间 (' + connName(t.conn) + ')';
+  else el.textContent = '查询-' + t.no + ' (' + connName(t.conn) + ')';
+}
+
+function selectionConn() {
+  if (!S.sel) return null;
+  return S.sel.conn || null;
+}
+
+function renderToolbar() {
+  const s = S.sel;
+  const cid = selectionConn() || (activeTab() && activeTab().conn);
+  const kind = cid ? connKind(cid) : '';
+  $('#btnOpenTable').classList.toggle('disabled', !(s && (s.type === 'table' || s.type === 'doc')));
+  $('#btnNewQuery').classList.toggle('disabled', !cid);
+  $('#btnNewDb').classList.toggle('disabled', !(s && s.type === 'conn' && canCreateDb(cid)));
+  $('#btnSqlFile').classList.toggle('disabled', !(cid && TYPES[kind] && TYPES[kind].sqlFile));
+  $('#btnRefresh').classList.toggle('disabled', !s);
+  $('#btnDelete').classList.toggle('disabled', !s || s.type === 'redisdb');
+}
+
+/* ================= 连接树 ================= */
+function sortDbs(names) {
+  return names.slice().sort((a, b) => (SYS_DBS.has(a) ? 1 : 0) - (SYS_DBS.has(b) ? 1 : 0) || a.localeCompare(b));
+}
+function typeBadge(t) {
+  const x = TYPES[t] || TYPES.mysql;
+  return '<span class="type-badge" style="background:' + x.color + '">' + x.short + '</span>';
+}
+function identOf(conn, db, table) { return [conn, db, table].filter(Boolean).join('|'); }
+
+function nodeActs(kind, conn, db, table) {
+  const id = identOf(conn, db, table);
+  if (kind === 'conn') {
+    return '<span class="nacts">' +
+      '<button class="icon-btn" data-act="edit-conn" data-id="' + esc(conn) + '" title="编辑连接">' + I('pencil') + '</button>' +
+      '<button class="icon-btn danger" data-act="del-conn" data-id="' + esc(conn) + '" title="删除连接">' + I('trash') + '</button></span>';
+  }
+  if (kind === 'table' || kind === 'doc') {
+    return '<span class="nacts">' +
+      '<button class="icon-btn danger" data-act="truncate" data-id="' + esc(id) + '" title="清空">' + I('eraser') + '</button>' +
+      '<button class="icon-btn danger" data-act="drop-table" data-id="' + esc(id) + '" title="删除">' + I('trash') + '</button></span>';
+  }
+  if (kind === 'db' && dbDeletable(conn)) {
+    return '<span class="nacts"><button class="icon-btn danger" data-act="drop-db" data-id="' + esc(id) + '" title="删除数据库">' + I('trash') + '</button></span>';
+  }
+  return '';
+}
+
+function renderTree() {
+  const el = $('#tree');
+  if (!S.conns.length) {
+    el.innerHTML = '<div class="tree-empty">' + I('plug') + '<br><br>还没有连接<br><button class="btn small" data-action="newconn" style="margin-top:8px">新建连接</button></div>';
+    return;
+  }
+  let h = '';
+  for (const c of S.conns) {
+    const st = S.tree[c.id] || (S.tree[c.id] = { expanded: false });
+    const selCls = S.sel && S.sel.type === 'conn' && S.sel.conn === c.id ? ' sel' : '';
+    const kind = connKind(c.id);
+    h += '<div class="tnode lv0' + (st.expanded ? ' open' : '') + selCls + '" data-node="conn" data-conn="' + esc(c.id) + '">' +
+      '<span class="caret" data-caret="conn" data-conn="' + esc(c.id) + '">' + I('caret') + '</span>' +
+      '<span class="nic">' + I('plug') + '</span>' +
+      '<span class="nname" title="' + esc(c.id) + '">' + esc(c.name || c.id) + '</span>' +
+      typeBadge(kind) + nodeActs('conn', c.id) + '</div>';
+    if (!st.expanded) continue;
+    if (st.loading) { h += '<div class="tree-msg">加载中…</div>'; continue; }
+    if (st.err) { h += '<div class="tree-msg" style="color:var(--red)">' + esc(st.err) + '</div>'; continue; }
+    h += '<div class="nsub">';
+    for (const d of (st.dbs || [])) {
+      if (kind === 'redis') {
+        const sd = S.sel && S.sel.type === 'redisdb' && S.sel.conn === c.id && S.sel.db === d.name ? ' sel' : '';
+        h += '<div class="tnode lv1' + sd + '" data-node="redisdb" data-conn="' + esc(c.id) + '" data-db="' + esc(d.name) + '">' +
+          '<span class="caret leaf">' + I('caret') + '</span>' +
+          '<span class="nic">' + I('db') + '</span><span class="nname">' + esc(d.name) + '</span>' +
+          '<span class="ncnt">' + (d.count || '') + '</span></div>';
+        continue;
+      }
+      const sysCls = SYS_DBS.has(d.name) ? ' syslib' : '';
+      const selD = S.sel && S.sel.type === 'db' && S.sel.conn === c.id && S.sel.db === d.name ? ' sel' : '';
+      h += '<div class="tnode lv1' + (d.expanded ? ' open' : '') + selD + sysCls + '" data-node="db" data-conn="' + esc(c.id) + '" data-db="' + esc(d.name) + '">' +
+        '<span class="caret" data-caret="db" data-conn="' + esc(c.id) + '" data-db="' + esc(d.name) + '">' + I('caret') + '</span>' +
+        '<span class="nic">' + I('db') + '</span><span class="nname" title="' + esc(d.name) + '">' + esc(d.name) + '</span>' +
+        nodeActs('db', c.id, d.name) + '</div>';
+      if (!d.expanded) continue;
+      if (d.loading) { h += '<div class="tree-msg">加载中…</div>'; continue; }
+      if (d.err) { h += '<div class="tree-msg" style="color:var(--red)">' + esc(d.err) + '</div>'; continue; }
+      h += '<div class="nsub">';
+      if (!(d.tables || []).length) h += '<div class="tree-msg">（空库）</div>';
+      for (const tb of (d.tables || [])) {
+        const isDoc = kind === 'mongodb';
+        const selT = S.sel && ((S.sel.type === 'table' && !isDoc) || (S.sel.type === 'doc' && isDoc)) && S.sel.conn === c.id && S.sel.db === d.name && (S.sel.table || S.sel.coll) === tb.name ? ' sel' : '';
+        const sizeTxt = tb.sizeBytes ? fmtSize(tb.sizeBytes) : '';
+        h += '<div class="tnode lv2' + selT + '" data-node="' + (isDoc ? 'doc' : 'table') + '" data-conn="' + esc(c.id) + '" data-db="' + esc(d.name) + '" data-table="' + esc(tb.name) + '" title="' + esc(tb.comment || tb.name) + (sizeTxt ? ' · ' + sizeTxt : '') + '">' +
+          '<span class="caret leaf">' + I('caret') + '</span>' +
+          '<span class="nic">' + I(isDoc ? 'doc' : 'table') + '</span><span class="nname">' + esc(tb.name) + '</span>' +
+          '<span class="ncnt">' + (tb.rows === null || tb.rows === undefined ? '' : tb.rows) + '</span>' +
+          nodeActs(isDoc ? 'doc' : 'table', c.id, d.name, tb.name) + '</div>';
+      }
+      h += '</div>';
+    }
+    h += '</div>';
+  }
+  el.innerHTML = h;
+}
+
+async function toggleConn(id, forceOpen) {
+  const st = S.tree[id] || (S.tree[id] = { expanded: false });
+  st.expanded = forceOpen ? true : !st.expanded;
+  if (st.expanded && !st.dbs && !st.loading) {
+    st.loading = true; renderTree();
+    const r = await api('/connections/' + encodeURIComponent(id) + '/databases');
+    st.loading = false;
+    if (r.error) st.err = '连接失败: ' + r.error;
+    else {
+      st.err = '';
+      st.dbs = sortDbs(r.databases || []).map(n => ({ name: n, expanded: false, tables: null, loading: false }));
+      if (connKind(id) === 'redis') {
+        // Redis 的 db 从不携带表；数量为 CONFIG GET databases 推断
+        for (const d of st.dbs) d.count = '0';
+      }
+    }
+  }
+  renderTree(); renderToolbar();
+}
+
+async function toggleDb(conn, db, forceOpen) {
+  const st = S.tree[conn]; if (!st || !st.dbs) return;
+  const d = st.dbs.find(x => x.name === db); if (!d) return;
+  d.expanded = forceOpen ? true : !d.expanded;
+  if (d.expanded && !d.tables && !d.loading) {
+    d.loading = true; renderTree();
+    const r = await api('/connections/' + encodeURIComponent(conn) + '/databases/' + encodeURIComponent(db) + '/tables');
+    d.loading = false;
+    if (r.error) d.err = r.error;
+    else { d.err = ''; d.tables = r.tables || []; }
+  }
+  renderTree();
+}
+
+async function refreshTree() {
+  const jobs = [];
+  for (const id of Object.keys(S.tree)) {
+    const st = S.tree[id];
+    if (!st.expanded) continue;
+    jobs.push((async () => {
+      const r = await api('/connections/' + encodeURIComponent(id) + '/databases');
+      if (r.error) { st.err = '连接失败: ' + r.error; return; }
+      st.err = '';
+      const old = st.dbs || [];
+      st.dbs = sortDbs(r.databases || []).map(n => {
+        const prev = old.find(x => x.name === n);
+        return prev ? { name: n, expanded: prev.expanded, tables: prev.tables, loading: false, err: '' } : { name: n, expanded: false, tables: null, loading: false };
+      });
+      if (connKind(id) === 'redis') return;
+      for (const d of st.dbs) {
+        if (!d.expanded) continue;
+        const r2 = await api('/connections/' + encodeURIComponent(id) + '/databases/' + encodeURIComponent(d.name) + '/tables');
+        if (!r2.error) { d.tables = r2.tables || []; d.err = ''; }
+      }
+    })());
+  }
+  renderTree();
+  await Promise.all(jobs);
+  renderTree();
+}
+
+/* ================= 标签 ================= */
+function tabIcon(t) {
+  return t.kind === 'table' ? 'table' : t.kind === 'doc' ? 'doc' : t.kind === 'keys' ? 'key' : 'query';
+}
+function tabTitle(t) {
+  if (t.kind === 'table') return t.table + ' @' + t.db;
+  if (t.kind === 'doc') return t.coll + ' @' + t.db;
+  if (t.kind === 'keys') return t.db + ' · 键';
+  return '查询-' + t.no;
+}
+function renderTabs() {
+  $('#tabs').innerHTML = S.tabs.map(t =>
+    '<div class="tab ' + (t.id === S.active ? 'act' : '') + '" data-tabid="' + t.id + '">' +
+    '<span class="tab-ic">' + I(tabIcon(t), 'sm') + '</span>' +
+    '<span class="tab-tt" title="' + esc(tabTitle(t)) + '">' + esc(tabTitle(t)) + '</span>' +
+    '<span class="tab-x" data-close="' + t.id + '" title="关闭">' + I('x', 'sm') + '</span></div>'
+  ).join('');
+}
+function activateTab(id) {
+  S.active = id;
+  renderTabs(); renderTab();
+  const nt = activeTab();
+  if (isMobile() && (!nt || (nt.kind !== 'table' && nt.kind !== 'doc' && nt.kind !== 'keys')) && $('#infopanel').classList.contains('m-open')) {
+    $('#infopanel').classList.remove('m-open');
+    syncBackdrop();
+  }
+}
+function closeTab(id) {
+  const i = S.tabs.findIndex(t => t.id === id);
+  if (i < 0) return;
+  S.tabs.splice(i, 1);
+  if (S.active === id) {
+    const next = S.tabs[Math.min(i, S.tabs.length - 1)];
+    S.active = next ? next.id : null;
+  }
+  renderTabs(); renderTab();
+}
+
+function openTableTab(conn, db, table) {
+  let t = S.tabs.find(x => x.kind === 'table' && x.conn === conn && x.db === db && x.table === table);
+  if (!t) {
+    t = {
+      id: 't' + (++S.seq), kind: 'table', no: S.seq, conn, db, table, view: 'data',
+      page: 1, size: +(localStorage.getItem('zjp_db_pagesize') || 50), total: 0,
+      where: '', order: '', dir: '', columns: [], rows: [], colIdx: {}, schema: null,
+      pkCols: [], editable: false, selRow: -1, selCell: null, editing: null, err: '',
+      loading: false, sqlPreview: '', sqlText: '', qdb: db, histOpen: false,
+    };
+    S.tabs.push(t);
+    loadSchema(t);
+  }
+  S.sel = { type: 'table', conn, db, table };
+  activateTab(t.id);
+  loadRows(t);
+}
+
+function openDocTab(conn, db, coll) {
+  let t = S.tabs.find(x => x.kind === 'doc' && x.conn === conn && x.db === db && x.coll === coll);
+  if (!t) {
+    t = {
+      id: 'd' + (++S.seq), kind: 'doc', no: S.seq, conn, db, coll, view: 'doc',
+      page: 1, size: +(localStorage.getItem('zjp_db_pagesize') || 50), total: 0,
+      filter: '', columns: [], rows: [], raw: [], schema: null, selRow: -1, err: '',
+      loading: false, sqlPreview: '',
+    };
+    S.tabs.push(t);
+    loadDocSchema(t);
+  }
+  S.sel = { type: 'doc', conn, db, coll };
+  activateTab(t.id);
+  loadDoc(t);
+}
+
+function openKeysTab(conn, db) {
+  let t = S.tabs.find(x => x.kind === 'keys' && x.conn === conn && x.db === db);
+  if (!t) {
+    t = { id: 'k' + (++S.seq), kind: 'keys', conn, db, pattern: '*', cursor: '0', keys: null, detail: null, err: '', loading: false };
+    S.tabs.push(t);
+  }
+  S.sel = { type: 'redisdb', conn, db };
+  activateTab(t.id);
+  if (!t.keys) loadKeys(t, false);
+}
+
+function openQueryTab(conn, db) {
+  const t = { id: 'q' + (++S.seq), kind: 'query', no: S.seq, conn, qdb: db || '', sqlText: '', result: null, histOpen: false, running: false, history: [] };
+  S.tabs.push(t);
+  activateTab(t.id);
+  loadHistory(t);
+  const st = S.tree[conn];
+  if (st && !st.dbs && !st.loading) {
+    st.loading = true;
+    api('/connections/' + encodeURIComponent(conn) + '/databases').then(r => {
+      st.loading = false;
+      if (!r.error) { st.dbs = sortDbs(r.databases || []).map(n => ({ name: n, expanded: false, tables: null })); renderTree(); if (t.id === S.active) renderTab(); }
+    });
+  }
+}
+
+/* ================= 数据加载 ================= */
+async function loadSchema(t) {
+  const r = await api('/connections/' + encodeURIComponent(t.conn) + '/databases/' + encodeURIComponent(t.db) + '/tables/' + encodeURIComponent(t.table) + '/schema');
+  if (r.error) { t.schemaErr = r.error; if (t.id === S.active) renderTab(); return; }
+  t.schema = r; t.schemaErr = '';
+  const cols = r.columns || [];
+  t.pkCols = cols.filter(c => c.key === 'PRI').map(c => c.name);
+  t.editable = t.pkCols.length > 0;
+  if (t.id === S.active) renderTab();
+}
+
+async function loadRows(t) {
+  t.loading = true; t.err = '';
+  if (t.id === S.active) renderTab();
+  const qs = 'conn=' + encodeURIComponent(t.conn) + '&db=' + encodeURIComponent(t.db) + '&table=' + encodeURIComponent(t.table) +
+    '&page=' + t.page + '&size=' + t.size + '&where=' + encodeURIComponent(t.where || '') +
+    '&order=' + encodeURIComponent(t.order || '') + '&dir=' + encodeURIComponent(t.dir || '');
+  const r = await api('/rows?' + qs);
+  t.loading = false;
+  if (r.error) { t.err = r.error; }
+  else {
+    t.columns = r.columns || []; t.rows = r.rows || []; t.total = r.total || 0; t.sqlPreview = r.sql || '';
+    t.colIdx = {}; t.columns.forEach((c, i) => { t.colIdx[c] = i; });
+    t.selRow = -1; t.selCell = null; t.editing = null;
+    const pages = Math.max(1, Math.ceil(t.total / t.size));
+    if (t.page > pages && t.total > 0) { t.page = pages; return loadRows(t); }
+  }
+  if (t.id === S.active) renderTab();
+}
+
+async function loadDocSchema(t) {
+  const r = await api('/connections/' + encodeURIComponent(t.conn) + '/databases/' + encodeURIComponent(t.db) + '/tables/' + encodeURIComponent(t.coll) + '/schema');
+  if (r.error) t.schemaErr = r.error;
+  else { t.schema = r; t.schemaErr = ''; }
+  if (t.id === S.active) renderTab();
+}
+
+async function loadDoc(t) {
+  t.loading = true; t.err = '';
+  if (t.id === S.active) renderTab();
+  const qs = 'conn=' + encodeURIComponent(t.conn) + '&db=' + encodeURIComponent(t.db) + '&table=' + encodeURIComponent(t.coll) +
+    '&page=' + t.page + '&size=' + t.size + '&where=' + encodeURIComponent(t.filter || '');
+  const r = await api('/rows?' + qs);
+  t.loading = false;
+  if (r.error) t.err = r.error;
+  else {
+    t.columns = r.columns || []; t.rows = r.rows || []; t.raw = r.raw || []; t.total = r.total || 0;
+    t.sqlPreview = r.sql || ''; t.selRow = -1;
+    const pages = Math.max(1, Math.ceil(t.total / t.size));
+    if (t.page > pages && t.total > 0) { t.page = pages; return loadDoc(t); }
+  }
+  if (t.id === S.active) renderTab();
+}
+
+async function loadKeys(t, more) {
+  t.loading = true; t.err = '';
+  if (!more) { t.keys = []; t.cursor = '0'; t.detail = null; }
+  if (t.id === S.active) renderTab();
+  const qs = 'conn=' + encodeURIComponent(t.conn) + '&db=' + encodeURIComponent(t.db) +
+    '&pattern=' + encodeURIComponent(t.pattern || '*') + '&cursor=' + encodeURIComponent(t.cursor || '0');
+  const r = await api('/redis/keys?' + qs);
+  t.loading = false;
+  if (r.error) t.err = r.error;
+  else {
+    if (!more) t.keys = [];
+    t.keys = (t.keys || []).concat(r.keys || []);
+    t.cursor = r.cursor || '0';
+  }
+  if (t.id === S.active) renderTab();
+}
+
+async function openKey(t, key) {
+  const r = await api('/redis/key?conn=' + encodeURIComponent(t.conn) + '&db=' + encodeURIComponent(t.db) + '&key=' + encodeURIComponent(key));
+  if (r.error) return toast(r.error);
+  t.detail = r;
+  if (isMobile()) { $('#infopanel').classList.add('m-open'); syncBackdrop(); }
+  if (!$('#btnInfo').classList.contains('on')) { $('#btnInfo').classList.add('on'); localStorage.setItem('zjp_db_info', '1'); }
+  renderTab();
+}
+
+/* ================= 渲染入口 ================= */
+function renderTab() {
+  renderTabs();
+  const t = activeTab();
+  const body = $('#tabBody');
+  if (!t) body.innerHTML = welcomeHTML();
+  else if (t.kind === 'table') body.innerHTML = tableViewHTML(t);
+  else if (t.kind === 'doc') body.innerHTML = docViewHTML(t);
+  else if (t.kind === 'keys') body.innerHTML = keysViewHTML(t);
+  else body.innerHTML = queryViewHTML(t);
+  renderRecordBar(t);
+  renderSqlBar(t);
+  renderInfoPanel();
+  renderTitle();
+  renderToolbar();
+}
+
+function welcomeHTML() {
+  return '<div class="welcome">' + I('db') +
+    '<div style="font-size:14px;color:var(--text)">数据库管理</div>' +
+    '<div>MySQL · PostgreSQL · SQLite · SQL Server · Oracle · Redis · MongoDB</div>' +
+    '<div class="w-actions"><button class="btn primary" data-action="newconn">新建连接</button>' +
+    '<button class="btn" data-action="newquery" ' + (S.conns.length ? '' : 'disabled') + '>新建查询</button></div></div>';
+}
+
+/* ---------- 表 ---------- */
+function tableViewHTML(t) {
+  const segs = [['data', '数据'], ['schema', '结构'], ['ddl', 'DDL']];
+  let h = '<div class="fill"><div class="viewbar">';
+  h += '<div class="seg">' + segs.map(([v, label]) => '<button class="seg-item ' + (t.view === v ? 'on' : '') + '" data-view="' + v + '">' + label + '</button>').join('') + '</div>';
+  if (t.view === 'data') {
+    h += '<div class="filter-box">' + I('filter') + '<input id="filterInput" value="' + esc(t.where) + '" placeholder="WHERE 条件（原始 SQL 片段，留空为全部）"></div>';
+    h += '<span class="spacer"></span><span class="muted" style="font-size:11.5px">共 ' + t.total + ' 行</span>';
+  } else {
+    h += '<span class="spacer"></span>';
+  }
+  h += '</div>';
+  if (t.view === 'data') {
+    h += '<div class="gridwrap">' + gridHTML(t.columns, t.rows, { tab: t, sortable: true, loading: t.loading, err: t.err }) + '</div>';
+  } else if (t.view === 'schema') {
+    h += schemaHTML(t.schema, t.schemaErr, false);
+  } else {
+    h += ddlHTML(t.schema ? t.schema.createSQL : '', t.schemaErr);
+  }
+  h += '</div>';
+  return h;
+}
+
+function schemaHTML(s, err, mongo) {
+  if (err) return '<div class="grid-err">' + esc(err) + '</div>';
+  if (!s) return '<div class="grid-empty">结构加载中…</div>';
+  const cols = s.columns || [];
+  const idx = s.indexes || [];
+  let h = '<div class="structwrap">';
+  h += '<h4>字段（' + cols.length + '）' + (mongo ? ' <span class="muted" style="font-weight:400;font-size:11.5px">按前 50 篇文档采样推断</span>' : '') + '</h4>';
+  h += '<table class="grid"><thead><tr><th>字段</th><th>类型</th><th>可空</th><th>键</th><th>默认</th><th>附加</th><th>注释</th></tr></thead><tbody>';
+  for (const c of cols) {
+    h += '<tr><td class="keycell" style="color:var(--text)">' + esc(c.name) + '</td><td>' + esc(c.type) + '</td>' +
+      '<td>' + (c.nullable ? 'YES' : 'NO') + '</td><td>' + esc(c.key || '') + '</td>' +
+      '<td>' + esc(c.default === null || c.default === undefined ? '' : c.default) + '</td>' +
+      '<td>' + esc(c.extra || '') + '</td><td>' + esc(c.comment || '') + '</td></tr>';
+  }
+  h += '</tbody></table>';
+  h += '<h4>索引（' + idx.length + '）</h4>';
+  if (!idx.length) h += '<div class="muted" style="font-size:12px">（无索引）</div>';
+  else {
+    h += '<table class="grid"><thead><tr><th>名称</th><th>列</th><th>唯一</th><th>类型</th><th>定义</th></tr></thead><tbody>';
+    for (const x of idx) {
+      h += '<tr><td>' + esc(x.name) + '</td><td>' + esc(x.columns) + '</td><td>' + (x.unique ? 'YES' : 'NO') + '</td>' +
+        '<td>' + esc(x.type || '') + '</td><td>' + esc(x.definition || '') + '</td></tr>';
+    }
+    h += '</tbody></table>';
+  }
+  h += '</div>';
+  return h;
+}
+
+function ddlHTML(sql, err) {
+  if (err) return '<div class="grid-err">' + esc(err) + '</div>';
+  if (!sql) return '<div class="grid-empty">暂无 DDL</div>';
+  return '<div class="structwrap"><div style="display:flex;justify-content:space-between;align-items:center"><h4>DDL</h4>' +
+    '<button class="btn small" data-action="copy-sql">' + I('copy', 'sm') + '复制</button></div>' +
+    '<pre class="ddl" id="ddlText">' + esc(sql) + '</pre></div>';
+}
+
+/* ---------- 文档（Mongo） ---------- */
+function docViewHTML(t) {
+  const segs = [['doc', '文档'], ['schema', '结构']];
+  let h = '<div class="fill"><div class="viewbar"><div class="seg">' +
+    segs.map(([v, label]) => '<button class="seg-item ' + (t.view === v ? 'on' : '') + '" data-view="' + v + '">' + label + '</button>').join('') + '</div>';
+  if (t.view === 'doc') {
+    h += '<div class="filter-box">' + I('filter') + '<input id="docFilter" value="' + esc(t.filter) + '" placeholder=\'过滤条件 JSON，如 {"age":{"$gt":20}}\'></div>';
+    h += '<span class="spacer"></span><button class="btn small" data-action="add-doc">' + I('plus', 'sm') + '新增文档</button>';
+  }
+  h += '</div>';
+  if (t.view === 'doc') {
+    h += '<div class="gridwrap">' + gridHTML(t.columns, t.rows, { tab: t, mongo: true, loading: t.loading, err: t.err }) + '</div>';
+  } else {
+    h += schemaHTML(t.schema, t.schemaErr, true);
+  }
+  h += '</div>';
+  return h;
+}
+
+/* ---------- Redis ---------- */
+function keysViewHTML(t) {
+  let h = '<div class="fill"><div class="viewbar">' +
+    '<div class="filter-box">' + I('filter') + '<input id="redisPattern" value="' + esc(t.pattern || '*') + '" placeholder="匹配模式，如 user:*"></div>' +
+    '<button class="btn small" data-action="redis-search">' + I('refresh', 'sm') + '扫描</button>' +
+    '<span class="spacer"></span><span class="muted" style="font-size:11.5px">已载入 ' + (t.keys ? t.keys.length : 0) + ' 个键</span></div>';
+  h += '<div class="gridwrap">';
+  if (t.err) h += '<div class="grid-err">' + esc(t.err) + '</div>';
+  else if (t.loading && !(t.keys || []).length) h += '<div class="grid-empty">扫描中…</div>';
+  else if (t.keys && t.keys.length) {
+    h += '<table class="grid"><thead><tr><th class="rownum-h"></th><th>键</th><th>类型</th><th>TTL</th><th>大小</th></tr></thead><tbody>';
+    t.keys.forEach((k, i) => {
+      const ttl = k.ttl === -1 ? '永久' : k.ttl === -2 ? '不存在' : ((k.ttl || 0) + 's');
+      h += '<tr data-redis-key="' + esc(k.key) + '" class="' + (t.detail && t.detail.key === k.key ? 'row-sel' : '') + '">' +
+        '<td class="rownum">' + (i + 1) + '</td><td class="keycell">' + esc(k.key) + '</td><td>' + esc(k.type) + '</td>' +
+        '<td>' + esc(ttl) + '</td><td>' + esc(k.size === null || k.size === undefined ? '' : k.size) + '</td></tr>';
+    });
+    h += '</tbody></table>';
+  } else h += '<div class="grid-empty">没有匹配的键</div>';
+  h += '</div></div>';
+  return h;
+}
+
+/* ---------- 查询 ---------- */
+function queryViewHTML(t) {
+  const kind = connKind(t.conn);
+  let dbs = ((S.tree[t.conn] || {}).dbs || []).map(d => d.name);
+  let opts = '';
+  if (kind === 'redis') opts = dbs.map(d => '<option value="' + esc(d) + '"' + (t.qdb === d ? ' selected' : '') + '>' + esc(d) + '</option>').join('');
+  else opts = '<option value="">（默认库）</option>' + dbs.map(d => '<option value="' + esc(d) + '"' + (t.qdb === d ? ' selected' : '') + '>' + esc(d) + '</option>').join('');
+  const ph = kind === 'redis' ? '输入 Redis 命令，如 KEYS user:* 或 GET foo（Ctrl+Enter 执行）'
+    : kind === 'mongodb' ? '输入 JSON 命令，如 {"find":"users","filter":{},"limit":10}（Ctrl+Enter 执行）'
+      : '输入 SQL，如 SELECT * FROM users LIMIT 10;（Ctrl+Enter 执行）';
+  let h = '<div class="qwrap"><div class="qbar">';
+  h += '<select id="qdb">' + opts + '</select>';
+  h += '<button class="btn primary" data-action="run-query">' + I('play', 'sm') + '运行</button>';
+  h += '<span class="kbd">Ctrl+Enter</span>';
+  h += '</div><div class="qeditor"><textarea id="qtext" spellcheck="false" placeholder="' + esc(ph) + '">' + esc(t.sqlText) + '</textarea></div>';
+  h += '<div class="qresult"><div class="qmeta" id="qmeta">' + queryMetaHTML(t) + '</div><div class="qgrid" id="qgrid">' + queryResultHTML(t) + '</div></div>';
+  h += '<div class="qhist">' + historyHTML(t) + '</div>';
+  h += '</div>';
+  return h;
+}
+function queryMetaHTML(t) {
+  const r = t.result;
+  if (t.running) return '<span class="muted">执行中…</span>';
+  if (!r) return '<span class="muted">就绪</span>';
+  if (r.error) return '<span class="errm">✗ ' + esc(r.error) + '</span>';
+  if (r.columns) return '<span class="okm">✓ ' + (r.rows || []).length + ' 行返回</span><span>耗时 ' + esc(r.elapsed || '') + '</span>';
+  return '<span class="okm">✓ 影响 ' + (r.rowsAffected === null || r.rowsAffected === undefined ? 0 : r.rowsAffected) + ' 行</span><span>耗时 ' + esc(r.elapsed || '') + '</span>';
+}
+function queryResultHTML(t) {
+  const r = t.result;
+  if (!r) return '<div class="grid-empty">输入语句后点击运行</div>';
+  if (r.error) return '<div class="grid-err">' + esc(r.error) + '</div>';
+  if (r.columns && r.columns.length) return gridHTML(r.columns, r.rows, { rownum: true });
+  return '<div class="grid-empty">执行成功</div>';
+}
+function historyHTML(t) {
+  const list = t.history || [];
+  if (!list.length) return '';
+  let h = '<div class="hhead" data-action="toggle-hist">' + I('clock', 'sm') + '执行历史（' + list.length + '）' + (t.histOpen ? ' ▾' : ' ▸') + '</div>';
+  if (t.histOpen) {
+    h += list.slice(0, 20).map(x => '<div class="item" data-hist-sql="' + esc(x.sql) + '">' +
+      '<span class="st ' + (x.ok ? 'ok' : 'bad') + '">' + (x.ok ? '✓' : '✗') + '</span>' +
+      '<span class="sql-txt" title="' + esc(x.sql) + '">' + esc(x.sql) + '</span>' +
+      '<span class="tm">' + esc(x.elapsed || '') + ' · ' + esc(x.runAt || '') + '</span></div>').join('');
+  }
+  return h;
+}
+async function loadHistory(t) {
+  const h = await api('/history');
+  t.history = (Array.isArray(h) ? h : []).filter(x => x.connId === t.conn);
+  if (t.id === S.active) renderTab();
+}
+async function runQuery(t) {
+  const ta = $('#qtext');
+  if (!ta) return;
+  const sql = ta.value.trim();
+  if (!sql) return toast('请输入要执行的语句');
+  const db = $('#qdb') ? $('#qdb').value : '';
+  t.sqlText = ta.value; t.qdb = db; t.running = true;
+  renderTab();
+  const r = await API('/query', 'POST', { conn: t.conn, database: db, sql });
+  t.running = false; t.result = r;
+  renderTab();
+  loadHistory(t);
+}
+
+/* ================= 网格 ================= */
+function cellText(v) {
+  return v === null ? '<span class="nullv">(Null)</span>' : esc(v);
+}
+
+function gridHTML(columns, rows, opts) {
+  opts = opts || {};
+  const t = opts.tab;
+  if (opts.err) return '<div class="grid-err">' + esc(opts.err) + '</div>';
+  if (opts.loading && !(rows || []).length) return '<div class="grid-empty">加载中…</div>';
+  if (!columns || !columns.length) return '<div class="grid-empty">无数据</div>';
+  const pkSet = t && t.schema ? new Set(t.pkCols) : new Set();
+  let h = '<table class="grid"><thead><tr><th class="rownum-h"></th>';
+  h += columns.map(c => {
+    const keyIc = pkSet.has(c) || (opts.mongo && c === '_id') ? I('key', 'sm') : '';
+    const sorted = t && t.order === c;
+    if (opts.sortable) {
+      return '<th data-sort="' + esc(c) + '"><span class="th-in"><span class="nname">' + esc(c) + '</span>' + keyIc +
+        '<span class="sort-ind ' + (sorted && t.dir === 'DESC' ? 'desc' : '') + '" style="' + (sorted ? '' : 'visibility:hidden') + '">' + I('caret') + '</span></span></th>';
+    }
+    return '<th><span class="th-in"><span class="nname">' + esc(c) + '</span>' + keyIc + '</span></th>';
+  }).join('');
+  h += '</tr></thead><tbody>';
+  (rows || []).forEach((row, r) => {
+    const rowSel = t && t.selRow === r ? ' row-sel' : '';
+    h += '<tr class="' + rowSel.trim() + '"><td class="rownum" data-rownum="' + r + '"><span class="arrow">' + I('caret') + '</span>' + (r + 1) + '</td>';
+    row.forEach((v, c) => {
+      const sel = t && t.selCell && t.selCell.r === r && t.selCell.c === c ? ' cell-sel' : '';
+      const editing = t && t.editing && t.editing.r === r && t.editing.c === c;
+      const keyCls = pkSet.has(columns[c]) ? ' keycell' : '';
+      if (editing) {
+        h += '<td class="cell-sel" data-cell="' + r + ',' + c + '"><input class="cell-edit" data-r="' + r + '" data-c="' + c + '" value="' + esc(v === null ? '' : v) + '" placeholder="NULL"></td>';
+      } else {
+        h += '<td class="' + sel.trim() + keyCls + '" data-cell="' + r + ',' + c + '">' + cellText(v) + '</td>';
+      }
+    });
+    h += '</tr>';
+  });
+  h += '</tbody></table>';
+  return h;
+}
+
+/* ================= 记录条 / SQL 预览 ================= */
+function renderRecordBar(t) {
+  const rb = $('#recordbar');
+  if (!t) { rb.style.display = 'none'; return; }
+  if (t.kind === 'query') { rb.style.display = 'none'; return; }
+  if (t.kind === 'keys') {
+    rb.style.display = 'flex';
+    rb.innerHTML = '<button class="rb-btn" data-action="load-more" title="继续 SCAN">' + I('plus') + '</button>' +
+      '<button class="rb-btn" data-action="redis-search" title="重新扫描">' + I('refresh') + '</button>' +
+      '<span class="rb-sep"></span><span class="rb-info">SCAN 游标 ' + esc(t.cursor || '0') + ' · 已载入 ' + (t.keys ? t.keys.length : 0) + ' 个键</span>';
+    return;
+  }
+  if (t.view === 'schema' || t.view === 'ddl') { rb.style.display = 'none'; return; }
+  rb.style.display = 'flex';
+  const isDoc = t.kind === 'doc';
+  const pages = Math.max(1, Math.ceil((t.total || 0) / t.size));
+  let h = '';
+  h += '<button class="rb-btn add" data-action="add-row" title="' + (isDoc ? '新增文档' : '新增行') + '">' + I('plus') + '</button>';
+  h += '<button class="rb-btn del" data-action="del-row" title="' + (isDoc ? '删除文档' : '删除行') + '" ' + (t.selRow < 0 ? 'disabled' : '') + '>' + I('minus') + '</button>';
+  h += '<button class="rb-btn" data-action="reload-data" title="刷新">' + I('refresh') + '</button>';
+  h += '<span class="rb-sep"></span>';
+  h += '<button class="rb-btn" data-page="first" ' + (t.page <= 1 ? 'disabled' : '') + '>' + I('first') + '</button>';
+  h += '<button class="rb-btn" data-page="prev" ' + (t.page <= 1 ? 'disabled' : '') + '>' + I('prev') + '</button>';
+  h += '<input class="rb-page" id="rbPage" value="' + t.page + '" inputmode="numeric">';
+  h += '<button class="rb-btn" data-page="next" ' + (t.page >= pages ? 'disabled' : '') + '>' + I('next') + '</button>';
+  h += '<button class="rb-btn" data-page="last" ' + (t.page >= pages ? 'disabled' : '') + '>' + I('last') + '</button>';
+  h += '<span class="rb-info">共 ' + (t.total || 0) + ' ' + (isDoc ? '篇' : '行') + ' / ' + pages + ' 页</span>';
+  h += isDoc ? '<span class="rb-ro">MongoDB 集合</span>' : (t.editable ? '' : '<span class="rb-ro">无主键 · 只读</span>');
+  h += '<span class="rb-right"><select class="rb-size" id="rbSize">' +
+    [20, 50, 100, 200].map(n => '<option value="' + n + '"' + (t.size === n ? ' selected' : '') + '>' + n + ' 条/页</option>').join('') +
+    '</select></span>';
+  rb.innerHTML = h;
+}
+
+function renderSqlBar(t) {
+  const sb = $('#sqlbar');
+  if (!t || (t.kind !== 'table' && t.kind !== 'doc') || t.view !== 'data' || !t.sqlPreview) { sb.style.display = 'none'; return; }
+  sb.style.display = 'flex';
+  sb.innerHTML = '<span class="sb-ic">' + I('code', 'sm') + '</span>' +
+    '<span class="sb-text" title="' + esc(t.sqlPreview) + '">' + esc(t.sqlPreview) + '</span>' +
+    '<button class="sb-copy" data-action="copy-sql" title="复制">' + I('copy', 'sm') + '</button>';
+}
+
+/* ================= 信息面板 ================= */
+function renderInfoPanel() {
+  const ip = $('#infopanel');
+  const on = $('#btnInfo').classList.contains('on');
+  const mobileOpen = ip.classList.contains('m-open');
+  ip.classList.toggle('hidden', !on && !mobileOpen);
+  if (!on && !mobileOpen) { ip.innerHTML = ''; return; }
+  const t = activeTab();
+  if (t && t.kind === 'keys') { ip.innerHTML = redisDetailHTML(t); return; }
+  if (t && (t.kind === 'table' || t.kind === 'doc') && t.schema) { ip.innerHTML = columnsPanelHTML(t); return; }
+  ip.innerHTML = '<div class="ip-hint">选中表或集合后查看字段信息。</div>';
+}
+
+function columnsPanelHTML(t) {
+  const s = t.schema;
+  const cols = s.columns || [];
+  let h = '<div class="ip-title">' + I('table') + '<span>' + esc(t.kind === 'doc' ? t.coll : t.table) + '</span>' +
+    '<span class="ip-badge">' + cols.length + ' 字段</span></div>';
+  h += '<div class="ip-field"><div class="ip-label">数据库</div><div class="ip-val">' + esc(t.db) + '</div></div>';
+  h += '<div class="ip-field"><div class="ip-label">引擎 / 类型</div><div class="ip-val">' + esc(typeOf(t.conn).label) + '</div></div>';
+  if (t.kind === 'doc') h += '<div class="ip-field"><div class="ip-label">文档数</div><div class="ip-val">' + (t.total || 0) + '</div></div>';
+  h += '<div class="ip-cols"><div class="ip-label" style="margin-bottom:4px">字段</div>';
+  for (const c of cols) {
+    h += '<div class="ip-col" title="' + esc(c.name + ' ' + (c.type || '')) + '">' +
+      (c.key === 'PRI' ? I('key') : I('caret')) +
+      '<span>' + esc(c.name) + '</span><span class="t">' + esc(c.type || '') + '</span></div>';
+  }
+  h += '</div>';
+  return h;
+}
+
+function redisDetailHTML(t) {
+  const d = t.detail;
+  if (!d) return '<div class="ip-hint">点击左侧键名查看详情。<br><br>支持 string / hash / list / set / zset / stream 预览（最多 200 项）。</div>';
+  const ttl = d.ttl === -1 ? '永久' : d.ttl === -2 ? '不存在' : ((d.ttl || 0) + ' 秒');
+  let h = '<div class="ip-title">' + I('key') + '<span>' + esc(d.key) + '</span><span class="ip-badge">' + esc(d.type) + '</span></div>';
+  h += '<div class="ip-field"><div class="ip-label">TTL</div><div class="ip-val">' + esc(ttl) + '</div></div>';
+  h += '<div class="ip-field"><div class="ip-label">大小</div><div class="ip-val">' + esc(d.size === null || d.size === undefined ? '' : d.size) + '</div></div>';
+  if (d.type === 'string') {
+    h += '<div class="ip-field"><div class="ip-label">值（可编辑）</div><textarea class="redis-val" id="redisVal">' + esc(d.items && d.items[0] ? d.items[0].value : '') + '</textarea>' +
+      '<div class="ip-actions"><button class="btn small primary" data-action="save-rval">保存值</button></div></div>';
+  }
+  if (d.truncated) h += '<div class="ip-hint" style="color:var(--orange)">数据量大，仅显示前若干项。</div>';
+  if (d.items && d.items.length) {
+    h += '<div class="ip-cols"><div class="ip-label" style="margin-bottom:4px">内容</div>' +
+      '<table class="grid" style="font-size:11.5px"><thead><tr><th>名称</th><th>值</th></tr></thead><tbody>' +
+      d.items.map(x => '<tr><td>' + esc(x.name) + '</td><td style="max-width:150px;word-break:break-all;white-space:normal">' + esc(x.value) + '</td></tr>').join('') +
+      '</tbody></table></div>';
+  }
+  h += '<div class="ip-field" style="margin-top:10px"><div class="ip-label">设置 TTL（秒，0 = 永久）</div>' +
+    '<div style="display:flex;gap:6px"><input id="redisTTL" type="text" style="flex:1;border:1px solid var(--border);background:var(--panel-2);color:var(--text);border-radius:6px;padding:5px 8px" value="' + (d.ttl > 0 ? d.ttl : 0) + '">' +
+    '<button class="btn small" data-action="save-ttl">应用</button></div></div>';
+  h += '<div class="ip-actions"><button class="btn small danger" data-action="del-key">' + I('trash', 'sm') + '删除键</button></div>';
+  return h;
+}
+
+/* ================= 行编辑（SQL） ================= */
+function rowKeyOf(t, r) {
+  const key = {};
+  for (const pk of t.pkCols) key[pk] = t.rows[r][t.colIdx[pk]];
+  return key;
+}
+function beginEdit(t, r, c) {
+  if (!t.editable) return toast('表无主键，不可编辑（仅浏览）');
+  t.editing = { r, c };
+  renderTab();
+  const inp = document.querySelector('input.cell-edit');
+  if (inp) { inp.focus(); inp.select(); }
+}
+async function commitEdit(t, r, c, val) {
+  const col = t.columns[c];
+  const oldV = t.rows[r][c];
+  const norm = (oldV === null && val === '') ? null : val;
+  if (norm === oldV) { t.editing = null; renderTab(); return; }
+  if (!t.pkCols.length) { toast('表无主键，不可编辑'); t.editing = null; renderTab(); return; }
+  const res = await API('/connections/' + encodeURIComponent(t.conn) + '/databases/' + encodeURIComponent(t.db) + '/tables/' + encodeURIComponent(t.table) + '/rows', 'PUT',
+    { key: rowKeyOf(t, r), values: { [col]: norm } });
+  if (res.error) {
+    toast('保存失败: ' + res.error);
+    const inp = document.querySelector('input.cell-edit');
+    if (inp) { inp.focus(); inp.select(); }
+    return;
+  }
+  t.rows[r][c] = norm;
+  t.editing = null;
+  renderTab();
+  toast('已保存');
+}
+
+function openAddRowModal() {
+  const t = activeTab();
+  if (!t || t.kind !== 'table' || t.view !== 'data') return;
+  if (!t.schema) return toast('表结构加载中，请稍候');
+  const cols = t.schema.columns || [];
+  if (!cols.length) return toast('没有可插入的列');
+  $('#rowTitle').textContent = '新增行 · ' + t.table;
+  $('#rowFields').innerHTML = cols.map((c, i) => {
+    const extra = (c.extra || '').toLowerCase();
+    const isAuto = extra.includes('auto_increment') || extra.includes('identity');
+    const isPri = c.key === 'PRI';
+    return '<div class="rowfld" data-fld="' + esc(c.name) + '">' +
+      '<label>' + esc(c.name) + (isPri ? ' <span class="ip-badge">PK</span>' : '') + '<span class="t">' + esc(c.type) + '</span></label>' +
+      '<label class="nullck"><input type="checkbox" data-null="' + i + '"> NULL</label>' +
+      '<input type="text" data-val="' + i + '" placeholder="' + esc(isAuto ? '自动增长' : (c.default === null || c.default === undefined ? '' : c.default)) + '" ' + (isAuto ? 'disabled' : '') + '>' +
+      '</div>';
+  }).join('');
+  $('#rowFields')._meta = { t, cols };
+  openModal('rowMask');
+}
+async function insertRow() {
+  const meta = $('#rowFields')._meta;
+  if (!meta) return;
+  const { t, cols } = meta;
+  const values = {};
+  let missingPk = false;
+  cols.forEach((c, i) => {
+    const extra = (c.extra || '').toLowerCase();
+    if (extra.includes('auto_increment') || extra.includes('identity')) return;
+    const isNull = document.querySelector('[data-null="' + i + '"]').checked;
+    const raw = document.querySelector('[data-val="' + i + '"]').value;
+    if (isNull) { values[c.name] = null; return; }
+    if (raw === '') {
+      if (c.key === 'PRI') missingPk = true;
+      return;
+    }
+    values[c.name] = raw;
+  });
+  if (missingPk) return toast('主键列为必填（该列非自增）');
+  if (!Object.keys(values).length) return toast('请至少填写一列');
+  const res = await API('/connections/' + encodeURIComponent(t.conn) + '/databases/' + encodeURIComponent(t.db) + '/tables/' + encodeURIComponent(t.table) + '/rows', 'POST', { values });
+  if (res.error) return toast(res.error);
+  closeModal('rowMask');
+  toast('已插入');
+  loadRows(t);
+}
+async function deleteSelectedRow() {
+  const t = activeTab();
+  if (!t || t.kind !== 'table' || t.view !== 'data') return;
+  if (t.selRow < 0 || !t.rows[t.selRow]) return toast('请先点击行号选中一行');
+  if (!t.editable) return toast('表无主键，不可编辑');
+  confirmDialog('删除行', '确定删除选中的行？此操作立即生效且不可恢复。', async () => {
+    const res = await API('/connections/' + encodeURIComponent(t.conn) + '/databases/' + encodeURIComponent(t.db) + '/tables/' + encodeURIComponent(t.table) + '/rows', 'DELETE', { key: rowKeyOf(t, t.selRow) });
+    if (res.error) return toast(res.error);
+    toast('已删除（影响 ' + (res.affected === null || res.affected === undefined ? '?' : res.affected) + ' 行）');
+    loadRows(t);
+  });
+}
+
+/* ================= 文档编辑（Mongo） ================= */
+function openDocEditor(t, r) {
+  S.docCtx = { t, row: r };
+  if (r === undefined || r < 0) {
+    $('#jsonTitle').textContent = '新增文档 · ' + t.coll;
+    $('#jsonText').value = '{\n  \n}';
+  } else {
+    if (!t.raw[r]) return toast('文档内容未加载');
+    $('#jsonTitle').textContent = '编辑文档 · ' + t.coll;
+    let text = t.raw[r];
+    try { text = JSON.stringify(JSON.parse(text), null, 2); } catch (e) { /* 保持原始 */ }
+    $('#jsonText').value = text;
+  }
+  openModal('jsonMask');
+}
+async function saveDoc() {
+  const ctx = S.docCtx;
+  if (!ctx) return;
+  let doc;
+  try { doc = JSON.parse($('#jsonText').value); }
+  catch (e) { return toast('JSON 解析失败: ' + e.message); }
+  if (typeof doc !== 'object' || doc === null || Array.isArray(doc)) return toast('文档必须是 JSON 对象');
+  const t = ctx.t;
+  const path = '/connections/' + encodeURIComponent(t.conn) + '/databases/' + encodeURIComponent(t.db) + '/tables/' + encodeURIComponent(t.coll) + '/rows';
+  if (ctx.row < 0) {
+    const res = await API(path, 'POST', { values: doc });
+    if (res.error) return toast(res.error);
+    toast('已插入文档');
+  } else {
+    if (doc._id === undefined) return toast('文档缺少 _id，无法按 _id 替换');
+    const res = await API(path, 'PUT', { key: { _id: doc._id }, values: doc });
+    if (res.error) return toast(res.error);
+    toast('已保存文档');
+  }
+  closeModal('jsonMask');
+  loadDoc(t);
+}
+function deleteDoc() {
+  const t = activeTab();
+  if (!t || t.kind !== 'doc') return;
+  if (t.selRow < 0 || !t.raw[t.selRow]) return toast('请先点击行号选中一篇文档');
+  let doc;
+  try { doc = JSON.parse(t.raw[t.selRow]); } catch (e) { return toast('文档解析失败'); }
+  if (doc._id === undefined) return toast('文档缺少 _id');
+  confirmDialog('删除文档', '确定删除 _id = ' + JSON.stringify(doc._id) + ' 的文档？', async () => {
+    const res = await API('/connections/' + encodeURIComponent(t.conn) + '/databases/' + encodeURIComponent(t.db) + '/tables/' + encodeURIComponent(t.coll) + '/rows', 'DELETE', { key: { _id: doc._id } });
+    if (res.error) return toast(res.error);
+    toast('已删除 ' + (res.affected || 0) + ' 篇');
+    loadDoc(t);
+  });
+}
+
+/* ================= 表 / 库操作 ================= */
+async function truncateTable(conn, db, table) {
+  const kind = connKind(conn);
+  confirmDialog(kind === 'mongodb' ? '清空集合' : '清空表', '确定清空 ' + db + '.' + table + ' 的全部数据？', async () => {
+    const res = await API('/connections/' + encodeURIComponent(conn) + '/databases/' + encodeURIComponent(db) + '/tables/' + encodeURIComponent(table) + '/truncate', 'POST', {});
+    if (res.error) return toast(res.error);
+    toast('已清空');
+    const t = S.tabs.find(x => (x.kind === 'table' || x.kind === 'doc') && x.conn === conn && x.db === db && (x.table || x.coll) === table);
+    if (t) t.kind === 'table' ? loadRows(t) : loadDoc(t);
+  });
+}
+async function dropTable(conn, db, table) {
+  const kind = connKind(conn);
+  confirmDialog(kind === 'mongodb' ? '删除集合' : '删除表', '确定删除 ' + db + '.' + table + '？此操作不可恢复。', async () => {
+    const res = await API('/connections/' + encodeURIComponent(conn) + '/databases/' + encodeURIComponent(db) + '/tables/' + encodeURIComponent(table) + '/drop', 'POST', {});
+    if (res.error) return toast(res.error);
+    toast('已删除');
+    for (const t of S.tabs.filter(x => (x.kind === 'table' || x.kind === 'doc') && x.conn === conn && x.db === db && (x.table || x.coll) === table).map(x => x.id)) closeTab(t);
+    refreshTree();
+  });
+}
+async function dropDatabase(conn, db) {
+  confirmDialog('删除数据库', '确定删除数据库 ' + db + '？其中的全部数据将不可恢复。', async () => {
+    const res = await API('/connections/' + encodeURIComponent(conn) + '/databases/' + encodeURIComponent(db), 'DELETE');
+    if (res.error) return toast(res.error);
+    toast('已删除数据库');
+    for (const t of S.tabs.filter(x => x.conn === conn && x.db === db).map(x => x.id)) closeTab(t);
+    S.sel = { type: 'conn', conn };
+    refreshTree();
+  });
+}
+async function deleteConnection(id) {
+  confirmDialog('删除连接', '确定删除连接 ' + connName(id) + '？仅删除本面板的配置，不影响数据库本身。', async () => {
+    const res = await API('/connections/' + encodeURIComponent(id), 'DELETE');
+    if (res.error) return toast(res.error);
+    toast('已删除连接');
+    for (const t of S.tabs.filter(x => x.conn === id).map(x => x.id)) closeTab(t);
+    delete S.tree[id];
+    S.sel = null;
+    await loadConns();
+    renderTree(); renderTab();
+  });
+}
+
+/* ================= 连接表单 ================= */
+function fillTypeOptions() {
+  $('#c_type').innerHTML = Object.keys(TYPES).map(k => '<option value="' + k + '">' + TYPES[k].label + '</option>').join('');
+}
+function syncConnForm(type) {
+  const t = TYPES[type] || TYPES.mysql;
+  const sqlite = !!t.file;
+  const kvOrDoc = type === 'redis' || type === 'mongodb';
+  $('#fldHost').style.display = sqlite ? 'none' : '';
+  $('#fldPort').style.display = sqlite ? 'none' : '';
+  $('#fldUser').style.display = sqlite ? 'none' : '';
+  $('#fldPass').style.display = sqlite ? 'none' : '';
+  $('#fldPath').style.display = sqlite ? '' : 'none';
+  $('#fldDb').style.display = sqlite ? 'none' : '';
+  $('#c_port').placeholder = t.port || '端口';
+  if (!sqlite && $('#c_port').value === '' && t.port) $('#c_port').value = t.port;
+  const labels = {
+    mysql: '默认数据库（可选，留空显示全部库）',
+    postgres: '默认数据库（可选，留空用连接默认）',
+    sqlserver: '默认数据库（可选）',
+    oracle: '服务名 / SID（必填）',
+    redis: '默认 DB 序号（如 0）',
+    mongodb: '认证库 authSource（默认 admin）',
+  };
+  $('#lbDb').textContent = labels[type] || '默认数据库（可选）';
+  const ph = {
+    mysql: '可选',
+    postgres: '可选',
+    sqlserver: '可选',
+    oracle: 'ORCLPDB1',
+    redis: '0',
+    mongodb: 'admin',
+  };
+  $('#c_database').placeholder = ph[type] || '';
+  $('#c_host').placeholder = type === 'sqlite' ? '' : '127.0.0.1';
+  $('#c_user').placeholder = kvOrDoc ? '（可选）' : 'root';
+}
+
+function openConnModal(c) {
+  S.editingConn = c ? c.id : null;
+  fillTypeOptions();
+  const type = c ? (c.type || 'mysql') : 'mysql';
+  $('#c_type').value = type;
+  $('#c_type').disabled = !!c;
+  $('#connTitle').textContent = c ? '编辑连接 · ' + (c.name || c.id) : '新建连接';
+  $('#c_id').value = c ? c.id : '';
+  $('#c_id').disabled = !!c;
+  $('#c_name').value = c ? (c.name || '') : '';
+  $('#c_host').value = c ? (c.host || '') : '';
+  $('#c_port').value = c ? (c.port || '') : (TYPES[type] ? TYPES[type].port : '');
+  $('#c_user').value = c ? (c.user || '') : '';
+  $('#c_pass').value = '';
+  $('#c_database').value = c ? (c.database || '') : (type === 'redis' ? '0' : '');
+  $('#c_path').value = c ? (c.path || '') : '';
+  $('#c_comment').value = c ? (c.comment || '') : '';
+  $('#testResult').textContent = '';
+  syncConnForm(type);
+  openModal('connMask');
+}
+
+function formConn() {
+  const type = $('#c_type').value;
+  return {
+    id: $('#c_id').value.trim().toLowerCase(),
+    name: $('#c_name').value.trim(),
+    type,
+    host: $('#c_host').value.trim(),
+    port: $('#c_port').value.trim(),
+    user: $('#c_user').value.trim(),
+    password: $('#c_pass').value,
+    database: $('#c_database').value.trim(),
+    path: $('#c_path').value.trim(),
+    comment: $('#c_comment').value.trim(),
+  };
+}
+
+async function testConn() {
+  const c = formConn();
+  const out = $('#testResult');
+  out.textContent = '测试中…'; out.style.color = 'var(--dim)';
+  let res;
+  if (S.editingConn && !c.password) res = await API('/connections/' + encodeURIComponent(S.editingConn) + '/test', 'POST');
+  else res = await API('/connections/test', 'POST', c);
+  if (res && res.ok) { out.textContent = '连接成功'; out.style.color = 'var(--green)'; }
+  else { out.textContent = '失败: ' + ((res && res.error) || '未知错误'); out.style.color = 'var(--red)'; }
+}
+
+async function saveConn() {
+  const c = formConn();
+  if (!c.id || !/^[a-z0-9][a-z0-9_-]*$/.test(c.id)) return toast('标识须为小写字母/数字/短横线下划线');
+  if (!c.name) c.name = c.id;
+  if (c.type === 'sqlite') {
+    if (!c.path) return toast('请填写 SQLite 文件路径');
+  } else if (!c.host) return toast('请填写主机地址');
+  const res = await API('/connections', 'POST', c);
+  if (res.error) return toast(res.error);
+  closeModal('connMask');
+  toast('已保存连接');
+  await loadConns();
+  const st = S.tree[c.id] || (S.tree[c.id] = { expanded: false });
+  st.dbs = null; st.err = '';
+  renderTree(); renderTab();
+}
+
+/* ================= 建库 ================= */
+function openCreateDb() {
+  const cid = selectionConn();
+  if (!cid) return toast('请先选择连接');
+  if (!canCreateDb(cid)) return toast(typeOf(cid).label + ' 不支持在面板内建库');
+  $('#db_name').value = '';
+  $('#dbCharsetWrap').style.display = connKind(cid) === 'mysql' ? '' : 'none';
+  openModal('dbMask');
+}
+async function createDb() {
+  const cid = selectionConn();
+  if (!cid) return;
+  const name = $('#db_name').value.trim();
+  if (!name) return toast('请填写库名');
+  const res = await API('/connections/' + encodeURIComponent(cid) + '/databases', 'POST', { name, charset: $('#db_charset').value });
+  if (res.error) return toast(res.error);
+  closeModal('dbMask');
+  toast('已创建数据库');
+  const st = S.tree[cid];
+  if (st) { st.dbs = null; st.expanded = true; toggleConn(cid, true); }
+}
+
+/* ================= SQL 文件 ================= */
+function openSqlFileModal() {
+  const cid = selectionConn() || (activeTab() && activeTab().conn);
+  if (!cid) return toast('请先选择连接');
+  if (!typeOf(cid).sqlFile) return toast(typeOf(cid).label + ' 不支持 SQL 文件导入');
+  $('#sqlFileMask').dataset.conn = cid;
+  $('#sfTitle').textContent = '运行 SQL 文件 · ' + connName(cid);
+  $('#sfFileInfo').textContent = '';
+  $('#sfResult').style.display = 'none';
+  $('#sfMeta').textContent = '';
+  $('#sf_file').value = '';
+  $('#sfDrop').classList.remove('has');
+  const dbs = ((S.tree[cid] || {}).dbs || []).map(d => d.name);
+  $('#sf_db').innerHTML = '<option value="">（不指定）</option>' + dbs.map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('');
+  openModal('sqlFileMask');
+}
+
+async function readTextFile(file, enc) {
+  let buf = await file.arrayBuffer();
+  if (file.name.toLowerCase().endsWith('.gz')) {
+    buf = await new Response(new Blob([buf]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+  }
+  return new TextDecoder(enc || 'utf-8').decode(buf);
+}
+
+async function runSqlFile() {
+  const cid = $('#sqlFileMask').dataset.conn || selectionConn() || (activeTab() && activeTab().conn);
+  const file = $('#sf_file').files[0];
+  if (!cid) return toast('请先选择连接');
+  if (!file) return toast('请选择 SQL 文件');
+  const meta = $('#sfMeta');
+  meta.textContent = '读取文件…';
+  const text = await readTextFile(file, $('#sf_enc').value);
+  const db = $('#sf_db').value;
+  const cont = $('#sf_cont').checked ? 1 : 0;
+  meta.textContent = '执行中，共 ' + text.length + ' 字符…';
+  let res;
+  try {
+    const r = await fetch(BASE + '/connections/' + encodeURIComponent(cid) + '/sqlfile?db=' + encodeURIComponent(db) + '&cont=' + cont, {
+      method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text,
+    });
+    res = await r.json();
+  } catch (e) { meta.textContent = ''; return toast('上传失败: ' + e.message); }
+  meta.textContent = '';
+  if (res.error) { $('#sfResult').style.display = 'block'; $('#sfResult').innerHTML = '<div class="eerr">' + esc(res.error) + '</div>'; return; }
+  $('#sfResult').style.display = 'block';
+  let h = '<div class="sum"><span>共 ' + res.total + ' 条</span><span style="color:var(--green)">成功 ' + res.executed + '</span>' +
+    '<span style="color:' + (res.failed ? 'var(--red)' : 'var(--dim)') + '">失败 ' + res.failed + '</span><span>耗时 ' + esc(res.elapsed || '') + '</span></div>';
+  if (res.stoppedEarly) h += '<div class="muted">已在首个错误处停止（可勾选「遇到错误继续执行」）</div>';
+  for (const e of (res.errors || [])) {
+    h += '<div class="eitem"><div class="estmt">#' + e.index + ' ' + esc(e.stmt) + '</div><div class="eerr">' + esc(e.error) + '</div></div>';
+  }
+  $('#sfResult').innerHTML = h;
+  toast(res.failed ? ('执行完成，失败 ' + res.failed + ' 条') : 'SQL 文件执行完成');
+  refreshTree();
+}
+
+/* ================= 查询执行 / 历史 ================= */
+function openHistoryItem(sql) {
+  const t = activeTab();
+  if (!t || t.kind !== 'query') return;
+  t.sqlText = sql;
+  renderTab();
+  const ta = $('#qtext'); if (ta) ta.focus();
+}
+
+/* ================= 交互 ================= */
+function openModal(id) { $('#' + id).classList.add('open'); }
+function closeModal(id) { $('#' + id).classList.remove('open'); }
+function confirmDialog(title, body, fn) {
+  $('#cfTitle').textContent = title;
+  $('#cfBody').innerHTML = body;
+  S.confirmFn = fn;
+  openModal('confirmMask');
+}
+
+async function handleAction(el) {
+  const a = el.dataset.action;
+  switch (a) {
+    case 'newconn': return openConnModal(null);
+    case 'edit-conn': {
+      const c = connOf(el.dataset.id);
+      return c ? openConnModal(c) : toast('连接不存在');
+    }
+    case 'del-conn': return deleteConnection(el.dataset.id);
+    case 'testconn': return testConn();
+    case 'saveconn': return saveConn();
+    case 'close-modal': return closeModal(el.dataset.modal);
+    case 'newdb': return openCreateDb();
+    case 'createdb': return createDb();
+    case 'insertrow': return insertRow();
+    case 'save-doc': return saveDoc();
+    case 'open-sqlfile': return openSqlFileModal();
+    case 'run-sqlfile': return runSqlFile();
+    case 'toggle-info': {
+      const on = $('#btnInfo').classList.toggle('on');
+      localStorage.setItem('zjp_db_info', on ? '1' : '0');
+      if (isMobile()) {
+        $('#infopanel').classList.toggle('m-open', on);
+        syncBackdrop();
+      }
+      renderInfoPanel();
+      return;
+    }
+    case 'opentable': {
+      const s = S.sel;
+      if (s && s.type === 'table') return openTableTab(s.conn, s.db, s.table);
+      if (s && s.type === 'doc') return openDocTab(s.conn, s.db, s.coll);
+      return toast('请先在左侧选择表或集合');
+    }
+    case 'newquery': {
+      const cid = selectionConn() || (activeTab() && activeTab().conn);
+      if (!cid) return toast('请先选择连接');
+      const db = (S.sel && (S.sel.db || '')) || '';
+      return openQueryTab(cid, db);
+    }
+    case 'refresh': return refreshCurrent();
+    case 'delnode': return deleteSelection();
+    case 'add-doc': return openDocEditor(activeTab(), -1);
+    case 'add-row': {
+      const t = activeTab();
+      if (t && t.kind === 'doc') return openDocEditor(t, -1);
+      return openAddRowModal();
+    }
+    case 'del-row': {
+      const t = activeTab();
+      if (t && t.kind === 'doc') return deleteDoc();
+      return deleteSelectedRow();
+    }
+    case 'reload-data': {
+      const t = activeTab();
+      if (t && t.kind === 'doc') return loadDoc(t);
+      if (t && t.kind === 'table') return loadRows(t);
+      return;
+    }
+    case 'load-more': {
+      const t = activeTab();
+      if (t && t.kind === 'keys') loadKeys(t, true);
+      return;
+    }
+    case 'redis-search': {
+      const t = activeTab();
+      if (t && t.kind === 'keys') { t.cursor = '0'; loadKeys(t, false); }
+      return;
+    }
+    case 'save-rval': {
+      const t = activeTab(); if (!t || t.kind !== 'keys' || !t.detail) return;
+      const res = await API('/redis/key', 'POST', { conn: t.conn, db: t.db, key: t.detail.key, value: $('#redisVal').value });
+      if (res.error) return toast(res.error);
+      toast('已保存'); openKey(t, t.detail.key);
+      return;
+    }
+    case 'save-ttl': {
+      const t = activeTab(); if (!t || t.kind !== 'keys' || !t.detail) return;
+      const ttl = parseInt($('#redisTTL').value, 10);
+      if (isNaN(ttl) || ttl < 0) return toast('TTL 须为非负整数');
+      const res = await API('/redis/key/ttl', 'POST', { conn: t.conn, db: t.db, key: t.detail.key, ttl });
+      if (res.error) return toast(res.error);
+      toast(ttl === 0 ? '已设为永久' : ('已设置 TTL ' + ttl + ' 秒'));
+      openKey(t, t.detail.key);
+      return;
+    }
+    case 'del-key': {
+      const t = activeTab(); if (!t || t.kind !== 'keys' || !t.detail) return;
+      const key = t.detail.key;
+      confirmDialog('删除键', '确定删除键 <b>' + esc(key) + '</b>？', async () => {
+        const res = await API('/redis/key', 'DELETE', { conn: t.conn, db: t.db, key });
+        if (res.error) return toast(res.error);
+        toast('已删除'); t.detail = null;
+        loadKeys(t, false);
+      });
+      return;
+    }
+    case 'run-query': {
+      const t = activeTab(); if (t && t.kind === 'query') runQuery(t);
+      return;
+    }
+    case 'toggle-hist': {
+      const t = activeTab(); if (!t) return;
+      t.histOpen = !t.histOpen; renderTab();
+      return;
+    }
+    case 'copy-sql': {
+      const t = activeTab();
+      const text = (t && t.kind === 'query') ? t.sqlText : (t && t.sqlPreview) ? t.sqlPreview : ($('#ddlText') ? $('#ddlText').textContent : '');
+      if (!text) return;
+      try { await navigator.clipboard.writeText(text); toast('已复制'); }
+      catch (e) { toast('复制失败'); }
+      return;
+    }
+  }
+}
+
+async function refreshCurrent() {
+  const t = activeTab();
+  if (t && t.kind === 'table') { await loadSchema(t); return loadRows(t); }
+  if (t && t.kind === 'doc') { await loadDocSchema(t); return loadDoc(t); }
+  if (t && t.kind === 'keys') { t.cursor = '0'; return loadKeys(t, false); }
+  return refreshTree();
+}
+
+function deleteSelection() {
+  const s = S.sel;
+  if (!s) return toast('请先选择对象');
+  if (s.type === 'conn') return deleteConnection(s.conn);
+  if (s.type === 'db') { if (!dbDeletable(s.conn)) return toast('该数据库类型不支持在面板内删库'); return dropDatabase(s.conn, s.db); }
+  if (s.type === 'table') return dropTable(s.conn, s.db, s.table);
+  if (s.type === 'doc') return dropTable(s.conn, s.db, s.coll);
+  return toast('该对象不可删除');
+}
+
+document.addEventListener('click', async (e) => {
+  if (e.target.closest('#ctxmenu')) return;
+  const act = e.target.closest('[data-action]');
+  if (act) { e.preventDefault(); await handleAction(act); return; }
+  const nodeAct = e.target.closest('[data-act]');
+  if (nodeAct) {
+    e.stopPropagation();
+    const id = nodeAct.dataset.id;
+    const parts = id.split('|');
+    const kind = nodeAct.dataset.act;
+    if (kind === 'edit-conn') return openConnModal(connOf(parts[0]));
+    if (kind === 'del-conn') return deleteConnection(parts[0]);
+    if (kind === 'truncate') return truncateTable(parts[0], parts[1], parts[2]);
+    if (kind === 'drop-table') return dropTable(parts[0], parts[1], parts[2]);
+    if (kind === 'drop-db') return dropDatabase(parts[0], parts[1]);
+    return;
+  }
+  const caret = e.target.closest('[data-caret]');
+  if (caret) {
+    const kind = caret.dataset.caret;
+    if (kind === 'conn') return toggleConn(caret.dataset.conn);
+    if (kind === 'db') return toggleDb(caret.dataset.conn, caret.dataset.db);
+    return;
+  }
+  const close = e.target.closest('[data-close]');
+  if (close) { e.stopPropagation(); return closeTab(close.dataset.close); }
+  const tab = e.target.closest('[data-tabid]');
+  if (tab) return activateTab(tab.dataset.tabid);
+  const node = e.target.closest('[data-node]');
+  if (node) {
+    const k = node.dataset.node;
+    const conn = node.dataset.conn;
+    if (k === 'conn') {
+      S.sel = { type: 'conn', conn };
+      renderTree(); renderToolbar();
+      return toggleConn(conn);
+    }
+    if (k === 'db') {
+      S.sel = { type: 'db', conn, db: node.dataset.db };
+      renderTree(); renderToolbar();
+      return toggleDb(conn, node.dataset.db);
+    }
+    if (k === 'redisdb') {
+      S.sel = { type: 'redisdb', conn, db: node.dataset.db };
+      renderTree(); renderToolbar();
+      return openKeysTab(conn, node.dataset.db);
+    }
+    if (k === 'table') {
+      return openTableTab(conn, node.dataset.db, node.dataset.table);
+    }
+    if (k === 'doc') {
+      return openDocTab(conn, node.dataset.db, node.dataset.table);
+    }
+  }
+  const view = e.target.closest('[data-view]');
+  if (view) {
+    const t = activeTab(); if (!t) return;
+    t.view = view.dataset.view;
+    renderTab();
+    return;
+  }
+  const sort = e.target.closest('[data-sort]');
+  if (sort) {
+    const t = activeTab();
+    if (!t || t.kind !== 'table') return;
+    const col = sort.dataset.sort;
+    t.dir = (t.order === col && t.dir === 'ASC') ? 'DESC' : 'ASC';
+    t.order = col; t.page = 1;
+    return loadRows(t);
+  }
+  const page = e.target.closest('[data-page]');
+  if (page) {
+    const t = activeTab(); if (!t) return;
+    const pages = Math.max(1, Math.ceil((t.total || 0) / t.size));
+    const p = page.dataset.page;
+    if (p === 'first') t.page = 1;
+    else if (p === 'prev') t.page = Math.max(1, t.page - 1);
+    else if (p === 'next') t.page = Math.min(pages, t.page + 1);
+    else t.page = pages;
+    return t.kind === 'doc' ? loadDoc(t) : loadRows(t);
+  }
+  const key = e.target.closest('[data-redis-key]');
+  if (key) {
+    const t = activeTab(); if (t && t.kind === 'keys') return openKey(t, key.dataset.redisKey);
+    return;
+  }
+  const rownum = e.target.closest('[data-rownum]');
+  if (rownum) {
+    const t = activeTab(); if (!t) return;
+    if (t.kind === 'doc' && t.selRow === +rownum.dataset.rownum) return openDocEditor(t, +rownum.dataset.rownum);
+    t.selRow = +rownum.dataset.rownum; t.selCell = null;
+    renderTab();
+    return;
+  }
+  const cell = e.target.closest('[data-cell]');
+  if (cell && !e.target.classList.contains('cell-edit')) {
+    const t = activeTab();
+    if (!t || (t.kind !== 'table' && t.kind !== 'doc')) return;
+    const pair = cell.dataset.cell.split(',').map(Number);
+    if (t.kind === 'table' && t.selCell && t.selCell.r === pair[0] && t.selCell.c === pair[1]) return beginEdit(t, pair[0], pair[1]);
+    t.selRow = pair[0]; t.selCell = { r: pair[0], c: pair[1] };
+    renderTab();
+    return;
+  }
+  const hist = e.target.closest('[data-hist-sql]');
+  if (hist) return openHistoryItem(hist.dataset.histSql);
+});
+
+document.addEventListener('dblclick', (e) => {
+  const t = activeTab();
+  if (!t) return;
+  const rownum = e.target.closest('[data-rownum]');
+  if (rownum && t.kind === 'doc') return openDocEditor(t, +rownum.dataset.rownum);
+  const cell = e.target.closest('[data-cell]');
+  if (!cell) return;
+  const pair = cell.dataset.cell.split(',').map(Number);
+  if (t.kind === 'table') beginEdit(t, pair[0], pair[1]);
+  else if (t.kind === 'doc') openDocEditor(t, pair[0]);
+});
+
+document.addEventListener('change', (e) => {
+  if (e.target.id === 'c_type') {
+    const oldPort = $('#c_port').value;
+    syncConnForm(e.target.value);
+    const t = TYPES[e.target.value];
+    if (t && (!oldPort || Object.values(TYPES).some(x => x.port === oldPort))) $('#c_port').value = t.port || '';
+  }
+  if (e.target.id === 'rbSize') {
+    const t = activeTab(); if (!t) return;
+    t.size = +e.target.value; t.page = 1;
+    localStorage.setItem('zjp_db_pagesize', String(t.size));
+    t.kind === 'doc' ? loadDoc(t) : loadRows(t);
+  }
+  if (e.target.id === 'sf_file') {
+    const f = e.target.files[0];
+    if (f) {
+      $('#sfDrop').classList.add('has');
+      $('#sfFileInfo').textContent = f.name + ' · ' + fmtSize(f.size);
+    }
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  const t = activeTab();
+  if (e.target.id === 'qtext' && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault(); if (t && t.kind === 'query') runQuery(t);
+    return;
+  }
+  if (e.target.id === 'filterInput' && e.key === 'Enter') {
+    if (!t || t.kind !== 'table') return;
+    t.where = e.target.value.trim(); t.page = 1; loadRows(t);
+    return;
+  }
+  if (e.target.id === 'docFilter' && e.key === 'Enter') {
+    if (!t || t.kind !== 'doc') return;
+    t.filter = e.target.value.trim(); t.page = 1; loadDoc(t);
+    return;
+  }
+  if (e.target.id === 'redisPattern' && e.key === 'Enter') {
+    if (!t || t.kind !== 'keys') return;
+    t.pattern = e.target.value.trim() || '*'; t.cursor = '0'; loadKeys(t, false);
+    return;
+  }
+  if (e.key === 'Escape') { closeModal('connMask'); closeModal('dbMask'); closeModal('rowMask'); closeModal('jsonMask'); closeModal('confirmMask'); closeModal('sqlFileMask'); }
+});
+
+document.addEventListener('input', (e) => {
+  const t = activeTab();
+  if (!t) return;
+  if (e.target.id === 'qtext') t.sqlText = e.target.value;
+  else if (e.target.id === 'filterInput' && t.kind === 'table') t.where = e.target.value;
+  else if (e.target.id === 'docFilter' && t.kind === 'doc') t.filter = e.target.value;
+  else if (e.target.id === 'redisPattern' && t.kind === 'keys') t.pattern = e.target.value;
+});
+
+document.addEventListener('change', (e) => {
+  if (e.target.classList.contains('cell-edit')) {
+    const t = activeTab();
+    if (!t || t.kind !== 'table') return;
+    commitEdit(t, +e.target.dataset.r, +e.target.dataset.c, e.target.value);
+  }
+});
+
+$('#cfOk').addEventListener('click', async () => {
+  const fn = S.confirmFn;
+  S.confirmFn = null;
+  closeModal('confirmMask');
+  if (fn) await fn();
+});
+
+$$('.modal-mask').forEach(m => {
+  m.addEventListener('mousedown', (e) => { if (e.target === m) m.classList.remove('open'); });
+});
+
+/* 左栏拖拽调宽 */
+(function initTreeResizer() {
+  const sidebar = $('#sidebar'), resizer = $('#vresizer');
+  const saved = +localStorage.getItem('zjp_db_tree_w') || 0;
+  if (saved >= 160 && saved <= 560) sidebar.style.setProperty('--tree-w', saved + 'px');
+  let dragging = false, startX = 0, startW = 0;
+  resizer.addEventListener('pointerdown', (e) => {
+    dragging = true; startX = e.clientX;
+    startW = sidebar.getBoundingClientRect().width;
+    resizer.classList.add('dragging');
+    document.body.style.userSelect = 'none';
+    resizer.setPointerCapture(e.pointerId);
+  });
+  resizer.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const w = Math.min(560, Math.max(160, Math.round(startW + e.clientX - startX)));
+    sidebar.style.setProperty('--tree-w', w + 'px');
+    sidebar.style.width = w + 'px';
+  });
+  const done = () => {
+    if (!dragging) return;
+    dragging = false;
+    resizer.classList.remove('dragging');
+    document.body.style.userSelect = '';
+    const w = Math.round(sidebar.getBoundingClientRect().width);
+    sidebar.style.width = '';
+    localStorage.setItem('zjp_db_tree_w', String(w));
+  };
+  resizer.addEventListener('pointerup', done);
+  resizer.addEventListener('pointercancel', done);
+})();
+
+/* 右键菜单 */
+document.addEventListener('contextmenu', (e) => {
+  const node = e.target.closest('[data-node]');
+  const menu = $('#ctxmenu');
+  if (!node) { menu.classList.remove('open'); return; }
+  e.preventDefault();
+  const k = node.dataset.node, conn = node.dataset.conn, db = node.dataset.db, table = node.dataset.table;
+  let items = '';
+  if (k === 'conn') {
+    items = '<div class="ci" data-act="conn-query" data-id="' + esc(conn) + '">' + I('query', 'sm') + '新建查询</div>' +
+      '<div class="csep"></div><div class="ci" data-act="edit-conn" data-id="' + esc(conn) + '">' + I('pencil', 'sm') + '编辑连接</div>' +
+      '<div class="ci danger" data-act="del-conn" data-id="' + esc(conn) + '">' + I('trash', 'sm') + '删除连接</div>';
+  } else if (k === 'db') {
+    items = '<div class="ci" data-act="db-query" data-id="' + esc(conn + '|' + db) + '">' + I('query', 'sm') + '新建查询</div>' +
+      '<div class="ci" data-act="open-db" data-id="' + esc(conn + '|' + db) + '">' + I('refresh', 'sm') + '刷新表清单</div>' +
+      (dbDeletable(conn) ? '<div class="csep"></div><div class="ci danger" data-act="drop-db" data-id="' + esc(conn + '|' + db) + '">' + I('trash', 'sm') + '删除数据库</div>' : '');
+  } else if (k === 'table' || k === 'doc') {
+    items = '<div class="ci" data-act="open-table" data-id="' + esc(conn + '|' + db + '|' + table) + '">' + I('table', 'sm') + '打开</div>' +
+      '<div class="ci danger" data-act="truncate" data-id="' + esc(conn + '|' + db + '|' + table) + '">' + I('eraser', 'sm') + '清空</div>' +
+      '<div class="ci danger" data-act="drop-table" data-id="' + esc(conn + '|' + db + '|' + table) + '">' + I('trash', 'sm') + '删除</div>';
+  } else if (k === 'redisdb') {
+    items = '<div class="ci" data-act="open-keys" data-id="' + esc(conn + '|' + db) + '">' + I('key', 'sm') + '打开键空间</div>';
+  } else return;
+  menu.innerHTML = items;
+  menu.classList.add('open');
+  const w = menu.offsetWidth, h = menu.offsetHeight;
+  menu.style.left = Math.min(e.clientX, window.innerWidth - w - 8) + 'px';
+  menu.style.top = Math.min(e.clientY, window.innerHeight - h - 8) + 'px';
+});
+
+document.addEventListener('click', (e) => {
+  const mi = e.target.closest('#ctxmenu .ci');
+  if (!mi) { $('#ctxmenu').classList.remove('open'); return; }
+  $('#ctxmenu').classList.remove('open');
+  const a = mi.dataset.act, parts = (mi.dataset.id || '').split('|');
+  if (a === 'conn-query') openQueryTab(parts[0], '');
+  else if (a === 'db-query') openQueryTab(parts[0], parts[1]);
+  else if (a === 'open-db') toggleDb(parts[0], parts[1], true);
+  else if (a === 'open-table') (S.conns.find(c => c.id === parts[0] && c.type === 'mongodb') ? openDocTab(parts[0], parts[1], parts[2]) : openTableTab(parts[0], parts[1], parts[2]));
+  else if (a === 'open-keys') openKeysTab(parts[0], parts[1]);
+  else if (a === 'edit-conn') openConnModal(connOf(parts[0]));
+  else if (a === 'del-conn') deleteConnection(parts[0]);
+  else if (a === 'truncate') truncateTable(parts[0], parts[1], parts[2]);
+  else if (a === 'drop-table') dropTable(parts[0], parts[1], parts[2]);
+  else if (a === 'drop-db') dropDatabase(parts[0], parts[1]);
+});
+
+/* ================= 启动 ================= */
+async function loadConns() {
+  const r = await api('/connections');
+  S.conns = Array.isArray(r) ? r : [];
+}
+async function boot() {
+  fillTypeOptions();
+  if (localStorage.getItem('zjp_db_info') !== '0' && !isMobile()) $('#btnInfo').classList.add('on');
+  $('#btnInfo').innerHTML = I('info');
+  $('#tbIcon').innerHTML = I('db');
+  await loadConns();
+  renderTree();
+  renderTab();
+}
+boot();
+
+</script>
+</body>
+</html>

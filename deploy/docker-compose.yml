@@ -5,7 +5,7 @@
 #   下载本文件与 update.sh 放到此目录，然后 docker compose up -d
 #
 # 应用目录映射：默认 /opt:/opt（宿主机 /opt ↔ 容器 /opt，容器内路径=宿主机路径）
-#   在面板「应用 → 导入 docker-compose 应用」中选择 /opt 下的应用目录导入即可。
+#   在面板「应用 → 通过 docker-compose.yml 文件导入」中选择 /opt 下的应用目录导入即可。
 #   如需导入其他宿主机目录（如 /srv/apps），在 volumes 中加一行 "- /srv/apps:/srv/apps"
 #   后执行 ./update.sh 重建容器。
 services:

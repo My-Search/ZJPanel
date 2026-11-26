@@ -10,8 +10,9 @@ import (
 	"github.com/gin-gonic/gin"
 
 	"zjpanel/backend/internal/buildinfo"
-	"zjpanel/backend/internal/model"
+	"zjpanel/backend/internal/logmap"
 	"zjpanel/backend/internal/mcp"
+	"zjpanel/backend/internal/model"
 )
 
 // ===================== 指标 =====================
@@ -34,12 +35,15 @@ func (s *Server) registerLogmapRoutes() {
 		minutes := intParam(c.DefaultQuery("minutes", "60"))
 		recent := intParam(c.DefaultQuery("recent", "100"))
 		withPaths := c.Query("paths") == "1" // 站点请求树用：携带站点内路径明细
-		c.JSON(http.StatusOK, s.Logmap.Summary(minutes, recent, withPaths))
+		detail := c.Query("detail") == "1"   // 悬停明细用：recent 条目携带 UA/Referer
+		c.JSON(http.StatusOK, s.logmapSummary(minutes, recent, withPaths, detail))
 	})
 	// SSE 实时请求流：每个请求一条 entry 事件（即时推送，无批量聚合），
 	// 外加 10s 一帧聚合摘要。Cookie 鉴权对 EventSource 天然可用（同源自动携带）。
+	// detail=1：条目携带 UA/Referer（请求地图悬停明细）；默认剔除，摘要不背明细流量。
 	g.GET("/stream", func(c *gin.Context) {
 		minutes := intParam(c.DefaultQuery("minutes", "60"))
+		detail := c.Query("detail") == "1"
 		w := c.Writer
 		w.Header().Set("Content-Type", "text/event-stream")
 		w.Header().Set("Cache-Control", "no-cache")
@@ -50,10 +54,10 @@ func (s *Server) registerLogmapRoutes() {
 		if !ok {
 			return
 		}
-		entries, cancel := s.Logmap.Subscribe()
+		entries, cancel := s.Logmap.SubscribeDetail(detail)
 		defer cancel()
 		// 连接建立即推一帧摘要，前端不必等首个 10s 周期
-		writeSSE(w, "summary", s.Logmap.Summary(minutes, 100, false))
+		writeSSE(w, "summary", s.logmapSummary(minutes, 100, false, detail))
 		flusher.Flush()
 		heartbeat := time.NewTicker(15 * time.Second)
 		summary := time.NewTicker(10 * time.Second)
@@ -70,7 +74,7 @@ func (s *Server) registerLogmapRoutes() {
 				writeSSE(w, "entry", e)
 				flusher.Flush()
 			case <-summary.C:
-				writeSSE(w, "summary", s.Logmap.Summary(minutes, 100, false))
+				writeSSE(w, "summary", s.logmapSummary(minutes, 100, false, detail))
 				flusher.Flush()
 			case <-heartbeat.C:
 				_, _ = io.WriteString(w, ": ping\n\n")
@@ -152,6 +156,20 @@ func (s *Server) registerLogmapRoutes() {
 	})
 }
 
+// logmapSummary 统一摘要出口：detail=false 时剔除 recent 条目的 UA/Referer，
+// 让轮询/仪表盘连接保持轻量；地图页 detail=1 才付明细体积。
+func (s *Server) logmapSummary(minutes, recent int, withPaths, detail bool) *logmap.Summary {
+	sum := s.Logmap.Summary(minutes, recent, withPaths)
+	if detail {
+		return sum
+	}
+	for i := range sum.Recent {
+		sum.Recent[i].UA = ""
+		sum.Recent[i].Referer = ""
+	}
+	return sum
+}
+
 // ===================== 证书 =====================
 
 func (s *Server) registerCertRoutes() {
@@ -165,11 +183,11 @@ func (s *Server) registerCertRoutes() {
 	})
 	g.POST("/accounts", func(c *gin.Context) {
 		var req struct {
-			ID      uint   `json:"id"`
-			Email   string `json:"email"`
-			Type    string `json:"type"`
-			DirURL  string `json:"dirUrl"`
-			KeyPEM  string `json:"keyPem"`
+			ID     uint   `json:"id"`
+			Email  string `json:"email"`
+			Type   string `json:"type"`
+			DirURL string `json:"dirUrl"`
+			KeyPEM string `json:"keyPem"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -199,10 +217,10 @@ func (s *Server) registerCertRoutes() {
 	})
 	g.POST("/credentials", func(c *gin.Context) {
 		var req struct {
-			ID      uint            `json:"id"`
-			Name    string          `json:"name"`
-			Provider string         `json:"provider"`
-			Config  map[string]string `json:"config"`
+			ID       uint              `json:"id"`
+			Name     string            `json:"name"`
+			Provider string            `json:"provider"`
+			Config   map[string]string `json:"config"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -237,7 +255,12 @@ func (s *Server) registerCertRoutes() {
 				"challenge": t.Challenge, "acmeAccountId": t.AcmeAccountID,
 				"dnsCredentialId": t.DnsCredentialID, "renewDays": t.RenewDays,
 				"cronSpec": t.CronSpec, "enabled": t.Enabled,
-				"deployTargets": json.RawMessage(func() string { if t.DeployTargets == "" { return "[]" }; return t.DeployTargets }()),
+				"deployTargets": json.RawMessage(func() string {
+					if t.DeployTargets == "" {
+						return "[]"
+					}
+					return t.DeployTargets
+				}()),
 				"lastRunId": t.LastRunID, "updatedAt": t.UpdatedAt,
 			}
 			if info := s.Cert.LatestCert(t.ID); info != nil {
@@ -253,16 +276,16 @@ func (s *Server) registerCertRoutes() {
 	})
 	g.POST("/tasks", func(c *gin.Context) {
 		var req struct {
-			ID              uint                            `json:"id"`
-			Name            string                          `json:"name"`
-			Domains         []string                        `json:"domains"`
-			Challenge       string                          `json:"challenge"`
-			AcmeAccountID   uint                            `json:"acmeAccountId"`
-			DnsCredentialID *uint                           `json:"dnsCredentialId"`
-			RenewDays       int                             `json:"renewDays"`
-			CronSpec        string                          `json:"cronSpec"`
-			Enabled         bool                            `json:"enabled"`
-			DeployTargets   []map[string]any                `json:"deployTargets"`
+			ID              uint             `json:"id"`
+			Name            string           `json:"name"`
+			Domains         []string         `json:"domains"`
+			Challenge       string           `json:"challenge"`
+			AcmeAccountID   uint             `json:"acmeAccountId"`
+			DnsCredentialID *uint            `json:"dnsCredentialId"`
+			RenewDays       int              `json:"renewDays"`
+			CronSpec        string           `json:"cronSpec"`
+			Enabled         bool             `json:"enabled"`
+			DeployTargets   []map[string]any `json:"deployTargets"`
 		}
 		if err := c.ShouldBindJSON(&req); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -300,7 +323,9 @@ func (s *Server) registerCertRoutes() {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 	g.POST("/tasks/:id/run", func(c *gin.Context) {
-		var req struct{ Force bool `json:"force"` }
+		var req struct {
+			Force bool `json:"force"`
+		}
 		_ = c.ShouldBindJSON(&req)
 		// 异步执行：立即返回 runId，前端据此订阅实时日志
 		runID, err := s.Cert.StartTaskRun(idParam(c), req.Force)

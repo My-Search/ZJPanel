@@ -147,20 +147,20 @@ func migrateMySQLConns(dataDir string, box *pkg.SecretBox) int {
 	if err != nil {
 		return 0
 	}
-	var conns []map[string]any
+	var conns map[string]map[string]any
 	if err := json.Unmarshal(b, &conns); err != nil {
 		slog.Warn("凭据 v2 迁移跳过（connections.json 解析失败）", "err", err)
 		return 0
 	}
 	changed := false
-	for _, c := range conns {
+	for id, c := range conns {
 		pwd, _ := c["password"].(string)
 		if pwd == "" || strings.HasPrefix(pwd, "v2:") {
 			continue
 		}
 		plain, err := box.OpenCtx(pkg.CtxMySQLConnPwd, pwd)
 		if err != nil {
-			slog.Warn("凭据 v2 迁移跳过（解密失败）", "file", "mysqladmin/connections.json", "id", c["id"])
+			slog.Warn("凭据 v2 迁移跳过（解密失败）", "file", "mysqladmin/connections.json", "id", id)
 			continue
 		}
 		c["password"] = box.SealCtx(pkg.CtxMySQLConnPwd, plain)

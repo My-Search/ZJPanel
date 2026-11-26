@@ -403,10 +403,14 @@ func (s *Service) ensureSiteSSL(site *model.Site) {
 }
 
 func (s *Service) generateForSite(site *model.Site) string {
+	var content string
 	if site.Type == "static" {
-		return s.GenerateStaticConf(site.Domain, site.Root, site.SSL)
+		content = s.GenerateStaticConf(site.Domain, site.Root, site.SSL)
+	} else {
+		content = s.GenerateProxyConf(site.Domain, site.Upstream, site.SSL)
 	}
-	return s.GenerateProxyConf(site.Domain, site.Upstream, site.SSL)
+	// 注入安全策略 include（国家/IP 封禁 + CC 限速由安全中心统一渲染，站点只引用）
+	return nginx.EnsureSecurityInclude(content, s.cfg.NginxPrefix)
 }
 
 // Update 修改站点：非高级模式重新生成 conf；高级模式仅更新元数据。

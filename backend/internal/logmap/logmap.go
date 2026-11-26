@@ -27,16 +27,20 @@ const maxMMDBBytes = 128 << 20 // GeoIP mmdb 最大允许 128MB
 // GeoIP 聚合国家/站点维度，环形窗口保存最近请求，SSE 逐条推送实时请求流。
 
 type Entry struct {
-	IP      string    `json:"ip"`
-	Country string    `json:"country"`
-	City    string    `json:"city,omitempty"` // 城市英文名（City 库有记录时；Country 库为空）
-	Lat     float64   `json:"lat,omitempty"`
-	Lon     float64   `json:"lon,omitempty"`
-	Site    string    `json:"site"`
-	Status  int       `json:"status"`
-	Bytes   uint64    `json:"bytes"`
-	Method  string    `json:"method"`
-	Path    string    `json:"path"`
+	IP      string  `json:"ip"`
+	Country string  `json:"country"`
+	City    string  `json:"city,omitempty"` // 城市英文名（City 库有记录时；Country 库为空）
+	Lat     float64 `json:"lat,omitempty"`
+	Lon     float64 `json:"lon,omitempty"`
+	Site    string  `json:"site"`
+	Status  int     `json:"status"`
+	Bytes   uint64  `json:"bytes"`
+	Method  string  `json:"method"`
+	Path    string  `json:"path"`
+	// UA/Referer 仅用于「悬停流向 → 请求详情」：SSE detail=1 的订阅者才下发，
+	// 普通摘要（仪表盘/轮询）剔除，避免每个连接都背负 UA 全长流量。
+	UA      string    `json:"ua,omitempty"`
+	Referer string    `json:"referer,omitempty"`
 	Time    time.Time `json:"time"`
 }
 
@@ -48,27 +52,27 @@ type CountryAgg struct {
 }
 
 type Summary struct {
-	Minutes   int              `json:"minutes"`
-	Total     int64            `json:"total"`
-	Bytes     uint64           `json:"bytes"`
-	Errors    int64            `json:"errors"`
-	Countries []CountryAgg     `json:"countries"`
-	Cities    []CityAgg        `json:"cities"` // 城市级聚合（City 库有数据时）
-	Sites     []SiteAgg        `json:"sites"`
-	Statuses  map[string]int64 `json:"statuses"`
-	Recent    []Entry          `json:"recent"`
-	GeoLoaded bool             `json:"geoLoaded"`
-	ServerLoc       *[2]float64 `json:"serverLoc,omitempty"` // 服务器位置 [经度, 纬度]（出口 IP 反查；City 库/在线反查，见 serverloc.go）
-	ServerLocSource string      `json:"serverLocSource"`     // 位置来源：manual/online/geoip；空 = 未探测到（前端据此清缓存隐藏红点）
-	ServerLocCity   string      `json:"serverLocCity,omitempty"` // 城市名（geoip/在线反查带出时）
+	Minutes         int              `json:"minutes"`
+	Total           int64            `json:"total"`
+	Bytes           uint64           `json:"bytes"`
+	Errors          int64            `json:"errors"`
+	Countries       []CountryAgg     `json:"countries"`
+	Cities          []CityAgg        `json:"cities"` // 城市级聚合（City 库有数据时）
+	Sites           []SiteAgg        `json:"sites"`
+	Statuses        map[string]int64 `json:"statuses"`
+	Recent          []Entry          `json:"recent"`
+	GeoLoaded       bool             `json:"geoLoaded"`
+	ServerLoc       *[2]float64      `json:"serverLoc,omitempty"`     // 服务器位置 [经度, 纬度]（出口 IP 反查；City 库/在线反查，见 serverloc.go）
+	ServerLocSource string           `json:"serverLocSource"`         // 位置来源：manual/online/geoip；空 = 未探测到（前端据此清缓存隐藏红点）
+	ServerLocCity   string           `json:"serverLocCity,omitempty"` // 城市名（geoip/在线反查带出时）
 }
 
 type SiteAgg struct {
 	Site      string    `json:"site"`
 	Count     int64     `json:"count"`
 	Bytes     uint64    `json:"bytes"`
-	PathCount int       `json:"pathCount"`             // 窗口内不同路径种数（始终输出）
-	Paths     []PathAgg `json:"paths,omitempty"`       // 路径明细（仅 paths=1 时输出，按次数降序）
+	PathCount int       `json:"pathCount"`       // 窗口内不同路径种数（始终输出）
+	Paths     []PathAgg `json:"paths,omitempty"` // 路径明细（仅 paths=1 时输出，按次数降序）
 }
 
 // PathAgg 站点内单条请求路径的聚合（完整地图页「站点请求树」用）。
@@ -97,12 +101,13 @@ type Service struct {
 	geo       *GeoIP
 	mu        sync.Mutex
 	ring      []Entry
-	ringN     int                     // 容量
+	ringN     int // 容量
 	head      int
 	count     int64
-	startedAt time.Time               // 服务启动时刻：仅此后发生的请求才算「实时」
-	subs      map[chan Entry]struct{} // SSE 实时条目订阅者
-	lastQuery time.Time               // 最近一次 Summary 查询时刻（驱动扫描周期自适应）
+	startedAt time.Time           // 服务启动时刻：仅此后发生的请求才算「实时」
+	subs      map[chan Entry]bool // SSE 实时条目订阅者；value = 是否携带 UA/Referer 明细
+	fast      int                 // 高优先级订阅者数（安全态势页）：>0 时扫描周期降到 1s
+	lastQuery time.Time           // 最近一次 Summary 查询时刻（驱动扫描周期自适应）
 	// 增量解析游标
 	offsets  map[string]int64
 	lastStat map[string]fileStat // 最近一次扫描时的文件 size/mtime：未变化直接跳过 open/read
@@ -133,7 +138,7 @@ func New(cfg *pkg.Config) *Service {
 	s := &Service{
 		cfg: cfg, geo: NewGeoIP(cfg.DataDir),
 		ringN: ringN, ring: make([]Entry, ringN), offsets: map[string]int64{}, lastStat: map[string]fileStat{}, stop: make(chan struct{}),
-		startedAt: time.Now(), subs: map[chan Entry]struct{}{},
+		startedAt: time.Now(), subs: map[chan Entry]bool{},
 	}
 	// 后台预热服务器位置（出口 IP 反查并落盘缓存）：首次打开地图页即有准确红点，
 	// 不必等第一次 Summary 同步等在线接口
@@ -145,14 +150,35 @@ func (s *Service) Close() { s.once.Do(func() { close(s.stop) }) }
 
 // Subscribe 注册实时条目订阅（SSE /api/logmap/stream）。
 // 缓冲 256；消费慢时 push 侧丢最老保最新（实时流以「当前请求」为准），不阻塞日志解析。
-func (s *Service) Subscribe() (<-chan Entry, func()) {
+func (s *Service) Subscribe() (<-chan Entry, func()) { return s.SubscribeDetail(false) }
+
+// SubscribeDetail 同上，detail=true 时条目携带 UA/Referer（请求地图悬停明细用）。
+// 两种订阅者共用同一份解析结果，按连接裁剪字段：摘要/仪表盘不付明细流量的成本。
+func (s *Service) SubscribeDetail(detail bool) (<-chan Entry, func()) {
 	ch := make(chan Entry, 256)
 	s.mu.Lock()
-	s.subs[ch] = struct{}{}
+	s.subs[ch] = detail
 	s.mu.Unlock()
 	return ch, func() {
 		s.mu.Lock()
 		delete(s.subs, ch)
+		s.mu.Unlock()
+	}
+}
+
+// SubscribeFast 高优先级订阅（安全中心）：要求解析循环以 1s 周期扫描日志。
+// 每条订阅独立计数，最后一个退订后自动回落到常规 5s/30s 周期。
+func (s *Service) SubscribeFast(detail bool) (<-chan Entry, func()) {
+	ch, unreg := s.SubscribeDetail(detail)
+	s.mu.Lock()
+	s.fast++
+	s.mu.Unlock()
+	return ch, func() {
+		unreg()
+		s.mu.Lock()
+		if s.fast > 0 {
+			s.fast--
+		}
 		s.mu.Unlock()
 	}
 }
@@ -170,9 +196,14 @@ func (s *Service) push(e Entry) {
 		s.mu.Unlock()
 		return
 	}
-	for ch := range s.subs {
+	for ch, detail := range s.subs {
+		ev := e
+		if !detail {
+			// 不携带明细：UA/Referer 只在「悬停查看」的连接上有意义
+			ev.UA, ev.Referer = "", ""
+		}
 		select {
-		case ch <- e:
+		case ch <- ev:
 		default:
 			// 订阅者消费慢：丢最老一条再投一次，保证最新请求可见
 			select {
@@ -180,7 +211,7 @@ func (s *Service) push(e Entry) {
 			default:
 			}
 			select {
-			case ch <- e:
+			case ch <- ev:
 			default:
 			}
 		}
@@ -190,18 +221,22 @@ func (s *Service) push(e Entry) {
 
 // Start 周期增量解析 access log。实时条目由 push 即时投递 SSE 订阅者（逐条，无批量延迟）；
 // 聚合摘要由 /api/logmap/stream 的每个连接按 10s 周期自行推送。
-// 扫描周期自适应：有 SSE 订阅者或近期有 Summary 查询（地图页/仪表盘在轮询）时 5s，
-// 空闲时 30s——空闲时段不对日志目录做高频扫描。
+// 扫描周期自适应：安全中心订阅时 1s（实时攻击感知必须有秒级输入），
+// 普通 SSE 订阅/近期 Summary 查询 5s，完全空闲 30s——空闲时段不对日志目录做高频扫描。
 func (s *Service) Start() {
 	go func() {
-		const fast, slow = 5 * time.Second, 30 * time.Second
+		const slow, fast, realtime = 30 * time.Second, 5 * time.Second, 1 * time.Second
 		for {
 			delay := slow
 			s.mu.Lock()
 			busy := len(s.subs) > 0 || (!s.lastQuery.IsZero() && time.Since(s.lastQuery) < slow+5*time.Second)
+			urgent := s.fast > 0
 			s.mu.Unlock()
 			if busy {
 				delay = fast
+			}
+			if urgent {
+				delay = realtime
 			}
 			select {
 			case <-s.stop:
@@ -304,6 +339,13 @@ func parseLine(line string) (Entry, bool) {
 		b, _ := strconv.ParseUint(m[6], 10, 64)
 		e.Bytes = b
 	}
+	// 请求详情用（dashboard 摘要会剔除）：限制长度，防止超长 UA/Referer 撑大环形窗口与 SSE 帧
+	if m[7] != "-" {
+		e.Referer = clip(m[7], 512)
+	}
+	if m[8] != "-" {
+		e.UA = clip(m[8], 512)
+	}
 	if m[9] != "" {
 		e.Site = m[9]
 	} else {
@@ -315,6 +357,14 @@ func parseLine(line string) (Entry, bool) {
 		e.Time = time.Now()
 	}
 	return e, true
+}
+
+// clip 截断过长的日志字段（UA/Referer 可能远超正常长度），并保证截断处仍是合法 UTF-8。
+func clip(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return strings.ToValidUTF8(s[:max], "") + "…"
 }
 
 // Summary 窗口聚合（minutes 分钟内；recent 条数）。
@@ -465,6 +515,9 @@ func (s *Service) Summary(minutes, recent int, withPaths bool) *Summary {
 	sum.Recent = entries[:n]
 	return sum
 }
+
+// GeoIPLoaded 是否已加载 GeoIP 库（安全中心据此判断能否按国家封禁）。
+func (s *Service) GeoIPLoaded() bool { return s.geo.Loaded() }
 
 func (s *Service) GeoIPInfo() map[string]any {
 	return map[string]any{
