@@ -50,8 +50,8 @@ func TestDisabledProjectSuppressesDownEvent(t *testing.T) {
 
 	s := New(db, b)
 	// 先来一次 online 作为基线，再来一次 offline 触发状态转移。
-	s.record(site, info(site.Domain, "online"), true)
-	s.record(site, info(site.Domain, "offline"), true)
+	s.record(site, info(site.Domain, "online"), true, false)
+	s.record(site, info(site.Domain, "offline"), true, true)
 	if len(down) != 0 {
 		t.Fatalf("停用应用站点不应告警，实际收到 %v", down)
 	}
@@ -61,8 +61,8 @@ func TestDisabledProjectSuppressesDownEvent(t *testing.T) {
 	if err := db.Create(&normal).Error; err != nil {
 		t.Fatal(err)
 	}
-	s.record(normal, info(normal.Domain, "online"), false)
-	s.record(normal, info(normal.Domain, "offline"), false)
+	s.record(normal, info(normal.Domain, "online"), false, false)
+	s.record(normal, info(normal.Domain, "offline"), false, true)
 	if len(down) != 1 || down[0] != normal.Domain {
 		t.Fatalf("正常站点掉线应告警，实际 %v", down)
 	}
@@ -104,5 +104,45 @@ func TestProbeAllPersistsAndRespectsDisabled(t *testing.T) {
 	}
 	if rec.CheckStatus != "offline" {
 		t.Fatalf("探测结果应落库，实际 %q", rec.CheckStatus)
+	}
+}
+
+// 主动全量探测（一切安好）：结果同步返回并落库，但不制造 down 告警。
+func TestProbeAllNowSilent(t *testing.T) {
+	db := testDB(t)
+	site := model.Site{Domain: "now.example", Type: "proxy"}
+	if err := db.Create(&site).Error; err != nil {
+		t.Fatal(err)
+	}
+	b := bus.New()
+	gotDown := 0
+	b.Subscribe("sitecheck.down", func(map[string]any) { gotDown++ })
+
+	s := New(db, b)
+	online := true
+	s.prober = func(st model.Site) *Info {
+		if online {
+			return info(st.Domain, "online")
+		}
+		return info(st.Domain, "offline")
+	}
+	s.probeAll() // 基线 online
+	online = false
+	out, err := s.ProbeAllNow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out[site.Domain] == nil || out[site.Domain].Status != "offline" {
+		t.Fatalf("主动探测应返回最新结果，实际 %+v", out)
+	}
+	if gotDown != 0 {
+		t.Fatalf("主动探测不应告警，实际 %d 次", gotDown)
+	}
+	var rec model.Site
+	if err := db.First(&rec, site.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if rec.CheckStatus != "offline" {
+		t.Fatalf("主动探测结果应落库，实际 %q", rec.CheckStatus)
 	}
 }

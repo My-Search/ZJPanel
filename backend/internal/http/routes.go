@@ -352,6 +352,50 @@ func (s *Server) registerComposeRoutes() {
 		s.audit(c, "compose.disabled", fmt.Sprintf("%s=%v", c.Param("id"), req.Value))
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
+	// 「一切安好？」：先全量探测，再按结果批量修正应用状态——
+	// 全部网站 down 的应用标记停用（掉线不告警），有网站 online 的应用恢复 normal。
+	// 返回发生变化的清单与方向（正常→停用 / 停用→正常），无变化的应用不返回。
+	g.POST("/all-good", func(c *gin.Context) {
+		infos, err := s.Check.ProbeAllNow()
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		statuses := make(map[string]string, len(infos))
+		for domain, info := range infos {
+			if info != nil {
+				statuses[domain] = info.Status
+			}
+		}
+		res, err := s.Compose.ReconcileAllGood(statuses)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		res.CheckedSites = len(infos)
+		unchanged := res.Apps - len(res.Changes) - res.SkippedUnknown
+		if unchanged < 0 {
+			unchanged = 0
+		}
+		msg := fmt.Sprintf("已探测 %d 个站点，%d 个应用状态未变化", res.CheckedSites, unchanged)
+		if len(res.Changes) > 0 {
+			msg = fmt.Sprintf("已探测 %d 个站点：%d 个应用状态变更（正常→停用 %d，停用→正常 %d）",
+				res.CheckedSites, len(res.Changes), res.NormalToDisabled, res.DisabledToNormal)
+		}
+		if res.SkippedNoSites > 0 {
+			msg += fmt.Sprintf("；跳过 %d 个无网站应用", res.SkippedNoSites)
+		}
+		if res.SkippedUnknown > 0 {
+			msg += fmt.Sprintf("；%d 个应用探测数据不全未改动", res.SkippedUnknown)
+		}
+		s.audit(c, "compose.all-good", fmt.Sprintf("sites=%d changes=%d", res.CheckedSites, len(res.Changes)))
+		c.JSON(http.StatusOK, gin.H{
+			"ok": true, "checkedSites": res.CheckedSites, "apps": res.Apps,
+			"normalToDisabled": res.NormalToDisabled, "disabledToNormal": res.DisabledToNormal,
+			"skippedNoSites": res.SkippedNoSites, "skippedUnknown": res.SkippedUnknown,
+			"changes": res.Changes, "message": msg,
+		})
+	})
 	g.POST("/:id/action", func(c *gin.Context) {
 		var req struct{ Action string }
 		if err := c.ShouldBindJSON(&req); err != nil {

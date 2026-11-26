@@ -7,6 +7,9 @@
         <div class="toolbar">
           <a-button type="primary" @click="openImport"><PlusOutlined /> 通过 docker-compose.yml 文件导入</a-button>
           <a-button @click="scan"><SyncOutlined /> 重新扫描</a-button>
+          <a-tooltip title="现场探测全部网站：所有网站都不可用的应用标记停用，有网站可用的应用恢复正常（需确认）">
+            <a-button :loading="allGoodBusy" @click="declareAllGood">一切安好？</a-button>
+          </a-tooltip>
           <a-button v-if="hiddenList.length" type="link" size="small" @click="hiddenOpen = true">已删除 {{ hiddenList.length }}</a-button>
           <span class="dim">
             宿主机目录经挂载映射进容器（默认 <code>/opt:/opt</code>），在向导中选择含 docker-compose.yml 的目录导入；
@@ -261,6 +264,22 @@
     <!-- zjpanel.json 查看 -->
     <a-modal v-model:open="declOpen" :title="'zjpanel.json · ' + (selected?.name || '')" :footer="null" :width="680">
       <pre class="decl">{{ declContent }}</pre>
+    </a-modal>
+
+    <!-- 一切安好：批量对账后的状态变更回显 -->
+    <a-modal v-model:open="allGoodOpen" title="一切安好 · 应用状态变更" :footer="null" :width="580">
+      <a-alert v-if="allGoodResult" type="info" show-icon :message="allGoodResult.message" style="margin-bottom: 12px" />
+      <a-table v-if="allGoodResult?.changes?.length" :data-source="allGoodResult.changes" :columns="allGoodCols"
+        size="small" row-key="id" :pagination="false">
+        <template #bodyCell="{ column, record }">
+          <template v-if="column.key === 'change'">
+            <a-tag color="default">{{ record.from }}</a-tag>
+            <span style="margin: 0 6px">→</span>
+            <a-tag :color="record.to === '正常' ? 'green' : 'default'">{{ record.to }}</a-tag>
+          </template>
+        </template>
+      </a-table>
+      <a-empty v-else description="本次探测没有应用发生状态变化" style="margin: 16px 0" />
     </a-modal>
 
     <!-- 已删除的项目（恢复入口） -->
@@ -750,6 +769,42 @@ const toggleProjDisabled = () => {
     okText: '标记停用',
     cancelText: '取消',
     async onOk() { await setProjDisabled(p, true) },
+  })
+}
+
+// 「一切安好？」：确认后现场探测全部网站，再按结果批量修正应用状态——
+// 全部网站 down → 停用；有网站 online → 正常。完成后回显变化清单与方向。
+const allGoodBusy = ref(false)
+const allGoodOpen = ref(false)
+const allGoodResult = ref<any>(null)
+const allGoodCols = [
+  { title: '应用', dataIndex: 'name', key: 'name' },
+  { title: '网站数', dataIndex: 'sites', key: 'sites', width: 80 },
+  { title: '状态变化', key: 'change', width: 170 },
+]
+const runAllGood = async () => {
+  allGoodBusy.value = true
+  try {
+    const res = await post<any>('/api/compose/all-good', {})
+    allGoodResult.value = res
+    await scan()
+    if (res?.changes?.length) {
+      allGoodOpen.value = true
+    } else {
+      message.success(res?.message || '一切安好：没有应用需要变更状态')
+    }
+  } finally {
+    allGoodBusy.value = false
+  }
+}
+const declareAllGood = () => {
+  if (allGoodBusy.value) return
+  Modal.confirm({
+    title: '执行「一切安好？」',
+    content: '将现场探测全部网站：所有网站都不可用的应用标记为「停用」（掉线不告警、不计入安全中心）；只要有网站可用的应用恢复「正常」。探测需要几秒，容器与配置不受影响。',
+    okText: '开始探测',
+    cancelText: '取消',
+    async onOk() { await runAllGood() },
   })
 }
 // 删除项目：解除导入并从列表移除（关联网站 + zjpanel.json 一并删除），目录与容器保持原样。

@@ -46,6 +46,26 @@ type ServiceInfo struct {
 	Ports         []string `json:"ports"` // 已发布端口 "8080:80"
 }
 
+// AppStatusChange 「一切安好」批量对账中发生状态变化的应用。
+type AppStatusChange struct {
+	ID    uint   `json:"id"`
+	Name  string `json:"name"`
+	From  string `json:"from"` // 正常 | 停用
+	To    string `json:"to"`
+	Sites int    `json:"sites"` // 该应用关联网站数
+}
+
+// AllGoodResult 「一切安好」执行结果：探测覆盖数与发生变化的引用。
+type AllGoodResult struct {
+	CheckedSites     int               `json:"checkedSites"`
+	Apps             int               `json:"apps"` // 有网站、参与判定的应用数
+	NormalToDisabled int               `json:"normalToDisabled"`
+	DisabledToNormal int               `json:"disabledToNormal"`
+	SkippedNoSites   int               `json:"skippedNoSites"`
+	SkippedUnknown   int               `json:"skippedUnknown"` // 有站点未拿到本次探测结果，跳过不改
+	Changes          []AppStatusChange `json:"changes"`
+}
+
 type ProjectInfo struct {
 	Name     string        `json:"name"`
 	Dir      string        `json:"dir"`
@@ -259,6 +279,75 @@ func (s *Service) SetDisabled(projectID uint, disabled bool) error {
 		upd["disabled_at"] = nil
 	}
 	return s.db.Model(&rec).Updates(upd).Error
+}
+
+// ReconcileAllGood 「一切安好？」批量对账：按本次探测结果修正各应用的运维状态。
+// 规则：应用只要有任意一个网站 online 就是「正常」；全部网站都 down（offline/error）则为「停用」。
+// 只更新状态确实变化的应用，并返回变化清单（含方向），无网站/探测缺数据的应用跳过。
+func (s *Service) ReconcileAllGood(statuses map[string]string) (AllGoodResult, error) {
+	res := AllGoodResult{Changes: []AppStatusChange{}}
+	var recs []model.ComposeProject
+	if err := s.db.Where("hidden = ?", false).Order("id").Find(&recs).Error; err != nil {
+		return res, err
+	}
+	var sites []model.Site
+	if err := s.db.Where("compose_project_id IS NOT NULL").Find(&sites).Error; err != nil {
+		return res, err
+	}
+	byProject := map[uint][]model.Site{}
+	for _, st := range sites {
+		if st.ComposeProjectID != nil {
+			byProject[*st.ComposeProjectID] = append(byProject[*st.ComposeProjectID], st)
+		}
+	}
+
+	now := time.Now()
+	for _, rec := range recs {
+		list := byProject[rec.ID]
+		if len(list) == 0 {
+			res.SkippedNoSites++
+			continue
+		}
+		res.Apps++
+		anyOnline, missing := false, false
+		for _, st := range list {
+			status, ok := statuses[st.Domain]
+			if !ok {
+				missing = true
+				continue
+			}
+			if status == "online" {
+				anyOnline = true
+			}
+		}
+		if missing {
+			res.SkippedUnknown++
+			continue
+		}
+		wantDisabled := !anyOnline
+		if rec.Disabled == wantDisabled {
+			continue
+		}
+		upd := map[string]any{"disabled": wantDisabled}
+		if wantDisabled {
+			upd["disabled_at"] = now
+		} else {
+			upd["disabled_at"] = nil
+		}
+		if err := s.db.Model(&rec).Updates(upd).Error; err != nil {
+			return res, err
+		}
+		change := AppStatusChange{ID: rec.ID, Name: rec.Name, Sites: len(list)}
+		if wantDisabled {
+			change.From, change.To = "正常", "停用"
+			res.NormalToDisabled++
+		} else {
+			change.From, change.To = "停用", "正常"
+			res.DisabledToNormal++
+		}
+		res.Changes = append(res.Changes, change)
+	}
+	return res, nil
 }
 
 // DisabledSiteDomains 停用应用关联网站域名集合（安全中心用于过滤其 5xx/攻击判定）。

@@ -119,14 +119,29 @@ func siteDisabled(site model.Site, disabled map[uint]bool) bool {
 	return site.ComposeProjectID != nil && disabled[*site.ComposeProjectID]
 }
 
-// probeAll 全量并发探测一轮；结果串行落库（SQLite 单写，避免并发写锁）。
+// probeAll 后台周期探测：全量并发一轮，状态变化正常发事件。
 func (s *Service) probeAll() {
+	_, _ = s.probeAllInternal(true)
+}
+
+// ProbeAllNow 同步全量探测一轮并返回各站点结果（「一切安好？」按钮用）：
+// 用户主动触发的复检不带告警，结果先落库，再由调用方决定应用停用/正常。
+func (s *Service) ProbeAllNow() (map[string]*Info, error) {
+	return s.probeAllInternal(false)
+}
+
+// probeAllInternal 全量并发探测一轮；结果串行落库（SQLite 单写，避免并发写锁）。
+// emitEvents=false 时只更新缓存/落库，不发 sitecheck.down/up（主动复检不制造告警）。
+func (s *Service) probeAllInternal(emitEvents bool) (map[string]*Info, error) {
 	s.probeMu.Lock()
 	defer s.probeMu.Unlock()
 
 	sites, err := s.listSites()
-	if err != nil || len(sites) == 0 {
-		return
+	if err != nil {
+		return nil, err
+	}
+	if len(sites) == 0 {
+		return map[string]*Info{}, nil
 	}
 	disabled := s.disabledProjects()
 
@@ -142,13 +157,18 @@ func (s *Service) probeAll() {
 		}(i)
 	}
 	wg.Wait()
+	out := make(map[string]*Info, len(sites))
 	for i := range sites {
-		s.record(sites[i], infos[i], siteDisabled(sites[i], disabled))
+		s.record(sites[i], infos[i], siteDisabled(sites[i], disabled), emitEvents)
+		if infos[i] != nil {
+			out[sites[i].Domain] = infos[i]
+		}
 	}
+	return out, nil
 }
 
 // record 记录单个站点的探测结果：缓存 → 状态落库 → 状态变化事件。
-func (s *Service) record(site model.Site, info *Info, ignored bool) {
+func (s *Service) record(site model.Site, info *Info, ignored, emitEvents bool) {
 	if info == nil {
 		return
 	}
@@ -171,7 +191,7 @@ func (s *Service) record(site model.Site, info *Info, ignored bool) {
 		}
 	}
 
-	if s.bus == nil || prev == nil {
+	if !emitEvents || s.bus == nil || prev == nil {
 		return
 	}
 	// 停用应用下的站点为人工关停：掉线不告警（探测结果仍照常展示，面板上不被当成故障）。
