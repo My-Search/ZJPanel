@@ -27,7 +27,10 @@
   .hook-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .hook-id { font-weight: 600; font-size: 15px; }
   .tag { font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--primary-weak); color: var(--primary); }
-  .tag.off { background: transparent; border: 1px solid var(--border); color: var(--dim); }
+  .hook-dot { width: 8px; height: 8px; border-radius: 50%; background: #c9cdd4; display: inline-block; flex: none; }
+  .hook-dot.on { background: var(--green); box-shadow: 0 0 0 2px rgba(82,196,26,.16); }
+  html[data-theme='dark'] .hook-dot { background: #5a5a5a; }
+  html[data-theme='dark'] .hook-dot.on { background: var(--green); }
   .hook-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
   .meta { color: var(--dim); font-size: 12px; margin-top: 6px; word-break: break-all; }
   .url-box { display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
@@ -178,7 +181,7 @@ async function loadAll() {
     api('/hooks'),
     fetch('/api/ssh/hosts').then(r => r.json()).catch(() => []),
   ]);
-  hooks = hs || [];
+  hooks = (hs || []).slice().sort((a, b) => (b.enabled ? 1 : 0) - (a.enabled ? 1 : 0));
   hosts = Array.isArray(sh) ? sh : [];
   render();
 }
@@ -189,7 +192,7 @@ function render() {
     <div class="card">
       <div class="hook-head">
         <span class="hook-id">${esc(h.id)}</span>
-        <span class="tag ${h.enabled ? '' : 'off'}">${h.enabled ? '启用' : '停用'}</span>
+        <span class="hook-dot ${h.enabled ? 'on' : ''}" title="${h.enabled ? '已启用' : '已停用'}" aria-label="${h.enabled ? '已启用' : '已停用'}"></span>
         <div class="hook-actions">
           <button class="btn small" onclick="runHook('${esc(h.id)}')">立即执行</button>
           <button class="btn small" onclick="toggleHook('${esc(h.id)}', ${!h.enabled})">${h.enabled ? '停用' : '启用'}</button>

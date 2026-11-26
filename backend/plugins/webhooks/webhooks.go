@@ -94,7 +94,7 @@ func (p *Plugin) Meta() sdk.Meta {
 	return sdk.Meta{
 		ID:          "webhooks",
 		Name:        "Webhooks 服务",
-		Version:     "0.3.0",
+		Version:     "0.3.1",
 		Description: "Webhook 接收端（GitHub 签名校验）+ 部署执行 + 运行日志（执行中实时输出）+ 邮件通知 + 绑定 SSH 主机远端执行；替代独立 webhook 服务",
 		Permissions: []string{"http", "exec"},
 		Menu:        []sdk.Menu{{Title: "Webhooks", Icon: "thunderbolt", Path: "/"}},
