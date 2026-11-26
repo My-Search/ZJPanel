@@ -5,6 +5,7 @@
       <span class="dim">实时流向</span>
       <a-switch v-model:checked="realtime" size="small" />
       <a-tag v-if="realtime" color="blue">实时 {{ rate }} req/s（近 5s 滑窗）</a-tag>
+      <a-button v-if="chartReady" size="small" @click="resetView">复位视角</a-button>
       <span v-if="compact" class="dim">悬停流向可暂停并查看请求明细</span>
       <!-- compact（仪表盘卡片）不放统计窗口选择：紧挨「实时」标签会被误读为实时开关。
            仪表盘固定用最近 60 分钟聚合（流星本身是实时推送，不受窗口影响），完整地图页保留选择器 -->
@@ -36,7 +37,7 @@
     </a-space>
 
     <div class="map-wrap">
-      <div ref="mapBox" class="map-box" :style="{ '--map-height': height + 'px' }" @mouseleave="resetRoamView"></div>
+      <div ref="mapBox" class="map-box" :style="{ '--map-height': height + 'px' }"></div>
 
       <!-- 悬停流向 → 冻结画面 + 实时请求树。数据只来自本页 SSE 内存缓冲，不落库 -->
       <div v-if="inspectRoute" class="flow-inspect">
@@ -234,6 +235,7 @@ const loadTree = async () => {
 let treeTimer: any = null
 
 const geoLoaded = ref(false)
+const chartReady = ref(false)
 const mapBox = ref<HTMLElement | null>(null)
 const detailsOpen = ref<string[]>([]) // 默认收纳详细信息
 let chart: any = null
@@ -243,6 +245,10 @@ let stopStream: (() => void) | null = null
 let timer: any = null
 let sweepTimer: any = null
 let resizeObserver: ResizeObserver | null = null
+// 增量渲染用：只在底图/暂停态变化时重建，其余帧只换 series 数据。
+// 这样缩放/拖拽后的视角和点线锚点不会被 setOption(notMerge) 冲掉。
+let lastPaused: boolean | null = null
+let lastGeoKey = ''
 
 const countryCols = [
   { title: '国家', key: 'country' },
@@ -628,21 +634,11 @@ const ensureChart = async () => {
   return initPromise
 }
 
-const renderMap = async (resetView = false, force = false) => {
+const renderMap = async (force = false, reset = false) => {
   if (!mapBox.value || !active) return
   if (inspectRoute.value && !force) return // 冻结期间其余刷新（摘要/定时 load/主题）一律不重绘，悬停目标不丢
   await ensureChart()
   if (!chart || !active) return
-  // 视角保留：setOption(notMerge) 会整体替换 geo 配置，导致缩放/拖拽后的视角被复位。
-  // echarts 在滚轮/拖拽漫游后会把 center/zoom 同步回 model（View.js syncBackRoamOptionToRoamHostModel），
-  // 这里取回当前视角并显式带回；光标停留在地图上时，任何一次渲染都不重置缩放/位置，
-  // 鼠标移出地图后则由 resetRoamView 以 resetView=true 回归默认全局视角。
-  const roamPatch: Record<string, any> = {}
-  if (!resetView) {
-    const prevGeo = (chart.getOption() as any)?.geo?.[0]
-    if (prevGeo?.zoom != null) roamPatch.zoom = prevGeo.zoom
-    if (prevGeo?.center?.length === 2) roamPatch.center = prevGeo.center
-  }
   const countries = (summary.value.countries || []).filter((c: any) => c.country !== 'unknown')
   const maxCount = Math.max(1, ...countries.map((c: any) => c.count))
   const shades = ['#dbe9ff', '#9dbdff', '#5c8dff', '#2f5fe0', '#1c3fd6']
@@ -663,14 +659,27 @@ const renderMap = async (resetView = false, force = false) => {
         }
       : { name: f.label, coords: f.coords })
     : []
-  const srcPoints = realtime.value
-    ? flowSrc.map(f => ({
-        value: f.coords[0],
-        name: f.label,
-        symbolSize: f.key === flowKey ? 8 : 6,
-        itemStyle: { color: f.key === flowKey ? '#fbbf24' : '#ffd54d' },
-      }))
-    : []
+  // 来源点按「国家|城市|坐标桶」聚合：同一来源城市的一批请求只留一个黄点/一圈涟漪。
+  // 之前一次请求一个 effectScatter 点，同城几十条请求的涟漪叠在一起就成了黄色光斑。
+  const srcMap = new Map<string, { value: [number, number]; name: string; flowCount: number; focus: boolean }>()
+  if (realtime.value) {
+    for (const f of flowSrc) {
+      let p = srcMap.get(f.key)
+      if (!p) {
+        p = { value: f.coords[0], name: f.label, flowCount: 0, focus: false }
+        srcMap.set(f.key, p)
+      }
+      p.flowCount++
+      if (f.key === flowKey) p.focus = true
+    }
+  }
+  const srcPoints = [...srcMap.values()].map(p => ({
+    value: p.value,
+    name: p.name,
+    flowCount: p.flowCount,
+    symbolSize: p.focus ? 8 : 6,
+    itemStyle: { color: p.focus ? '#fbbf24' : '#ffd54d' },
+  }))
   // 城市级聚合点（统计窗口内）：统一尺寸的标记点（数量信息放 tooltip，不用大小表达）
   const cities = (summary.value.cities || []).filter((c: any) => (c.lat || c.lon))
   const cityLabel = (c: any) => c.city ? `${c.city}, ${countryName(c.country)}` : countryName(c.country)
@@ -683,55 +692,84 @@ const renderMap = async (resetView = false, force = false) => {
     symbolSize: 7,
     itemStyle: { color: '#5c8dff', opacity: 0.85, borderColor: 'rgba(255,255,255,.7)', borderWidth: 1 },
   }))
-  chart.setOption({
-    tooltip: {
-      show: true,
-      formatter: (p: any) => {
-        if (p.data?.cityLabel !== undefined) {
-          return `${p.data.cityLabel}<br/>${p.data.count} 次请求 · ${fmtBytes(p.data.bytes)}`
-        }
-        return p.name || ''
-      },
+  const tooltip = {
+    show: true,
+    formatter: (p: any) => {
+      if (p.data?.cityLabel !== undefined) {
+        return `${p.data.cityLabel}<br/>${p.data.count} 次请求 · ${fmtBytes(p.data.bytes)}`
+      }
+      if (p.data?.flowCount != null) {
+        return `${p.name}<br/>${p.data.flowCount} 条实时流向`
+      }
+      return p.name || ''
     },
-    // 深浅主题各自适配的底图配色（zoom/center 回带用户漫游后的视角）
-    geo: {
-      map: 'world', roam: true,
-      ...roamPatch,
-      itemStyle: { areaColor: ui.isDark ? '#26303f' : '#eef2f7', borderColor: ui.isDark ? '#3b4757' : '#c0cdd8' },
-      emphasis: { label: { show: false }, itemStyle: { areaColor: ui.isDark ? '#3d5680' : '#7c9cff' } },
-      regions: countries.map((c: any) => ({ name: mapName(c.country), itemStyle: { areaColor: colorFor(c.count) } })),
+  }
+  const geo = {
+    map: 'world', roam: true,
+    itemStyle: { areaColor: ui.isDark ? '#26303f' : '#eef2f7', borderColor: ui.isDark ? '#3b4757' : '#c0cdd8' },
+    emphasis: { label: { show: false }, itemStyle: { areaColor: ui.isDark ? '#3d5680' : '#7c9cff' } },
+    regions: countries.map((c: any) => ({ name: mapName(c.country), itemStyle: { areaColor: colorFor(c.count) } })),
+  }
+  const series = [
+    {
+      id: 'flows',
+      // 数据流：沿线流动的圆形光点带短拖尾（数据流点效果）；悬停冻结时关闭 effect，留下静态高亮线
+      type: 'lines', coordinateSystem: 'geo', zlevel: 2, silent: paused,
+      effect: { show: !paused, period: 4, trailLength: 0.2, symbol: 'circle', symbolSize: 6, color: '#ffd54d' },
+      lineStyle: { color: '#3b82f6', width: 1.2, opacity: 0.35, curveness: 0.35 },
+      emphasis: { disabled: true }, // 高亮由数据项 lineStyle 控制，避免 hover 过渡与冻结渲染互相打架
+      data: flows,
     },
-    series: [
-      {
-        // 数据流：沿线流动的圆形光点带短拖尾（数据流点效果）；悬停冻结时关闭 effect，留下静态高亮线
-        type: 'lines', coordinateSystem: 'geo', zlevel: 2, silent: paused,
-        effect: { show: !paused, period: 4, trailLength: 0.2, symbol: 'circle', symbolSize: 6, color: '#ffd54d' },
-        lineStyle: { color: '#3b82f6', width: 1.2, opacity: 0.35, curveness: 0.35 },
-        emphasis: { disabled: true }, // 高亮由数据项 lineStyle 控制，避免 hover 过渡与冻结渲染互相打架
-        data: flows,
-      },
-      {
-        // 城市级聚合点：统计窗口内各城市请求量（静态蓝点，大小 = 请求量）
-        type: 'scatter', coordinateSystem: 'geo', zlevel: 2,
-        data: cityPoints,
-      },
-      {
-        // 请求来源点：实时脉动；悬停冻结时降级为静态点，确保画面真的停住
-        type: paused ? 'scatter' : 'effectScatter', coordinateSystem: 'geo', zlevel: 3,
-        ...(paused ? {} : { rippleEffect: { scale: 2.2, brushType: 'stroke' } }),
-        itemStyle: { color: '#ffd54d' },
-        data: srcPoints,
-      },
-      {
-        // 服务器位置：红色小点（缩小，避免喧宾夺主）；探测不到位置时不渲染
-        type: paused ? 'scatter' : 'effectScatter', coordinateSystem: 'geo', zlevel: 3,
-        symbolSize: 7,
-        ...(paused ? {} : { rippleEffect: { scale: 2 } }),
-        itemStyle: { color: '#ff5722' },
-        data: serverLocKnown.value ? [{ value: serverPoint.value, name: serverLabel.value }] : [],
-      },
-    ],
-  }, true)
+    {
+      id: 'cities',
+      // 城市级聚合点：统计窗口内各城市请求量（静态蓝点，大小 = 请求量）
+      type: 'scatter', coordinateSystem: 'geo', zlevel: 2,
+      data: cityPoints,
+    },
+    {
+      id: 'sources',
+      // 请求来源点：同一来源城市只画一个；涟漪收敛到 1.7 屏，避免同城叠成光斑
+      type: paused ? 'scatter' : 'effectScatter', coordinateSystem: 'geo', zlevel: 3,
+      ...(paused ? {} : { rippleEffect: { scale: 1.7, brushType: 'stroke', number: 3 } }),
+      itemStyle: { color: '#ffd54d' },
+      data: srcPoints,
+    },
+    {
+      id: 'server',
+      // 服务器位置：红色小点（缩小，避免喧宾夺主）；探测不到位置时不渲染
+      type: paused ? 'scatter' : 'effectScatter', coordinateSystem: 'geo', zlevel: 3,
+      symbolSize: 7,
+      ...(paused ? {} : { rippleEffect: { scale: 1.8, brushType: 'stroke', number: 3 } }),
+      itemStyle: { color: '#ff5722' },
+      data: serverLocKnown.value ? [{ value: serverPoint.value, name: serverLabel.value }] : [],
+    },
+  ]
+  const geoKey = `${ui.isDark ? 'd' : 'l'}|${countries.map((c: any) => `${c.country}:${c.count}`).join(',')}`
+  if (!chartReady.value || reset) {
+    // 首次/手动复位：整图替换（不带 center/zoom）回到默认全球视角
+    chart.setOption({ tooltip, geo, series }, { notMerge: true })
+    chartReady.value = true
+  } else {
+    if (paused !== lastPaused) {
+      // 冻结态要切换 series 类型（effectScatter → scatter），只替换 series，不动 geo/视角
+      chart.setOption({ series }, { replaceMerge: ['series'] })
+    } else {
+      // 常规刷新只换数据：ECharts 合并更新，保留当前缩放/拖拽视角，点线锚点不漂移
+      chart.setOption({ series })
+    }
+    if (geoKey !== lastGeoKey) {
+      // 只更新底图配色/地区热度，不带 map/roam/center/zoom，避免把当前视角顶回默认
+      chart.setOption({ geo: { itemStyle: geo.itemStyle, emphasis: geo.emphasis, regions: geo.regions } })
+    }
+  }
+  lastPaused = paused
+  lastGeoKey = geoKey
+}
+
+// 手动复位视角：只有用户点「复位视角」才回到全球视角，缩放/拖拽结果不再被鼠标移出或定时刷新清掉
+const resetView = () => {
+  if (!chartReady.value) return
+  renderMap(true, true)
 }
 
 // 悬停一条流星线：冻结当前画面（快照），回溯该来源的历史请求，并开始接收后续新请求。
@@ -746,7 +784,7 @@ const openInspect = (f: LiveFlow) => {
   inspectRoute.value = { key: f.key, label: f.label, coords: f.coords }
   inspectExpanded.value = []
   expandedSeen.clear()
-  renderMap(false, true)
+  renderMap(true)
 }
 
 const resetInspect = () => {
@@ -779,17 +817,6 @@ const onChartOver = (p: any) => {
   const list = inspectRoute.value ? frozenFlows.value : liveFlows.value
   const f = list[p.dataIndex]
   if (f?.key) openInspect(f)
-}
-
-// 鼠标移出地图后视角复位：漫游出的缩放/位置只在光标停留在地图上时保留，
-// 移出即回归默认全局视角，避免拖拽/缩放状态残留到下一次查看。
-// 悬停明细面板覆盖在地图上，移入面板也会触发 mouseleave，此时必须保持当前视角。
-// 未漫游过（zoom 仍为默认 1 且未写入 center）则跳过，避免路过时的多余重渲染。
-const resetRoamView = () => {
-  if (!active || !chart || inspectRoute.value) return
-  const geo = (chart.getOption() as any)?.geo?.[0]
-  const roamed = (geo?.zoom != null && Math.abs(geo.zoom - 1) > 1e-6) || geo?.center?.length === 2
-  if (roamed) renderMap(true)
 }
 
 const load = async () => {
@@ -924,7 +951,7 @@ const stop = () => {
 onMounted(start)
 onActivated(start)
 onDeactivated(stop)
-onUnmounted(() => { stop(); resizeObserver?.disconnect(); resizeObserver = null; chart?.dispose(); chart = null })
+onUnmounted(() => { stop(); resizeObserver?.disconnect(); resizeObserver = null; chart?.dispose(); chart = null; chartReady.value = false })
 </script>
 
 <style scoped>
