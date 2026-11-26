@@ -19,6 +19,7 @@ func (s *Server) RegisterRoutes() {
 	s.registerSiteRoutes()
 	s.registerComposeRoutes()
 	s.registerSshRoutes()
+	s.registerHostRoutes()
 	s.registerTerminalRoutes()
 	s.registerSftpRoutes()
 	s.registerQuickCmdRoutes()
@@ -497,7 +498,8 @@ func (s *Server) registerSshRoutes() {
 	g := s.r.Group("/api/ssh", s.auth.Require())
 	g.GET("/hosts", func(c *gin.Context) {
 		var list []model.SshHost
-		s.db.Order("id").Find(&list)
+		// 内置「本机」只服务主机页的本地 Shell，不进终端页的 SSH 清单（它没有 SSH 凭据）
+		s.db.Where("local = ?", false).Order("id").Find(&list)
 		items := []map[string]any{}
 		for _, h := range list {
 			items = append(items, map[string]any{
@@ -561,6 +563,11 @@ func (s *Server) registerSshRoutes() {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "id": h.ID})
 	})
 	g.DELETE("/hosts/:id", func(c *gin.Context) {
+		var h model.SshHost
+		if err := s.db.First(&h, idParam(c)).Error; err == nil && h.Local {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "内置本机不可删除"})
+			return
+		}
 		s.db.Delete(&model.SshHost{}, idParam(c))
 		s.audit(c, "ssh.host.delete", c.Param("id"))
 		c.JSON(http.StatusOK, gin.H{"ok": true})

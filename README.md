@@ -1,6 +1,6 @@
 # ZJPanel
 
-Go + Vue3 + TypeScript 服务器管理面板：**nginx 管理 + SSH 终端 + Docker 容器管理 + MCP + 证书自动化（certd 式管线）+ 插件化扩展**，单容器 Docker 部署。
+Go + Vue3 + TypeScript 服务器管理面板：**nginx 管理 + SSH 终端 + 主机 Agent + Docker 容器管理 + MCP + 证书自动化（certd 式管线）+ 插件化扩展**，单容器 Docker 部署。
 
 ## 界面预览
 
@@ -20,11 +20,11 @@ Go + Vue3 + TypeScript 服务器管理面板：**nginx 管理 + SSH 终端 + Doc
 | **维护页** | 全局模板 + 站点级覆盖；开启维护生成 `sites-enabled/<域名>_maintenance.conf`，请求代理到面板渲染器 |
 | **默认页** | 404 / 50x / 首页 HTML 可视化编辑（Nginx → html 目录） |
 | **Compose 导入** | 「应用 → 通过 docker-compose.yml 文件导入」文件夹选择向导（宿主机目录默认映射 `/opt:/opt`，容器内路径=宿主机路径），解析服务与发布端口导入为反代站点；站点声明写入目录下 `zjpanel.json`，面板变化自动写回，迁移时扫目录即恢复；「更多 → 删除」二次确认后删除关联网站并把项目从面板列表移除（容器与目录不动，`zjpanel.json` 保留，下次经导入向导「按声明恢复」即可重新管理）；「更多 → 标记停用/恢复正常」声明应用运维状态，停用应用的关联网站掉线不告警、不计入安全中心（探测仍按常规频率）；「一切安好？」二次确认后现场复检全部网站，把网站全 down 的应用置停用、有站点可用的应用置正常，并回显变更清单与方向 |
-| **终端** | SSH 主机管理（密码/私钥）+ 本地终端；会话常驻后端（环形缓冲），**页面刷新自动恢复所有标签并回放**，多会话并发 |
+| **主机** | 一台机器一个对象：SSH 主机管理与终端合并；SSH 添加时可选「立即安装 Agent」，也可用面板生成的一行命令安装；Agent 出站反连（首帧 hello 认证 + 长期 token），15s 心跳上报负载/内存/磁盘/连接/SSH 会话/端口；详情页概览/防御/事件/终端/设置五个 Tab，Agent 版本落后可见并支持一键升级与卸载（ack 成功才删记录）；内置不可删除的「本机」承接容器内 Shell |
 | **Docker** | 容器/镜像/网络/卷管理，日志跟随、exec 终端、镜像拉取（WS 进度） |
 | **证书** | certd 式管线：申请（HTTP-01/DNS-01，lego 多 DNS 提供商）→ 部署目标（本机 nginx / SSH 上传 / 本地脚本，可插件扩展）→ cron 自动续期；证书仓库 + 运行历史实时日志 |
 | **请求地图** | access log 增量解析 + GeoLite2 城市级聚合（城市/国家/坐标），ECharts 世界地图 + 城市散点 + 流向线，WS 实时刷新 |
-| **安全中心** | 1s 级 access log 聚合（RPS/4xx/5xx/Top 源）+ 五类攻击判定（扫描/CC/爆破/站点失血/地区突变）+ 内核层 L4（连接数/SYN_RECV/带宽/accept 队列溢出，覆盖日志看不见的流量型攻击）；IP 与国家封禁（GeoIP 展开 CIDR 写入 nginx 原生 geo）、CC 限速、白名单、观察模式、封禁前 5 分钟 dry-run、规则自动封禁与严重事件通知；每秒落一份精简快照，面板被打到失联后可回放；本机回环/白名单来源与「停用应用」关联网站不计入判定 |
+| **WAF（安全中心）** | 1s 级 access log 聚合（RPS/4xx/5xx/Top 源）+ 五类攻击判定（扫描/CC/爆破/站点失血/地区突变）+ 内核层 L4（连接数/SYN_RECV/带宽/accept 队列溢出，覆盖日志看不见的流量型攻击）；IP 与国家封禁（GeoIP 展开 CIDR 写入 nginx 原生 geo）、CC 限速、白名单、观察模式、封禁前 5 分钟 dry-run、规则自动封禁与严重事件通知；每秒落一份精简快照，面板被打到失联后可回放；本机回环/白名单来源与「停用应用」关联网站不计入判定。左侧菜单已由「安全」改名「WAF」 |
 | **监控** | CPU/内存/负载/网络实时（WS）+ 磁盘用量；历史采样 30 天 |
 | **数据库** | 内置「数据库管理」插件：MySQL/MariaDB、PostgreSQL、SQLite、SQL Server、Oracle、Redis、MongoDB；连接管理（凭据加密）、库表/键/集合浏览、结构与 DDL、分页数据与行级编辑、SQL 与命令控制台、SQL 文件导入 |
 | **MCP** | 面板唯一 `/mcp` 端点（Streamable HTTP + API Key），核心工具与**插件声明的工具聚合**统一对外 |
@@ -156,8 +156,9 @@ ZJPanel/
 │   └── nginx-defaults/     # 默认 nginx.conf / 默认站点 / 默认页
 ├── backend/
 │   ├── cmd/zjpanel/
+│   ├── cmd/zjagent/        # 主机 Agent（单二进制：run/install/uninstall/upgrade/doctor）
 │   ├── sdk/plugin/         # 插件 SDK（稳定接口）
-│   ├── internal/           # boot/nginx/site/compose/cert/terminal/docker/metrics/logmap/security/mcp/plugin/update/http
+│   ├── internal/           # boot/nginx/site/compose/cert/terminal/docker/metrics/logmap/security/agent/mcp/plugin/update/http
 │   └── plugins/notifywebhook/  # 内置示例插件
 └── frontend/               # Vue3 + TS + Ant Design Vue
 ```

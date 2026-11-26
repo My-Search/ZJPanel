@@ -82,18 +82,23 @@ jobs:
             CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH go build \
               -ldflags "-s -w -X zjpanel/backend/internal/buildinfo.Version=${VERSION_NUM}" \
               -o "../zjpanel-linux-$ARCH" ./cmd/zjpanel
+            # 主机 Agent：二进制部署时放在 <数据目录>/agent/ 下即可被面板发现并分发
+            CGO_ENABLED=0 GOOS=linux GOARCH=$ARCH go build \
+              -ldflags "-s -w -X zjpanel/backend/internal/buildinfo.Version=${VERSION_NUM}" \
+              -o "../zjagent-linux-$ARCH" ./cmd/zjagent
           done
           # Windows 资产供面板自更新（assetName 按平台拼接）与本地直跑使用
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build \
             -ldflags "-s -w -X zjpanel/backend/internal/buildinfo.Version=${VERSION_NUM}" \
             -o "../zjpanel-windows-amd64.exe" ./cmd/zjpanel
-          cd .. && sha256sum zjpanel-linux-* zjpanel-windows-* > SHA256SUMS
+          cd .. && sha256sum zjpanel-linux-* zjagent-linux-* zjpanel-windows-* > SHA256SUMS
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: zjpanel-binaries
           path: |
             zjpanel-linux-*
+            zjagent-linux-*
             zjpanel-windows-*
             SHA256SUMS
 
@@ -110,5 +115,6 @@ jobs:
           generate_release_notes: true
           files: |
             zjpanel-linux-*
+            zjagent-linux-*
             zjpanel-windows-*
             SHA256SUMS

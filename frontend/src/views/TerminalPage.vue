@@ -54,6 +54,7 @@
           <template v-if="column.key === 'action'">
             <a-space>
               <a-button size="small" @click="openHostEditor(record)">编辑</a-button>
+              <a-button size="small" :loading="installingId === record.id" @click="injectAgent(record)">装 Agent</a-button>
               <a-button size="small" :loading="testingId === record.id" @click="testHost(record)">测试</a-button>
               <a-popconfirm title="删除该主机？" @confirm="delHost(record)"><a-button size="small" danger>删除</a-button></a-popconfirm>
             </a-space>
@@ -90,8 +91,9 @@
 </template>
 
 <script setup lang="ts">
-import { markRaw, onActivated, onDeactivated, onMounted, onUnmounted, ref, nextTick, computed, watch } from 'vue'
-import { message } from 'ant-design-vue'
+import { markRaw, onActivated, onDeactivated, onMounted, onUnmounted, ref, nextTick, computed, watch, h } from 'vue'
+import { useRoute } from 'vue-router'
+import { message, Modal } from 'ant-design-vue'
 import { get, post, del } from '../api'
 import { DownOutlined, FolderOpenOutlined, ThunderboltOutlined } from '@ant-design/icons-vue'
 import { useTermTheme } from '../utils/termTheme'
@@ -102,6 +104,9 @@ import TermEmpty from '../components/TermEmpty.vue'
 import type { Terminal as XtermTerminal } from '@xterm/xterm'
 
 const { ui, current: termTheme, boxBg } = useTermTheme()
+const route = useRoute()
+// 从「主机」页跳转过来时按 query 自动开对应会话；同一 host 只自动开一次，避免保活重入重复开标签
+const autoOpened = ref('')
 
 interface TermStats {
   cpu: number; mem: number; memTxt: string
@@ -139,6 +144,7 @@ const showHostMgr = ref(false)
 const hostOpen = ref(false)
 const editHost = ref<any>({})
 const testingId = ref(0)
+const installingId = ref(0)
 const termBoxes = new Map<string, HTMLElement>()
 
 const hostCols = [
@@ -578,6 +584,24 @@ const saveHost = async () => {
   await loadHosts()
 }
 const delHost = async (h: any) => { await del(`/api/ssh/hosts/${h.id}`); loadHosts() }
+// 终端主机列表也能一键注入 Agent：复用 /api/hosts 的引导安装（幂等，可重复执行校正配置）
+const injectAgent = async (host: any) => {
+  installingId.value = host.id
+  try {
+    const r = await post(`/api/hosts/${host.id}/agent/install`, { panelUrl: '' })
+    Modal.success({
+      title: 'Agent 安装已执行',
+      width: 720,
+      content: h('pre', { style: 'max-height:50vh;overflow:auto;font-size:12px;white-space:pre-wrap' }, r.output || '无输出'),
+    })
+  } catch (e: any) {
+    Modal.error({
+      title: '安装失败',
+      width: 720,
+      content: h('pre', { style: 'max-height:50vh;overflow:auto;font-size:12px;white-space:pre-wrap' }, e?.response?.data?.output || e?.response?.data?.error || '未知错误'),
+    })
+  } finally { installingId.value = 0 }
+}
 const testHost = async (h: any) => {
   testingId.value = h.id
   try {
@@ -587,11 +611,29 @@ const testHost = async (h: any) => {
   } finally { testingId.value = 0 }
 }
 
+// 主机页 → 终端：?host=<id> 自动打开 SSH，?local=1 打开本地 Shell
+const openFromQuery = async () => {
+  const qHost = route.query.host ? String(route.query.host) : ''
+  const qLocal = route.query.local === '1'
+  const key = qLocal ? 'local' : qHost
+  if (!key || autoOpened.value === key) return
+  autoOpened.value = key
+  if (qLocal) { await newLocal(); return }
+  const id = Number(qHost)
+  if (!id) return
+  const h = hosts.value.find(x => x.id === id)
+  if (h) await newSsh(h)
+}
+
 onMounted(async () => {
   window.addEventListener('beforeunload', beforeUnloadHandler)
   await loadHosts()
   await restoreSessions()
+  await openFromQuery()
 })
+
+watch(() => route.query.host, () => { autoOpened.value = ''; openFromQuery() })
+watch(() => route.query.local, () => { autoOpened.value = ''; openFromQuery() })
 
 // 保活生命周期：终端 WS 会话保持不断（切走仍输出）；仅窗口 resize 监听随激活/停用增删，
 // 激活时重排尺寸（keep-alive 恢复时容器尺寸可能已变化）

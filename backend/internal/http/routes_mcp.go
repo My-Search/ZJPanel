@@ -14,6 +14,7 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/gin-gonic/gin"
 
+	"zjpanel/backend/internal/buildinfo"
 	"zjpanel/backend/internal/mcp"
 	"zjpanel/backend/internal/model"
 	"zjpanel/backend/internal/notify"
@@ -496,5 +497,67 @@ func (s *Server) registerMCPTools() {
 				return out, err
 			}
 			return "compose " + action + " 完成", nil
+		})
+	// ---- 主机管理（与 HTTP API 共用同一套模型与审计；只读优先） ----
+	reg("host_list", "列出全部主机及 Agent 状态（在线/离线/版本/是否落后）",
+		map[string]any{"type": "object", "properties": map[string]any{}},
+		func(args map[string]any) (string, error) {
+			var hosts []model.SshHost
+			s.db.Order("local desc, id").Find(&hosts)
+			out := []map[string]any{}
+			for _, h := range hosts {
+				out = append(out, map[string]any{
+					"id": h.ID, "name": h.Name, "host": h.Host, "port": h.Port,
+					"local": h.Local, "group": h.Group,
+					"agentStatus": h.AgentStatus, "agentVersion": h.AgentVersion,
+					"online": s.Agent.Online(h.ID), "claimed": h.Claimed,
+					"outdated": h.AgentVersion != "" && h.AgentVersion != buildinfo.Version,
+					"lastSeen": h.AgentLastSeen,
+				})
+			}
+			return jstr(out), nil
+		})
+	reg("host_metrics", "获取某台主机的实时指标（负载/内存/磁盘/连接/端口）",
+		map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"hostId": map[string]any{"type": "integer"}},
+			"required":   []string{"hostId"},
+		},
+		func(args map[string]any) (string, error) {
+			id := uint(numOf(args["hostId"]))
+			m := s.Agent.LatestMetrics(id)
+			if m == nil {
+				return jstr(map[string]any{"online": s.Agent.Online(id), "metrics": nil}), nil
+			}
+			return jstr(map[string]any{"online": true, "metrics": m}), nil
+		})
+	reg("host_events", "获取某台主机最近的 Agent 事件（上线/指令/审计）",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"hostId": map[string]any{"type": "integer"},
+				"limit":  map[string]any{"type": "integer", "description": "默认 20"},
+			},
+			"required": []string{"hostId"},
+		},
+		func(args map[string]any) (string, error) {
+			limit := int(numOf(args["limit"]))
+			if limit <= 0 {
+				limit = 20
+			}
+			return jstr(s.Agent.RecentEvents(uint(numOf(args["hostId"])), limit)), nil
+		})
+	reg("host_check_ssh", "对某台主机做 SSH 基线审计（只读，不改配置）",
+		map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"hostId": map[string]any{"type": "integer"}},
+			"required":   []string{"hostId"},
+		},
+		func(args map[string]any) (string, error) {
+			res, err := s.Agent.Exec(uint(numOf(args["hostId"])), "ssh_audit", nil, 30*time.Second)
+			if err != nil {
+				return "", err
+			}
+			return res.Output, nil
 		})
 }

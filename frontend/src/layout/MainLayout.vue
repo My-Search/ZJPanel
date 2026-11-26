@@ -99,7 +99,7 @@ const isMobile = ref(false)
 
 // keep-alive 白名单：组件名需与页面文件名一致（SFC 默认继承文件名，但 vite 插件已显式注入 name）
 const cachedViews = [
-  'AppsPage', 'Dashboard', 'NginxConf', 'TerminalPage', 'CertsPage',
+  'AppsPage', 'Dashboard', 'NginxConf', 'TerminalPage', 'HostsPage', 'CertsPage',
   'MapPage', 'MonitorPage', 'McpPage', 'PluginsPage', 'SettingsPage',
 ]
 
@@ -110,7 +110,7 @@ const themeLabel = computed(() => ({ light: '浅色', dark: '深色', system: '�
 
 const selected = computed(() => {
   const p = route.path
-  const hit = ['/dashboard', '/apps', '/nginx', '/terminal', '/certs', '/map', '/monitor', '/security', '/mcp', '/plugins', '/settings']
+  const hit = ['/dashboard', '/apps', '/nginx', '/hosts', '/terminal', '/certs', '/map', '/monitor', '/waf', '/security', '/mcp', '/plugins', '/settings']
     .find(k => p.startsWith(k))
   if (hit) return [hit]
   if (p.startsWith('/plugin/')) return ['/plugin/' + route.params.id]

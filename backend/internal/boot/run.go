@@ -10,6 +10,7 @@ import (
 	"github.com/robfig/cron/v3"
 	"golang.org/x/crypto/ssh"
 
+	"zjpanel/backend/internal/agent"
 	"zjpanel/backend/internal/bus"
 	"zjpanel/backend/internal/cert"
 	"zjpanel/backend/internal/cert/targets"
@@ -121,6 +122,10 @@ func Run() {
 	securitySvc.SetIgnoredSites(composeSvc.DisabledSiteDomains)
 	securitySvc.Start()
 
+	// 主机 Agent 控制面：反向 WS 注册表 + token + 指令队列。
+	agentSvc := agent.New(cfg, db, box, hub)
+	agentSvc.EnsureLocalHost()
+
 	// 证书管线（certd 式）
 	cronSvc := newCronWrap()
 	certSvc := cert.New(cfg, db, box, eventBus, hub, cronSvc)
@@ -195,6 +200,7 @@ func Run() {
 	srv.Metrics = metricsSvc
 	srv.Logmap = logmapSvc
 	srv.Security = securitySvc
+	srv.Agent = agentSvc
 	srv.Cert = certSvc
 	srv.Updater = updater
 	srv.Plugins = pluginMgr

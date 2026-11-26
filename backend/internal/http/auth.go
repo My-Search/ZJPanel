@@ -12,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 
+	"zjpanel/backend/internal/agent"
 	"zjpanel/backend/internal/cert"
 	"zjpanel/backend/internal/compose"
 	"zjpanel/backend/internal/docker"
@@ -43,22 +44,23 @@ type Server struct {
 	r    *gin.Engine
 
 	// 服务实例由 boot 装配后注入（RegisterRoutes 前必须全部就绪）
-	Nginx   *nginx.Service
-	Sites   *site.Service
-	Check   *sitecheck.Service
-	Compose *compose.Service
-	Term    *terminal.Manager
-	Sftp    *sftp.Manager
-	Docker  *docker.Service
-	Metrics *metrics.Service
-	Logmap  *logmap.Service
+	Nginx    *nginx.Service
+	Sites    *site.Service
+	Check    *sitecheck.Service
+	Compose  *compose.Service
+	Term     *terminal.Manager
+	Sftp     *sftp.Manager
+	Docker   *docker.Service
+	Metrics  *metrics.Service
+	Logmap   *logmap.Service
 	Security *security.Service
-	Cert    *cert.Service
-	Updater *update.Service
-	Plugins *plugin.Manager
-	Notify  *notify.Service
-	MCPReg  *mcp.Registry
-	MCPSrv  *mcp.Server
+	Agent    *agent.Service
+	Cert     *cert.Service
+	Updater  *update.Service
+	Plugins  *plugin.Manager
+	Notify   *notify.Service
+	MCPReg   *mcp.Registry
+	MCPSrv   *mcp.Server
 }
 
 func NewServer(cfg *pkg.Config, db *gorm.DB, auth *middleware.Auth, hub *ws.Hub, box *pkg.SecretBox) *Server {

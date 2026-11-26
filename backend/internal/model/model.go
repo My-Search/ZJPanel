@@ -28,6 +28,8 @@ type ApiKey struct {
 	LastUsedAt *time.Time `json:"lastUsedAt"`
 }
 
+// SshHost 主机：既是 SSH 终端的目标，也是 Agent 管理的宿主。
+// 一张表承载两种形态（未装 Agent / 已装 Agent），避免「终端主机」与「受管主机」两套清单。
 type SshHost struct {
 	ID            uint      `gorm:"primaryKey" json:"id"`
 	Name          string    `gorm:"size:64" json:"name"`
@@ -39,6 +41,34 @@ type SshHost struct {
 	PrivateKeyEnc string    `json:"-"` // AES-GCM
 	PassphraseEnc string    `json:"-"`
 	CreatedAt     time.Time `json:"createdAt"`
+
+	// ---- 主机分组与 Agent 状态 ----
+	Group         string     `gorm:"size:64" json:"group"`
+	Tags          string     `gorm:"size:255" json:"tags"` // 逗号分隔
+	Local         bool       `json:"local"`                // 内置「本机」伪主机：永不卸载、无 SSH
+	AgentID       string     `gorm:"size:64;index" json:"agentId"`
+	AgentStatus   string     `gorm:"size:16" json:"agentStatus"` // none|pending|online|offline|uninstalled
+	AgentVersion  string     `gorm:"size:32" json:"agentVersion"`
+	AgentProto    string     `gorm:"size:16" json:"agentProto"`
+	AgentLastSeen *time.Time `json:"agentLastSeen"`
+	RemoteIP      string     `gorm:"size:64" json:"remoteIp"`
+	OSArch        string     `gorm:"size:64" json:"osArch"`
+	TokenHash     string     `gorm:"size:64;index" json:"-"` // sha256(host token)，明文只在 Agent 配置里
+	Claimed       bool       `json:"claimed"`                // 命令安装的主机：回连后等待人工认领
+}
+
+// AgentCommand 一次下发给 Agent 的指令（审计 + 幂等 + 超时重试）。
+type AgentCommand struct {
+	ID        string     `gorm:"primaryKey;size:32" json:"id"`
+	HostID    uint       `gorm:"index" json:"hostId"`
+	Kind      string     `gorm:"size:32" json:"kind"`
+	Params    string     `gorm:"type:text" json:"params"`
+	Status    string     `gorm:"size:16" json:"status"` // queued|sent|ok|failed|timeout
+	Output    string     `gorm:"type:text" json:"output"`
+	Error     string     `gorm:"type:text" json:"error"`
+	Attempts  int        `json:"attempts"`
+	CreatedAt time.Time  `json:"createdAt"`
+	AckedAt   *time.Time `json:"ackedAt"`
 }
 
 // QuickCmd 终端页常用命令（点击即发送到当前 SSH 会话执行）。

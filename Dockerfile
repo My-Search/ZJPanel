@@ -28,6 +28,8 @@ RUN rm -rf internal/http/dist
 COPY --from=fe /fe/dist ./internal/http/dist
 ARG VERSION=dev
 RUN go build -ldflags "-s -w -X zjpanel/backend/internal/buildinfo.Version=${VERSION}" -o /out/zjpanel ./cmd/zjpanel
+# 主机 Agent：与面板同版本构建，随镜像分发（runtime 按 TARGETARCH 命名）
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH:-amd64} go build -ldflags "-s -w -X zjpanel/backend/internal/buildinfo.Version=${VERSION}" -o /out/zjagent ./cmd/zjagent
 
 # ========= 阶段 3：运行层（nginx + 面板 + docker cli，单容器） =========
 FROM alpine:3.20
@@ -35,7 +37,10 @@ FROM alpine:3.20
 RUN apk add --no-cache nginx docker-cli docker-cli-compose bash curl git ca-certificates tzdata s6-overlay 2>/dev/null || \
     apk add --no-cache nginx docker-cli docker-cli-compose bash curl git ca-certificates tzdata
 ENV TZ=Asia/Shanghai
+ARG TARGETARCH=amd64
 COPY --from=be /out/zjpanel /app/zjpanel
+COPY --from=be /out/zjagent /tmp/zjagent
+RUN mkdir -p /app/agent && mv /tmp/zjagent /app/agent/zjagent-linux-${TARGETARCH} && chmod +x /app/agent/zjagent-linux-${TARGETARCH}
 COPY deploy/entrypoint.sh /app/entrypoint.sh
 COPY deploy/nginx-defaults/ /app/nginx-defaults/
 COPY backend/plugins/notifywebhook/ /app/plugin-examples/notifywebhook/
