@@ -70,10 +70,6 @@ try {
   .badge.failed { background: transparent; border: 1px solid var(--red); color: var(--red); }
   .badge.timeout { background: transparent; border: 1px solid var(--orange); color: var(--orange); }
   @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: .25; } }
-  .active-card { border-left: 3px solid var(--primary); padding: 10px 14px; }
-  .active-title { color: var(--dim); font-size: 12px; }
-  .active-row { display: flex; align-items: center; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
-  .active-row .btn { margin-left: auto; }
   .log-modal { width: 900px; }
   .log-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .log-head h3 { margin: 0; font-size: 15px; }
@@ -98,7 +94,6 @@ try {
     执行位置可选面板本机或终端已保存的 SSH 主机；绑定 SSH 后命令在该主机上以登录 shell 环境执行（与手动开终端一致）。
     执行中可实时查看输出，完成后自动落历史记录。
   </div>
-  <div id="activeBar"></div>
   <div id="list"></div>
 </div>
 
@@ -224,8 +219,8 @@ function renderTaskBadges() {
   document.querySelectorAll('[data-task-badge]').forEach(el => {
     const n = counts.get(el.dataset.taskBadge) || 0;
     el.style.display = n ? 'inline-block' : 'none';
-    el.textContent = n ? `处理中 x${n}` : '';
-    el.title = n ? `${n} 个执行正在进行中，可点击日志实时查看` : '';
+    el.textContent = n ? (n > 1 ? `进行中 x${n}` : '进行中') : '';
+    el.title = n ? '点击「日志」可查看进行中的执行' : '';
   });
 }
 
@@ -282,14 +277,13 @@ async function runTask(id) {
   showLogs(id);
   if (r.runId) openLiveRun(r.runId, id, r.startAt, r.target);
 }
-// 进行中执行横幅（cron 自动触发 / 手动执行都能看到）
+// 同步进行中执行（仅用于任务卡片徽标和日志列表刷新）
 async function pollActive() {
   try {
     const list = await api('/active');
     const prev = lastActive;
     activeRuns = Array.isArray(list) ? list : [];
     lastActive = activeRuns;
-    renderActive();
     renderTaskBadges();
     prev.forEach(p => {
       if (!activeRuns.some(x => x.runId === p.runId)) {
@@ -298,19 +292,6 @@ async function pollActive() {
       }
     });
   } catch (e) { /* 瞬断忽略 */ }
-}
-function renderActive() {
-  const el = $('#activeBar');
-  if (!activeRuns.length) { el.innerHTML = ''; return; }
-  const names = id => (tasks.find(t => t.id === id) || {}).name || id;
-  el.innerHTML = `<div class="card active-card">
-    <div class="active-title"><span class="badge running">进行中</span> 正在执行的任务</div>
-    ${activeRuns.map(r => `<div class="active-row">
-      <b>${esc(names(r.taskId))}</b>
-      <span class="meta" style="margin:0">${targetLabel(r.target)} · 已运行 <span data-since="${sinceOf(r.startAt)}">${fmtDur(Date.now() - sinceOf(r.startAt))}</span></span>
-      <button class="btn small" onclick="openLiveRun('${esc(r.runId)}','${esc(r.taskId)}','${esc(r.startAt)}','${esc(r.target || '')}')">实时查看</button>
-    </div>`).join('')}
-  </div>`;
 }
 async function showLogs(id) {
   const box = $('#logs-' + id);
@@ -457,12 +438,8 @@ function stopLive() {
 }
 function closeRunLog() { stopLive(); $('#logMask').classList.remove('open'); }
 
-// 每秒刷新“已运行”计时与进行中列表
+// 每秒刷新实时日志的运行时长
 setInterval(() => {
-  document.querySelectorAll('[data-since]').forEach(el => {
-    const t = +el.dataset.since || 0;
-    el.textContent = fmtDur(Date.now() - t);
-  });
   if (live) $('#logDur').textContent = '已运行 ' + fmtDur(Date.now() - live.startedMs);
 }, 1000);
 setInterval(pollActive, 2500);
