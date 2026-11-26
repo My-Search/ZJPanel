@@ -105,4 +105,10 @@ type Context interface {
 	// 返回 stdout+stderr 合并输出与远端退出码；连接失败/超时 exitCode=-1，
 	// 超时错误可用 errors.Is(err, ErrExecTimeout) 判定。
 	SSHExec(hostID uint, command string, timeoutSec int) (output string, exitCode int, err error)
+
+	// SSHExecStream 与 SSHExec 相同，但把 stdout+stderr 合并输出分块实时回调给 sink，
+	// 供插件展示进行中的执行日志。sink 可能被并发调用（stdout/stderr 各一路），
+	// 且可能在函数返回后仍收到尾部数据，回调内需自行加锁并容忍迟到写入。
+	// 超时/连接失败 exitCode=-1，超时错误可用 errors.Is(err, ErrExecTimeout) 判定。
+	SSHExecStream(hostID uint, command string, timeoutSec int, sink func(chunk []byte)) (exitCode int, err error)
 }

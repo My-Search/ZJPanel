@@ -124,8 +124,7 @@ func (c *ctxImpl) SSHExec(hostID uint, command string, timeoutSec int) (string, 
 		_ = client.Close()
 		return "", -1, fmt.Errorf("创建 SSH 会话失败: %w", err)
 	}
-	q := "'" + strings.ReplaceAll(command, "'", `'\''`) + "'"
-	wrapped := "if command -v bash >/dev/null 2>&1; then exec bash -lc " + q + "; else exec sh -lc " + q + "; fi"
+	wrapped := loginShellWrap(command)
 	type result struct {
 		out []byte
 		err error
@@ -157,6 +156,69 @@ func (c *ctxImpl) SSHExec(hostID uint, command string, timeoutSec int) (string, 
 		case <-time.After(5 * time.Second):
 			return "", -1, timeoutErr
 		}
+	}
+}
+
+// loginShellWrap 用登录 shell 包裹命令（bash 优先，缺失回退 sh），保证 PATH 与手动开终端一致。
+func loginShellWrap(command string) string {
+	q := "'" + strings.ReplaceAll(command, "'", `'\''`) + "'"
+	return "if command -v bash >/dev/null 2>&1; then exec bash -lc " + q + "; else exec sh -lc " + q + "; fi"
+}
+
+// sinkWriter 把远端输出块交给回调（sink 内部加锁由调用方负责）。
+type sinkWriter struct{ sink func([]byte) }
+
+func (w sinkWriter) Write(p []byte) (int, error) {
+	w.sink(p)
+	return len(p), nil
+}
+
+// SSHExecStream 同 SSHExec，但输出边到边回调，供插件实时展示执行日志。
+// 与 CombinedOutput 的“全部收齐再返回”不同，这里 Stdout/Stderr 直接接到 sink；
+// 超时后关闭会话/连接，sink 可能仍收到少量迟到数据（调用方按 run 状态丢弃即可）。
+func (c *ctxImpl) SSHExecStream(hostID uint, command string, timeoutSec int, sink func([]byte)) (int, error) {
+	if timeoutSec <= 0 {
+		timeoutSec = 3600
+	}
+	client, err := terminal.DialHostByID(c.mgr.db, c.mgr.box, hostID)
+	if err != nil {
+		return -1, err
+	}
+	sess, err := client.NewSession()
+	if err != nil {
+		_ = client.Close()
+		return -1, fmt.Errorf("创建 SSH 会话失败: %w", err)
+	}
+	w := sinkWriter{sink: sink}
+	sess.Stdout = w
+	sess.Stderr = w
+	if err := sess.Start(loginShellWrap(command)); err != nil {
+		_ = sess.Close()
+		_ = client.Close()
+		return -1, fmt.Errorf("启动远端命令失败: %w", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- sess.Wait() }()
+	select {
+	case err := <-done:
+		_ = sess.Close()
+		_ = client.Close()
+		if err == nil {
+			return 0, nil
+		}
+		var ee *ssh.ExitError
+		if errors.As(err, &ee) {
+			return ee.ExitStatus(), err
+		}
+		return -1, err
+	case <-time.After(time.Duration(timeoutSec) * time.Second):
+		_ = sess.Close()
+		_ = client.Close() // 断开底层连接，解除输出读取阻塞
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+		return -1, fmt.Errorf("%w（>%ds）", sdk.ErrExecTimeout, timeoutSec)
 	}
 }
 

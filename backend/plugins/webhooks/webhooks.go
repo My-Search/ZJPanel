@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	sdk "zjpanel/backend/sdk/plugin"
 )
@@ -45,29 +46,56 @@ type Hook struct {
 }
 
 type RunLog struct {
-	HookID   string `json:"hookId"`
-	StartAt  string `json:"startAt"`
-	ExitCode int    `json:"exitCode"`
-	Target   string `json:"target,omitempty"` // 执行目标：空=本机；ssh:<主机ID>
-	Output   string `json:"output"`
+	RunID      string `json:"runId,omitempty"`
+	HookID     string `json:"hookId"`
+	StartAt    string `json:"startAt"`
+	ExitCode   int    `json:"exitCode"`
+	Status     string `json:"status,omitempty"` // running | success | failed | timeout（旧记录为空按退出码判定）
+	DurationMs int64  `json:"durationMs,omitempty"`
+	Target     string `json:"target,omitempty"` // 执行目标：空=本机；ssh:<主机ID>
+	Output     string `json:"output"`
+}
+
+// liveRun 一次执行（进行中或刚结束）：buf 是实时输出缓冲，SSE/轮询从这里读。
+// buf/status/exitCode/durMs/subs/closed 均由 Plugin.mu 保护；StartAt/Target 创建后不变。
+type liveRun struct {
+	RunID    string
+	HookID   string
+	StartAt  string
+	Target   string
+	started  time.Time
+	buf      []byte
+	status   string
+	exitCode int
+	durMs    int64
+	subs     map[chan struct{}]struct{} // 实时订阅者（每连接一个缓冲信号）
+	done     chan struct{}              // 执行结束关闭，供同步等待方（MCP）使用
+	closed   bool
 }
 
 type Plugin struct {
-	ctx   sdk.Context
-	mu    sync.Mutex
-	hooks map[string]*Hook
-	logs  map[string][]RunLog // 每 hook 环形保留最近 10 次
-	smtp  struct{ server, user, pass, from string }
+	ctx      sdk.Context
+	mu       sync.Mutex
+	hooks    map[string]*Hook
+	logs     map[string][]RunLog // 每 hook 环形保留最近 10 次（已结束）
+	runs     map[string]*liveRun // runId → 执行（含刚结束，供断线重连/历史查看）
+	runOrder []string            // run 插入顺序，用于淘汰旧记录
+	smtp     struct{ server, user, pass, from string }
 }
 
-func New() sdk.Plugin { return &Plugin{hooks: map[string]*Hook{}, logs: map[string][]RunLog{}} }
+func New() sdk.Plugin {
+	return &Plugin{
+		hooks: map[string]*Hook{}, logs: map[string][]RunLog{},
+		runs: map[string]*liveRun{},
+	}
+}
 
 func (p *Plugin) Meta() sdk.Meta {
 	return sdk.Meta{
 		ID:          "webhooks",
 		Name:        "Webhooks 服务",
-		Version:     "0.2.0",
-		Description: "Webhook 接收端（GitHub 签名校验）+ 部署执行 + 运行日志 + 邮件通知 + 绑定 SSH 主机远端执行；替代独立 webhook 服务",
+		Version:     "0.3.0",
+		Description: "Webhook 接收端（GitHub 签名校验）+ 部署执行 + 运行日志（执行中实时输出）+ 邮件通知 + 绑定 SSH 主机远端执行；替代独立 webhook 服务",
 		Permissions: []string{"http", "exec"},
 		Menu:        []sdk.Menu{{Title: "Webhooks", Icon: "thunderbolt", Path: "/"}},
 		Settings: []sdk.SettingDef{
@@ -89,6 +117,10 @@ func (p *Plugin) OnInit(ctx sdk.Context) error {
 	ctx.RegisterRoute("POST", "/hooks", p.apiSave)
 	ctx.RegisterRoute("DELETE", "/hooks/*", p.apiDelete)
 	ctx.RegisterRoute("GET", "/logs/*", p.apiLogs)
+	ctx.RegisterRoute("GET", "/active", p.apiActive)
+	// 注意顺序：/runs/* 是尾通配，会吞掉 /runs/x/stream，流式路由必须先注册。
+	ctx.RegisterRoute("GET", "/runs/*/stream", p.apiRunStream)
+	ctx.RegisterRoute("GET", "/runs/*", p.apiRunGet)
 	ctx.RegisterRoute("POST", "/hooks/*/run", p.apiRun)
 
 	// 公网接收端点（免面板登录，GitHub X-Hub-Signature 校验）
@@ -224,16 +256,214 @@ func (p *Plugin) apiDelete(w http.ResponseWriter, r *http.Request) {
 func (p *Plugin) apiLogs(w http.ResponseWriter, r *http.Request) {
 	id := strings.Trim(strings.TrimPrefix(pluginPath(r), "/logs/"), "/")
 	p.mu.Lock()
-	logs := append([]RunLog{}, p.logs[id]...)
+	out := make([]RunLog, 0, 12)
+	// 进行中的执行优先展示（历史环形里只有已结束记录）
+	for _, rid := range p.runOrder {
+		if run := p.runs[rid]; run != nil && run.HookID == id && run.status == "running" {
+			out = append(out, run.snapshot())
+		}
+	}
+	out = append(out, p.logs[id]...)
 	p.mu.Unlock()
-	writeJSON(w, http.StatusOK, logs)
+	writeJSON(w, http.StatusOK, out)
 }
+
+func (p *Plugin) apiActive(w http.ResponseWriter, r *http.Request) {
+	p.mu.Lock()
+	out := make([]RunLog, 0, 4)
+	for _, rid := range p.runOrder {
+		if run := p.runs[rid]; run != nil && run.status == "running" {
+			out = append(out, run.snapshot())
+		}
+	}
+	p.mu.Unlock()
+	writeJSON(w, http.StatusOK, out)
+}
+
+// apiRunGet 单次执行快照：前端断线/轮询降级、历史记录查看用。
+func (p *Plugin) apiRunGet(w http.ResponseWriter, r *http.Request) {
+	runID := strings.Trim(strings.TrimPrefix(pluginPath(r), "/runs/"), "/")
+	p.mu.Lock()
+	var found *RunLog
+	if run, ok := p.runs[runID]; ok {
+		rl := run.snapshot()
+		found = &rl
+	} else {
+		for _, ls := range p.logs {
+			for _, l := range ls {
+				if l.RunID == runID {
+					l := l
+					found = &l
+					break
+				}
+			}
+		}
+	}
+	p.mu.Unlock()
+	if found == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "执行记录不存在或已过期"})
+		return
+	}
+	writeJSON(w, http.StatusOK, *found)
+}
+
+// apiRunStream SSE 实时输出：连接建立先补发缓冲全量，之后增量推送，结束发 done 事件。
+// 事件格式与面板其它 SSE 一致：默认 message 内 {"type":"out","data":{"text":...}}。
+func (p *Plugin) apiRunStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "当前连接不支持流式输出"})
+		return
+	}
+	runID := strings.TrimSuffix(strings.Trim(strings.TrimPrefix(pluginPath(r), "/runs/"), "/"), "/stream")
+	p.mu.Lock()
+	run, ok := p.runs[runID]
+	if !ok {
+		p.mu.Unlock()
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "执行记录不存在或已过期"})
+		return
+	}
+	ch := make(chan struct{}, 1)
+	if run.status == "running" {
+		run.subs[ch] = struct{}{}
+	}
+	p.mu.Unlock()
+	defer func() {
+		p.mu.Lock()
+		delete(run.subs, ch)
+		p.mu.Unlock()
+	}()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // 走反代时禁缓冲
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
+	off := 0
+	var pending []byte // 跨事件未凑齐的 UTF-8 半字符
+	ping := time.NewTicker(15 * time.Second)
+	defer ping.Stop()
+	for {
+		p.mu.Lock()
+		n := len(run.buf)
+		var chunk []byte
+		if n > off {
+			end := n
+			if end-off > 64<<10 { // 单条事件不超过 64KB，避免历史输出很大时一次性灌给浏览器
+				end = off + 64<<10
+			}
+			chunk = append([]byte(nil), run.buf[off:end]...)
+			off = end
+		}
+		more := n > off
+		status, exitCode, durMs := run.status, run.exitCode, run.durMs
+		p.mu.Unlock()
+
+		data := append(pending, chunk...)
+		whole, rest := splitUTF8(data)
+		pending = rest
+		finished := status != "running"
+		if finished && !more {
+			whole = data // 收尾且无积压：剩余字节一并送出（不完整字节由 JSON 转义兜底）
+			pending = nil
+		}
+		if len(whole) > 0 {
+			if err := writeSSEEvent(w, "out", map[string]any{"text": string(whole)}); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+		if more { // 还有积压输出，先发完再等新数据
+			continue
+		}
+		if !finished {
+			select {
+			case <-ch:
+			case <-ping.C:
+				if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
+					return
+				}
+				flusher.Flush()
+			case <-r.Context().Done():
+				return
+			}
+			continue
+		}
+		_ = writeSSEEvent(w, "done", map[string]any{
+			"status": status, "exitCode": exitCode, "durationMs": durMs,
+		})
+		flusher.Flush()
+		return
+	}
+}
+
+func writeSSEEvent(w io.Writer, typ string, data any) error {
+	b, err := json.Marshal(map[string]any{"type": typ, "data": data})
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "data: %s\n\n", b)
+	return err
+}
+
+// splitUTF8 把末尾不完整的 UTF-8 序列留到下一次拼接，避免跨块截断中文输出。
+// 只处理“合法序列被截断”的情况；其它非法字节原样返回（JSON 编码会替换为 U+FFFD），
+// 不能简单按“末尾最多 3 字节”回退，否则非法字节会让已发送内容被重复输出。
+func splitUTF8(b []byte) (whole, rest []byte) {
+	if len(b) == 0 || utf8.Valid(b) {
+		return b, nil
+	}
+	for i := 1; i <= 3 && i <= len(b); i++ {
+		size := utf8SeqLen(b[len(b)-i])
+		if size == 0 || i >= size {
+			continue
+		}
+		ok := true
+		for j := len(b) - i + 1; j < len(b); j++ {
+			if !utf8Cont(b[j]) {
+				ok = false
+				break
+			}
+		}
+		if ok {
+			return b[:len(b)-i], b[len(b)-i:]
+		}
+		return b, nil
+	}
+	return b, nil
+}
+
+func utf8SeqLen(c byte) int {
+	switch {
+	case c >= 0xC2 && c <= 0xDF:
+		return 2
+	case c >= 0xE0 && c <= 0xEF:
+		return 3
+	case c >= 0xF0 && c <= 0xF4:
+		return 4
+	}
+	return 0
+}
+
+func utf8Cont(c byte) bool { return c >= 0x80 && c <= 0xBF }
 
 func (p *Plugin) apiRun(w http.ResponseWriter, r *http.Request) {
 	id := strings.Trim(strings.TrimPrefix(pluginPath(r), "/hooks/"), "/")
 	id = strings.TrimSuffix(id, "/run")
-	out, err := p.runHook(id)
-	writeJSON(w, http.StatusOK, ginH("output", out, "error", errStr(err)))
+	// wait=1 保留旧的同步语义（旧调用方可直接拿完整输出）；默认立即返回 runId 并后台执行。
+	if r.URL.Query().Get("wait") == "1" {
+		out, err := p.runHook(id)
+		writeJSON(w, http.StatusOK, ginH("output", out, "error", errStr(err)))
+		return
+	}
+	run, err := p.startRun(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, ginH("ok", true, "runId", run.RunID, "startAt", run.StartAt, "target", run.Target))
 }
 
 func validID(id string) bool {
@@ -294,9 +524,12 @@ func (p *Plugin) apiReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go func() {
-		out, err := p.runHook(id)
-		p.ctx.Logf("hook %s 执行完成 exit=%v", id, err)
-		_ = out
+		run, err := p.startRun(id)
+		if err != nil {
+			p.ctx.Logf("hook %s 触发失败: %v", id, err)
+			return
+		}
+		p.ctx.Logf("hook %s 已触发 run=%s", id, run.RunID)
 	}()
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -331,69 +564,194 @@ func verifySig(header, prefix, secret string, body []byte) bool {
 	return hmac.Equal([]byte(expect), []byte(header))
 }
 
-// ---- 执行与日志 ----
+// ---- 执行与日志（实时流）----
 
-// runHook 同步执行部署命令并记录日志/邮件通知。
-// 绑定 SSH 主机（sshHostId>0）→ 远端登录 shell 执行（默认超时 3600s）；否则面板本机 bash -c。
-func (p *Plugin) runHook(id string) (string, error) {
+func genRunID() string {
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func (r *liveRun) snapshot() RunLog {
+	return RunLog{
+		RunID: r.RunID, HookID: r.HookID, StartAt: r.StartAt, ExitCode: r.exitCode,
+		Status: r.status, DurationMs: r.durMs, Target: r.Target, Output: string(r.buf),
+	}
+}
+
+// startRun 后台执行一次 Hook，立即返回 run（前端拿 runId 订阅实时输出）。
+// 同一 Hook 允许并发触发：每次执行独立 runId/缓冲，历史逐条可见（与旧行为一致）。
+func (p *Plugin) startRun(id string) (*liveRun, error) {
 	p.mu.Lock()
 	h, ok := p.hooks[id]
-	p.mu.Unlock()
 	if !ok {
-		return "", fmt.Errorf("hook 不存在: %s", id)
+		p.mu.Unlock()
+		return nil, fmt.Errorf("hook 不存在: %s", id)
 	}
-	start := time.Now()
+	hc := *h
+	now := time.Now()
+	run := &liveRun{
+		RunID: genRunID(), HookID: id, StartAt: now.Format("2006-01-02 15:04:05"),
+		started: now, status: "running", subs: map[chan struct{}]struct{}{},
+		done: make(chan struct{}),
+	}
+	if hc.SSHHostID > 0 {
+		run.Target = fmt.Sprintf("ssh:%d", hc.SSHHostID)
+	}
+	p.runs[run.RunID] = run
+	p.runOrder = append(p.runOrder, run.RunID)
+	p.trimRunsLocked()
+	p.mu.Unlock()
+	go p.execute(hc, run)
+	return run, nil
+}
+
+// trimRunsLocked 淘汰已结束的旧 run（保留最近 40 条；进行中的永不淘汰）。需持 p.mu。
+func (p *Plugin) trimRunsLocked() {
+	for len(p.runOrder) > 40 {
+		idx := -1
+		for i, rid := range p.runOrder {
+			if r := p.runs[rid]; r != nil && r.status != "running" {
+				idx = i
+				break
+			}
+		}
+		if idx < 0 {
+			break
+		}
+		rid := p.runOrder[idx]
+		p.runOrder = append(p.runOrder[:idx], p.runOrder[idx+1:]...)
+		delete(p.runs, rid)
+	}
+}
+
+// execute 真正执行命令：输出边到边写入 run.buf（SSE/轮询据此读取）。
+// 绑定 SSH 主机（sshHostId>0）→ 远端登录 shell 执行（默认超时 3600s）；否则面板本机 bash -c。
+func (p *Plugin) execute(h Hook, run *liveRun) {
 	var (
-		outBytes []byte
-		err      error
 		exitCode int
-		target   string
+		err      error
 	)
 	if h.SSHHostID > 0 {
-		target = fmt.Sprintf("ssh:%d", h.SSHHostID)
 		cmdStr := h.DeployCmd
 		if h.ProjectPath != "" {
-			cmdStr = "cd '" + strings.ReplaceAll(h.ProjectPath, "'", `'\''`) + "' && " + cmdStr
+			cmdStr = "cd " + shellQuote(h.ProjectPath) + " && " + cmdStr
 		}
-		var out string
-		out, exitCode, err = p.ctx.SSHExec(h.SSHHostID, cmdStr, 3600)
-		outBytes = []byte(out)
-		if errors.Is(err, sdk.ErrExecTimeout) {
-			p.ctx.Logf("hook %s SSH 执行超时", id)
-		}
+		exitCode, err = p.ctx.SSHExecStream(h.SSHHostID, cmdStr, 3600, func(b []byte) { p.appendOut(run, b) })
 	} else {
 		cmd := exec.Command("bash", "-c", h.DeployCmd)
 		cmd.Dir = h.ProjectPath
 		cmd.Env = append(os.Environ(), "HOME=/root")
-		outBytes, err = cmd.CombinedOutput()
+		cmd.Stdout = runOutput{p: p, run: run}
+		cmd.Stderr = runOutput{p: p, run: run}
+		err = cmd.Run()
 		exitCode = 0
 		if err != nil {
-			exitCode = 1
-			if ee, ok := err.(*exec.ExitError); ok {
+			var ee *exec.ExitError
+			if errors.As(err, &ee) {
 				exitCode = ee.ExitCode()
+			} else {
+				exitCode = -1
 			}
 		}
 	}
-	rl := RunLog{
-		HookID:   id,
-		StartAt:  start.Format("2006-01-02 15:04:05"),
-		ExitCode: exitCode,
-		Target:   target,
-		Output:   string(outBytes),
+	status := "success"
+	switch {
+	case errors.Is(err, sdk.ErrExecTimeout):
+		status, exitCode = "timeout", -1
+	case exitCode != 0:
+		status = "failed"
+	}
+	// 连接失败/超时/本机无 bash 等“没有输出”的失败，补一条面板侧说明，避免日志空白。
+	if err != nil && exitCode <= 0 {
+		if status == "timeout" {
+			p.appendOut(run, []byte("[面板] 执行超时，已中断: "+err.Error()+"\n"))
+		} else {
+			p.appendOut(run, []byte("[面板] 执行失败: "+err.Error()+"\n"))
+		}
+	}
+	rl := p.finishRun(run, status, exitCode)
+	p.ctx.Logf("hook %s 执行完成 run=%s status=%s exit=%d", run.HookID, run.RunID, status, exitCode)
+	if status == "success" {
+		p.notify(&h, fmt.Sprintf("Webhook 成功: %s", run.HookID), rl)
+	} else {
+		p.notify(&h, fmt.Sprintf("Webhook 失败: %s (%s, exit %d)", run.HookID, status, exitCode), rl)
+	}
+}
+
+// runOutput 承接本机命令的 stdout/stderr，写入实时缓冲（exec 内部会并发调用，appendOut 加锁）。
+type runOutput struct {
+	p   *Plugin
+	run *liveRun
+}
+
+func (w runOutput) Write(b []byte) (int, error) {
+	w.p.appendOut(w.run, b)
+	return len(b), nil
+}
+
+func (p *Plugin) appendOut(run *liveRun, b []byte) {
+	if len(b) == 0 {
+		return
 	}
 	p.mu.Lock()
-	p.logs[id] = append([]RunLog{rl}, p.logs[id]...)
-	if len(p.logs[id]) > 10 {
-		p.logs[id] = p.logs[id][:10]
+	if !run.closed { // 超时后远端可能仍回吐尾部数据，结束后一律丢弃
+		run.buf = append(run.buf, b...)
+		for ch := range run.subs {
+			select {
+			case ch <- struct{}{}:
+			default:
+			}
+		}
 	}
 	p.mu.Unlock()
+}
 
-	if exitCode == 0 {
-		p.notify(h, fmt.Sprintf("Webhook 成功: %s", id), rl)
-	} else {
-		p.notify(h, fmt.Sprintf("Webhook 失败: %s (exit %d)", id, exitCode), rl)
+// finishRun 定稿状态/耗时/历史并唤醒所有订阅者与等待者。
+func (p *Plugin) finishRun(run *liveRun, status string, exitCode int) RunLog {
+	p.mu.Lock()
+	if run.closed {
+		rl := run.snapshot()
+		p.mu.Unlock()
+		return rl
 	}
-	return rl.Output, err
+	run.status, run.exitCode = status, exitCode
+	run.durMs = time.Since(run.started).Milliseconds()
+	run.closed = true
+	rl := run.snapshot()
+	p.logs[run.HookID] = append([]RunLog{rl}, p.logs[run.HookID]...)
+	if len(p.logs[run.HookID]) > 10 {
+		p.logs[run.HookID] = p.logs[run.HookID][:10]
+	}
+	close(run.done)
+	for ch := range run.subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
+	p.mu.Unlock()
+	return rl
+}
+
+// runHook 同步执行（MCP 工具/旧调用方用）：等执行结束返回完整输出与错误。
+func (p *Plugin) runHook(id string) (string, error) {
+	run, err := p.startRun(id)
+	if err != nil {
+		return "", err
+	}
+	<-run.done
+	p.mu.Lock()
+	rl := run.snapshot()
+	p.mu.Unlock()
+	if rl.Status == "success" {
+		return rl.Output, nil
+	}
+	return rl.Output, fmt.Errorf("执行失败（%s，exit %d）", rl.Status, rl.ExitCode)
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // notify SMTP 邮件通知（原生 TLS/STARTTLS，避免 curl --user 在进程命令行暴露密码及邮件头 CRLF 注入）。
