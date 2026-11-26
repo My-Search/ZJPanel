@@ -69,12 +69,13 @@
           <a-table :data-source="sortedSites" :columns="siteCols" size="small" :pagination="false" row-key="domain">
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'status'">
-                <a-tag :color="record.check?.status === 'online' ? 'green' : record.check?.status === 'offline' ? 'red' : 'orange'">
+                <a-tag v-if="record.disabled" color="default" title="所属应用已标记停用：掉线不告警">停用</a-tag>
+                <a-tag v-else :color="record.check?.status === 'online' ? 'green' : record.check?.status === 'offline' ? 'red' : 'orange'">
                   {{ record.check?.status || '检测中' }}
                 </a-tag>
               </template>
               <template v-else-if="column.key === 'latency'">
-                {{ record.check?.latencyMs != null ? record.check.latencyMs + ' ms' : '-' }}
+                {{ !record.disabled && record.check?.latencyMs != null ? record.check.latencyMs + ' ms' : '-' }}
               </template>
               <template v-else-if="column.key === 'cert'">
                 {{ record.check?.certDaysLeft ? '剩 ' + record.check.certDaysLeft + ' 天' : '-' }}

@@ -196,7 +196,7 @@
               </a-form-item>
             </a-col>
           </a-row>
-          <a-form-item label="IP 白名单（每行一个，支持 CIDR；优先级最高，永不被封）">
+          <a-form-item label="IP 白名单（每行一个，支持 CIDR；本机 127.0.0.0/8 内置，白名单来源不参与攻击判定、永不被封）">
             <a-textarea v-model:value="whitelistText" :rows="3" placeholder="127.0.0.1&#10;192.168.0.0/16" />
           </a-form-item>
           <a-space>

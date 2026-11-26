@@ -117,6 +117,8 @@ func Run() {
 
 	// 安全中心：订阅日志做秒级判定（P0 观测）+ 策略下发（P1 处置）+ 自动封禁告警（P2）
 	securitySvc := security.New(cfg, logmapSvc, nginxSvc, hub)
+	// 停用应用关联网站：其流量/5xx/探测异常不计入安全中心（人工关停不属于「安全事件」）。
+	securitySvc.SetIgnoredSites(composeSvc.DisabledSiteDomains)
 	securitySvc.Start()
 
 	// 证书管线（certd 式）

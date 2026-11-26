@@ -90,6 +90,7 @@ func (s *Service) loadPolicy() error {
 	s.polMu.Lock()
 	s.pol = &p
 	s.polMu.Unlock()
+	s.setTrusted(p.Whitelist)
 	s.mu.Lock()
 	s.view = policyViewOf(&p)
 	s.mu.Unlock()
@@ -131,6 +132,7 @@ func (s *Service) SetPolicy(p Policy) error {
 	s.polMu.Lock()
 	s.pol = &p
 	s.polMu.Unlock()
+	s.setTrusted(p.Whitelist)
 	if err := s.savePolicy(&p); err != nil {
 		return err
 	}

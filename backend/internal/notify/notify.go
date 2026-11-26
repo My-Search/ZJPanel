@@ -37,7 +37,7 @@ const (
 // 注：插件启停事件不入站内信（由管理员自己触发，噪音大），事件仍经 bus 供 notify-webhook 插件订阅。
 var BuiltinTypes = []string{
 	"cert.issued", "cert.expiring", "cert.failed",
-	"sitecheck.down", "sitecheck.up",
+	"sitecheck.down",
 	"cron.failed", "panel.update",
 }
 
@@ -148,9 +148,8 @@ func (s *Service) Start() {
 	s.bus.Subscribe("sitecheck.down", func(p map[string]any) {
 		wrap("sitecheck.down", "error", fmt.Sprintf("站点探测异常：%v", p["domain"]), fmt.Sprintf("%v", p["error"]))
 	})
-	s.bus.Subscribe("sitecheck.up", func(p map[string]any) {
-		wrap("sitecheck.up", "info", fmt.Sprintf("站点探测恢复：%v", p["domain"]), "")
-	})
+	// sitecheck.up 不再发站内信：恢复属噪音（用户只关心声明时在运行的站点掉线）。
+	// 事件仍由 bus 发布，插件（如 notify-webhook）可自行订阅。
 	// plugin.enabled/disabled 不进站内信：由管理员自己在面板内触发，属噪音（事件仍供插件订阅）
 	go func() {
 		for {

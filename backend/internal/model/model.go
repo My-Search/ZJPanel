@@ -53,32 +53,42 @@ type QuickCmd struct {
 
 // Site 站点（nginx vhost 的面板元数据；配置实体在 sites-available/<domain>.conf）
 type Site struct {
-	ID              uint      `gorm:"primaryKey" json:"id"`
-	Domain          string    `gorm:"size:255;uniqueIndex" json:"domain"`
-	Type            string    `gorm:"size:16" json:"type"` // proxy | static
-	Upstream        string    `gorm:"size:255" json:"upstream"`   // 127.0.0.1:port（proxy）
-	Root            string    `gorm:"size:255" json:"root"`       // 静态目录（static）
-	SSL             bool      `json:"ssl"`
-	CertTaskID      *uint     `json:"certTaskId"`
-	Advanced        bool      `json:"advanced"` // 高级模式：整文件 raw 编辑
-	Maintenance     bool      `json:"maintenance"`
-	MaintenanceHTML string    `json:"maintenanceHtml"` // 站点级覆盖；空则用全局模板
-	ComposeProjectID *uint    `json:"composeProjectId"`
-	Remark          string    `gorm:"size:255" json:"remark"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	ID               uint   `gorm:"primaryKey" json:"id"`
+	Domain           string `gorm:"size:255;uniqueIndex" json:"domain"`
+	Type             string `gorm:"size:16" json:"type"`      // proxy | static
+	Upstream         string `gorm:"size:255" json:"upstream"` // 127.0.0.1:port（proxy）
+	Root             string `gorm:"size:255" json:"root"`     // 静态目录（static）
+	SSL              bool   `json:"ssl"`
+	CertTaskID       *uint  `json:"certTaskId"`
+	Advanced         bool   `json:"advanced"` // 高级模式：整文件 raw 编辑
+	Maintenance      bool   `json:"maintenance"`
+	MaintenanceHTML  string `json:"maintenanceHtml"` // 站点级覆盖；空则用全局模板
+	ComposeProjectID *uint  `json:"composeProjectId"`
+	Remark           string `gorm:"size:255" json:"remark"`
+	// 最近一次探测结果缓存：进程重启后站点列表仍能显示上次状态，探测服务启动后覆盖。
+	CheckStatus    string     `gorm:"size:16" json:"checkStatus,omitempty"`
+	CheckCode      int        `json:"checkCode,omitempty"`
+	CheckLatencyMs int64      `json:"checkLatencyMs,omitempty"`
+	CheckError     string     `gorm:"size:255" json:"checkError,omitempty"`
+	CheckedAt      *time.Time `json:"checkedAt,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
 }
 
 // ComposeProject 导入映射：项目目录保持原位，面板仅记录解析结果与关联站点。
 type ComposeProject struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	Name      string    `gorm:"size:128;index" json:"name"`
-	Dir       string    `gorm:"size:512;uniqueIndex" json:"dir"` // docker-compose.yml 所在目录
-	Services  string    `gorm:"type:text" json:"services"`       // JSON: [{name,image,ports:[]}]
-	SiteID    *uint     `json:"siteId"`
-	Imported  bool      `json:"imported"`
-	Hidden    bool      `gorm:"index;default:false" json:"hidden"` // 已从面板删除：扫描/列表跳过，重新导入或「恢复」后可见
-	CreatedAt time.Time `json:"createdAt"`
+	ID       uint   `gorm:"primaryKey" json:"id"`
+	Name     string `gorm:"size:128;index" json:"name"`
+	Dir      string `gorm:"size:512;uniqueIndex" json:"dir"` // docker-compose.yml 所在目录
+	Services string `gorm:"type:text" json:"services"`       // JSON: [{name,image,ports:[]}]
+	SiteID   *uint  `json:"siteId"`
+	Imported bool   `json:"imported"`
+	Hidden   bool   `gorm:"index;default:false" json:"hidden"` // 已从面板删除：扫描/列表跳过，重新导入或「恢复」后可见
+	// 应用运维状态：正常（默认）/ 停用。停用表示应用是人工关停的——其关联网站掉线不告警、
+	// 不计入安全中心态势；探测仍按常规频率进行，只是结果被标记为「不告警」。
+	Disabled   bool       `gorm:"index;default:false" json:"disabled"`
+	DisabledAt *time.Time `json:"disabledAt,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
 }
 
 // AcmeAccount ACME 账户（certd 的 Access 概念）
@@ -181,14 +191,14 @@ type PluginSetting struct {
 
 // MetricSample 监控历史采样
 type MetricSample struct {
-	ID       uint    `gorm:"primaryKey" json:"id"`
+	ID       uint      `gorm:"primaryKey" json:"id"`
 	Time     time.Time `gorm:"index" json:"time"`
-	CPU      float64 `json:"cpu"`
-	MemUsed  uint64  `json:"memUsed"`
-	MemTotal uint64  `json:"memTotal"`
-	NetIn    uint64  `json:"netIn"`
-	NetOut   uint64  `json:"netOut"`
-	Load1    float64 `json:"load1"`
+	CPU      float64   `json:"cpu"`
+	MemUsed  uint64    `json:"memUsed"`
+	MemTotal uint64    `json:"memTotal"`
+	NetIn    uint64    `json:"netIn"`
+	NetOut   uint64    `json:"netOut"`
+	Load1    float64   `json:"load1"`
 }
 
 type AuditLog struct {

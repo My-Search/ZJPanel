@@ -122,20 +122,38 @@ func (s *Server) registerSiteRoutes() {
 			states[st.Domain] = st
 		}
 		checks := s.Check.All()
+		// 停用应用：其关联网站掉线属人工关停，前端展示「停用」而不是故障。
+		var disabledProjectIDs []uint
+		_ = s.db.Model(&model.ComposeProject{}).Where("disabled = ?", true).Pluck("id", &disabledProjectIDs).Error
+		disabled := make(map[uint]bool, len(disabledProjectIDs))
+		for _, id := range disabledProjectIDs {
+			disabled[id] = true
+		}
 		items := []map[string]any{}
 		for _, it := range list {
+			isDisabled := it.ComposeProjectID != nil && disabled[*it.ComposeProjectID]
 			m := map[string]any{
 				"id": it.ID, "domain": it.Domain, "type": it.Type, "upstream": it.Upstream,
 				"root": it.Root, "ssl": it.SSL, "advanced": it.Advanced,
 				"maintenance": it.Maintenance, "remark": it.Remark,
 				"composeProjectId": it.ComposeProjectID, "certTaskId": it.CertTaskID,
-				"createdAt": it.CreatedAt,
+				"disabled": isDisabled, "createdAt": it.CreatedAt,
 			}
 			if st, ok := states[it.Domain]; ok {
 				m["enabled"], m["maintenanceFile"] = st.Enabled, st.Maintenance
 			}
 			if info, ok := checks[it.Domain]; ok {
 				m["check"] = info
+			} else if it.CheckStatus != "" {
+				// 进程重启/探测尚未覆盖：回退到落库的上次结果，避免列表一片「检测中」
+				chk := map[string]any{
+					"domain": it.Domain, "status": it.CheckStatus, "code": it.CheckCode,
+					"latencyMs": it.CheckLatencyMs, "error": it.CheckError,
+				}
+				if it.CheckedAt != nil {
+					chk["checkedAt"] = *it.CheckedAt
+				}
+				m["check"] = chk
 			}
 			items = append(items, m)
 		}
@@ -319,6 +337,20 @@ func (s *Server) registerComposeRoutes() {
 			"ok": true, "created": created, "updated": updated,
 			"message": fmt.Sprintf("已按 zjpanel.json 恢复：新建 %d 个站点，更新 %d 个", created, updated),
 		})
+	})
+	// 应用运维状态：正常/停用。停用是声明（不碰容器），其站点掉线不告警、不计入安全中心。
+	g.POST("/:id/disabled", func(c *gin.Context) {
+		var req struct{ Value bool }
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if err := s.Compose.SetDisabled(idParam(c), req.Value); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		s.audit(c, "compose.disabled", fmt.Sprintf("%s=%v", c.Param("id"), req.Value))
+		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 	g.POST("/:id/action", func(c *gin.Context) {
 		var req struct{ Action string }

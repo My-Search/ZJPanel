@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"zjpanel/backend/internal/logmap"
@@ -152,6 +153,17 @@ type Service struct {
 	cidrCache map[string]cidrEntry
 	applyMu   sync.Mutex
 
+	// trusted 本机回环 + 白名单来源：完全跳过秒级聚合与攻击判定
+	//（面板自身/站点探测/同机运维不应被判定为 CC、爆破或扫描）。
+	trusted atomic.Pointer[trustedSet]
+
+	// ignoredSites 停用应用关联网站：人工关停的站点掉线/5xx 不属于安全事件，
+	// 整条来源从聚合里跳过（与可信来源区别：这里按站点名过滤，不看来源 IP）。
+	ignoredMu   sync.Mutex
+	ignoredFn   func() map[string]bool
+	ignored     atomic.Pointer[ignoredSites]
+	lastIgnored time.Time
+
 	notifyMu   sync.Mutex
 	lastNotify map[string]time.Time
 	notifyFn   func(title, body string)
@@ -162,7 +174,7 @@ type Service struct {
 
 func New(cfg *pkg.Config, lm *logmap.Service, ng *nginx.Service, hub *ws.Hub) *Service {
 	pol := defaultPolicy()
-	return &Service{
+	s := &Service{
 		cfg: cfg, logmap: lm, nginx: ng, hub: hub,
 		lastEmit:   map[string]time.Time{},
 		ewCtry:     map[string]float64{},
@@ -172,6 +184,8 @@ func New(cfg *pkg.Config, lm *logmap.Service, ng *nginx.Service, hub *ws.Hub) *S
 		view:       policyViewOf(pol),
 		stop:       make(chan struct{}),
 	}
+	s.setTrusted(pol.Whitelist)
+	return s
 }
 
 // SetNotify 注入统一通知回调（P2：严重事件自动告警）。
@@ -235,6 +249,16 @@ func (s *Service) loop() {
 
 // ingest 归并一条实时请求到对应秒桶。
 func (s *Service) ingest(e logmap.Entry) {
+	ip := strings.TrimSpace(e.IP)
+	// 本机回环与白名单来源不参与判定：面板自身页面/接口、站点探测、同机运维都会以
+	// 127.0.0.1 进 nginx，计入 CC/爆破判定会把正常运维打成攻击（也会污染 Top 源与失血判定）。
+	if s.isTrusted(ip) {
+		return
+	}
+	// 停用应用关联网站：人工关停的站点掉线/5xx 不是安全事件，整站来源不计入态势与判定。
+	if s.isIgnoredSite(strings.TrimSpace(e.Site)) {
+		return
+	}
 	sec := e.Time.Truncate(time.Second)
 	if sec.IsZero() {
 		sec = time.Now().Truncate(time.Second)
@@ -258,7 +282,6 @@ func (s *Service) ingest(e logmap.Entry) {
 		return // 乱序/历史补读：丢弃，不进实时统计
 	}
 
-	ip := e.IP
 	if ip == "" {
 		ip = "-"
 	}
@@ -327,6 +350,8 @@ func (s *Service) ingest(e logmap.Entry) {
 // tick 每秒：滚动窗口 → 规则判定 → 快照推送 → 断联快照落盘 → 到期策略回收。
 func (s *Service) tick(now time.Time) {
 	l4 := readL4(&s.l4prev)
+	// 停用应用集合周期性刷新（10s），读侧无锁。
+	s.refreshIgnored(now)
 
 	s.mu.Lock()
 	cut := now.Add(-bucketKeep * time.Second)

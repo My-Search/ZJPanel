@@ -18,11 +18,16 @@
           <!-- 项目列表 -->
           <a-col :span="7" class="proj-col">
             <a-empty v-if="!projects.length" description="未发现 compose 项目" />
-            <div v-for="p in sortedProjects" :key="p.dir || p.id" class="proj-card" :class="{ active: selected?.dir === p.dir }" @click="select(p)">
-              <div class="proj-name">{{ p.name }} <a-tag v-if="p.hasDecl" color="purple">声明</a-tag></div>
-              <div class="proj-sub">{{ runningCount(p) }}/{{ p.services?.length || 0 }} 服务运行 · {{ siteCount(p) }} 网站 {{ p.imported ? '· 已导入' : '' }}</div>
+            <div v-for="p in sortedProjects" :key="p.dir || p.id" class="proj-card" :class="{ active: selected?.dir === p.dir, disabled: p.disabled }" @click="select(p)">
+              <div class="proj-name">
+                {{ p.name }}
+                <a-tag v-if="p.hasDecl" color="purple">声明</a-tag>
+                <a-tag v-if="p.disabled" color="default">已停用</a-tag>
+              </div>
+              <div class="proj-sub" v-if="p.disabled">人工停用 · {{ siteCount(p) }} 网站（掉线不告警）{{ p.imported ? ' · 已导入' : '' }}</div>
+              <div class="proj-sub" v-else>{{ runningCount(p) }}/{{ p.services?.length || 0 }} 服务运行 · {{ siteCount(p) }} 网站 {{ p.imported ? '· 已导入' : '' }}</div>
               <div class="proj-res" v-if="projCpu(p) !== null">CPU {{ projCpu(p) }}% · 内存 {{ projMem(p) }}</div>
-              <div class="proj-res dim-res" v-else-if="runningCount(p) === 0">未运行 · 点「up」启动</div>
+              <div class="proj-res dim-res" v-else-if="runningCount(p) === 0 && !p.disabled">未运行 · 点「up」启动</div>
               <div class="proj-dir">{{ p.dir }}</div>
             </div>
           </a-col>
@@ -33,6 +38,7 @@
               <a-card size="small" :title="'项目：' + selected.name" style="margin-bottom: 12px">
                 <template #extra>
                   <a-space>
+                    <a-tag v-if="selected.disabled" color="default" title="人工停用：关联网站掉线不告警，安全中心不计入">已停用</a-tag>
                     <a-button size="small" type="primary" ghost :disabled="projBusy" @click="projAction('up')">up</a-button>
                     <a-button size="small" :disabled="projBusy" @click="projAction('down')">down</a-button>
                     <a-button size="small" :disabled="projBusy" @click="projAction('restart')">restart</a-button>
@@ -45,6 +51,9 @@
                           <a-menu-item key="sync" @click="syncDecl">按声明同步站点</a-menu-item>
                           <a-menu-item key="write" @click="writeDecl">立即写出声明文件</a-menu-item>
                           <a-menu-divider />
+                          <a-menu-item key="status" @click="toggleProjDisabled">
+                            {{ selected.disabled ? '恢复正常（重新告警）' : '标记停用（站点掉线不告警）' }}
+                          </a-menu-item>
                           <a-menu-item key="delete" danger :disabled="projBusy" @click="removeProj">删除</a-menu-item>
                         </a-menu>
                       </template>
@@ -65,10 +74,10 @@
                 </template>
                 <a-alert v-if="orphanList.length" type="warning" show-icon style="margin-bottom: 8px"
                   :message="`面板存在但声明文件未包含：${orphanList.join('、')}（点击「按声明同步」或「立即写出声明文件」可修复）`" />
-                <a-table :data-source="projSites" :columns="siteCols" size="small" row-key="id" :pagination="false" :scroll="{ x: 820 }"
+                <a-table :data-source="projSites" :columns="siteCols" size="small" row-key="id" :pagination="false" :scroll="{ x: 930 }"
                   :expanded-row-keys="expandedKeys" :show-expand-column="false" :expand-icon="() => null" @expandedRowsChange="onExpandedRowsChange">
                   <template #emptyText>
-                    <a-empty :description="runningCount(selected) === 0 ? '项目未运行，暂无关联网站数据（点上方「up」启动）' : '该项目还没有关联网站'" style="margin: 24px 0" />
+                    <a-empty :description="selected?.disabled ? '应用已停用：其站点掉线不告警、不计入安全中心（探测仍按常规进行）' : runningCount(selected) === 0 ? '项目未运行，暂无关联网站数据（点上方「up」启动）' : '该项目还没有关联网站'" style="margin: 24px 0" />
                   </template>
                   <!-- 行内展开：该网站最近请求树（最近 24 小时，数据懒加载 + 30s 静默刷新） -->
                   <template #expandedRowRender="{ record }">
@@ -103,8 +112,19 @@
                       <a-tag v-if="record.ssl" color="green">HTTPS</a-tag><a-tag v-else>HTTP</a-tag>
                     </template>
                     <template v-else-if="column.key === 'maint'">
-                      <a-tag v-if="record.maintenance" color="orange">维护中</a-tag>
+                      <a-tag v-if="record.disabled" color="default">应用停用</a-tag>
+                      <a-tag v-else-if="record.maintenance" color="orange">维护中</a-tag>
                       <a-tag v-else color="blue">运行</a-tag>
+                    </template>
+                    <template v-else-if="column.key === 'check'">
+                      <template v-if="record.check">
+                        <a-tag v-if="record.disabled && record.check.status !== 'online'" color="default">不告警</a-tag>
+                        <a-tag v-else :color="record.check.status === 'online' ? 'green' : record.check.status === 'offline' ? 'red' : 'orange'">
+                          {{ record.check.status === 'online' ? '正常' : record.check.status === 'offline' ? '离线' : '异常' }}
+                        </a-tag>
+                        <span v-if="record.check.status === 'online'" class="dim">{{ record.check.latencyMs }}ms</span>
+                      </template>
+                      <span v-else class="dim">-</span>
                     </template>
                     <template v-else-if="column.key === 'action'">
                       <!-- 与「全部网站」页同一套操作（维护/停用/编辑/配置/删除），由 SiteActions 组件提供 -->
@@ -446,7 +466,8 @@ const siteCols = [
   { title: '域名', dataIndex: 'domain', key: 'domain' },
   { title: '目标', dataIndex: 'upstream', key: 'upstream', width: 160 },
   { title: 'SSL', key: 'ssl', width: 90 },
-  { title: '状态', key: 'maint', width: 90 },
+  { title: '状态', key: 'maint', width: 100 },
+  { title: '探测', key: 'check', width: 110 },
   { title: '操作', key: 'action', width: 300 },
 ]
 const containerCols = [
@@ -713,6 +734,24 @@ const writeDecl = async () => {
   message.success('zjpanel.json 已写出')
   scan()
 }
+// 应用运维状态：正常/停用。停用只做声明（不碰容器/配置），其站点掉线不告警、不计入安全中心。
+const setProjDisabled = async (p: any, value: boolean) => {
+  await post(`/api/compose/${p.id}/disabled`, { value })
+  message.success(value ? '已标记停用：关联网站掉线不再告警' : '已恢复正常：关联网站掉线照常告警')
+  await scan()
+}
+const toggleProjDisabled = () => {
+  const p = selected.value
+  if (!p?.id) { message.warning('项目尚未登记，先点「重新扫描」'); return }
+  if (p.disabled) { void setProjDisabled(p, false); return }
+  Modal.confirm({
+    title: `标记「${p.name}」为停用？`,
+    content: '停用是面板声明，不会停止容器或修改配置。其关联网站掉线不再通知，也不计入安全中心；探测仍按常规频率进行。',
+    okText: '标记停用',
+    cancelText: '取消',
+    async onOk() { await setProjDisabled(p, true) },
+  })
+}
 // 删除项目：解除导入并从列表移除（关联网站 + zjpanel.json 一并删除），目录与容器保持原样。
 // 破坏性操作走二次确认；确认文案写清「不动容器/目录」，可经「已删除」恢复。
 const removeProj = () => {
@@ -867,6 +906,7 @@ onUnmounted(() => { clearInterval(timer); stopReqPolling(); stopOutWatch(); logs
 .dim { color: var(--color-slate); font-size: 12px; }
 .proj-card { border: 1px solid var(--border-card); border-radius: 8px; padding: 12px; margin-bottom: 10px; cursor: pointer; transition: all var(--motion-fast); }
 .proj-card.active { border-color: var(--color-corporate-blue); background: var(--bg-selected); }
+.proj-card.disabled .proj-name { color: var(--text-secondary); }
 /* 桌面端：左右两栏各自独立滚动（左列表/右详情最大高度 = 视口 - 页头/工具条占用） */
 @media (min-width: 768px) {
   .apps-layout { align-items: flex-start; }

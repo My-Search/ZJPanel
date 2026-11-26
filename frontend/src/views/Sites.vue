@@ -6,15 +6,17 @@
     <a-table :data-source="sortedSites" :columns="cols" size="small" row-key="id" :pagination="false" :scroll="{ x: 1100 }">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'status'">
-          <a-tag v-if="record.maintenance" color="orange">维护中</a-tag>
+          <a-tag v-if="record.disabled" color="default" title="所属应用已标记停用：掉线不告警">应用停用</a-tag>
+          <a-tag v-else-if="record.maintenance" color="orange">维护中</a-tag>
           <a-tag v-else-if="record.enabled === false" color="default">已停用</a-tag>
           <a-tag v-else color="blue">运行中</a-tag>
         </template>
         <template v-else-if="column.key === 'check'">
-          <span v-if="record.check">
-            <a-tag :color="record.check.status === 'online' ? 'green' : 'red'">{{ record.check.status }}</a-tag>
-            <span class="dim">{{ record.check.latencyMs }}ms</span>
-          </span>
+          <template v-if="record.check">
+            <a-tag v-if="record.disabled && record.check.status !== 'online'" color="default">不告警</a-tag>
+            <a-tag v-else :color="record.check.status === 'online' ? 'green' : 'red'">{{ record.check.status }}</a-tag>
+            <span v-if="record.check.status === 'online'" class="dim">{{ record.check.latencyMs }}ms</span>
+          </template>
           <span v-else class="dim">-</span>
         </template>
         <template v-else-if="column.key === 'ssl'">

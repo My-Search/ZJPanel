@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -54,6 +55,9 @@ type ProjectInfo struct {
 	ID       uint          `json:"id"`
 	HasDecl  bool          `json:"hasDecl"` // 存在 zjpanel.json（声明式导入）
 	Decl     *DeclFile     `json:"decl,omitempty"`
+	// 应用运维状态：停用的应用视为人工关停，其站点掉线不告警、不计入安全中心。
+	Disabled   bool       `json:"disabled"`
+	DisabledAt *time.Time `json:"disabledAt,omitempty"`
 }
 
 type composeFile struct {
@@ -168,6 +172,7 @@ func (s *Service) Scan() ([]ProjectInfo, error) {
 		}
 		if rec, ok := recs[dir]; ok {
 			pi.ID, pi.Imported, pi.SiteID = rec.ID, rec.Imported, rec.SiteID
+			pi.Disabled, pi.DisabledAt = rec.Disabled, rec.DisabledAt
 		}
 		out = append(out, pi)
 	}
@@ -233,10 +238,44 @@ func (s *Service) ListProjects() ([]map[string]any, error) {
 				return r.Services
 			}()),
 			"exists": statErr == nil, "imported": r.Imported,
-			"siteId": r.SiteID, "createTime": r.CreatedAt,
+			"siteId": r.SiteID, "disabled": r.Disabled, "disabledAt": r.DisabledAt,
+			"createTime": r.CreatedAt,
 		})
 	}
 	return out, nil
+}
+
+// SetDisabled 设置应用运维状态：停用=人工关停，其关联网站掉线不告警、不计入安全中心。
+// 只改声明，不碰容器与配置。
+func (s *Service) SetDisabled(projectID uint, disabled bool) error {
+	var rec model.ComposeProject
+	if err := s.db.First(&rec, projectID).Error; err != nil {
+		return fmt.Errorf("项目不存在")
+	}
+	upd := map[string]any{"disabled": disabled}
+	if disabled {
+		upd["disabled_at"] = time.Now()
+	} else {
+		upd["disabled_at"] = nil
+	}
+	return s.db.Model(&rec).Updates(upd).Error
+}
+
+// DisabledSiteDomains 停用应用关联网站域名集合（安全中心用于过滤其 5xx/攻击判定）。
+func (s *Service) DisabledSiteDomains() map[string]bool {
+	out := map[string]bool{}
+	var domains []string
+	err := s.db.Table("sites").Select("sites.domain").
+		Joins("JOIN compose_projects ON sites.compose_project_id = compose_projects.id").
+		Where("compose_projects.disabled = ?", true).Scan(&domains).Error
+	if err != nil {
+		slog.Warn("读取停用应用站点失败", "err", err)
+		return out
+	}
+	for _, d := range domains {
+		out[d] = true
+	}
+	return out
 }
 
 // HiddenProjects 已从面板删除的项目记录（「已删除」恢复入口用）。
