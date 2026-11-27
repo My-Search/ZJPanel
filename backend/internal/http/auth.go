@@ -31,6 +31,7 @@ import (
 	"zjpanel/backend/internal/sitecheck"
 	"zjpanel/backend/internal/terminal"
 	"zjpanel/backend/internal/update"
+	"zjpanel/backend/internal/waf"
 	"zjpanel/backend/internal/ws"
 )
 
@@ -54,6 +55,7 @@ type Server struct {
 	Metrics  *metrics.Service
 	Logmap   *logmap.Service
 	Security *security.Service
+	WAF      *waf.Service
 	Agent    *agent.Service
 	Cert     *cert.Service
 	Updater  *update.Service

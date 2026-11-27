@@ -28,6 +28,7 @@ func (s *Server) RegisterRoutes() {
 	s.registerMetricsRoutes()
 	s.registerLogmapRoutes()
 	s.registerSecurityRoutes()
+	s.registerWafRoutes()
 	s.registerCertRoutes()
 	s.registerMCPRoutes()
 	s.registerUpdateRoutes()

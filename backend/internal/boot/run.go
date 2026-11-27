@@ -32,6 +32,7 @@ import (
 	"zjpanel/backend/internal/sitecheck"
 	"zjpanel/backend/internal/terminal"
 	"zjpanel/backend/internal/update"
+	"zjpanel/backend/internal/waf"
 	"zjpanel/backend/internal/ws"
 	"zjpanel/backend/plugins/cronjobs"
 	"zjpanel/backend/plugins/dbadmin"
@@ -122,6 +123,18 @@ func Run() {
 	securitySvc.SetIgnoredSites(composeSvc.DisabledSiteDomains)
 	securitySvc.Start()
 
+	// WAF 规则引擎：对访问日志的 URI/查询串/UA/Referer 做内容级检测，
+	// 命中后按 IP 累犯阶梯封禁，封禁批量交给安全中心下发（一次策略保存 + 一次 nginx reload）。
+	wafSvc := waf.New(cfg, logmapSvc)
+	wafSvc.SetBanFunc(func(reqs []waf.BanRequest) (int, error) {
+		secReqs := make([]security.BanRequest, 0, len(reqs))
+		for _, r := range reqs {
+			secReqs = append(secReqs, security.BanRequest{IP: r.IP, Minutes: r.Minutes, Reason: "WAF: " + r.Reason})
+		}
+		return securitySvc.BanAuto(secReqs)
+	})
+	wafSvc.Start()
+
 	// 主机 Agent 控制面：反向 WS 注册表 + token + 指令队列。
 	agentSvc := agent.New(cfg, db, box, hub)
 	agentSvc.EnsureLocalHost()
@@ -147,6 +160,10 @@ func Run() {
 	// 安全中心严重事件 → 统一通知（同类事件 5 分钟内只推一次，由 security 内部节流）
 	securitySvc.SetNotify(func(title, body string) {
 		notifySvc.Send("core", notify.Input{Type: "security.alert", Level: "warn", Title: title, Body: body})
+	})
+	// WAF 高危命中（SQLi/XSS/RCE/webshell）→ 统一通知（服务内按 IP+规则 10 分钟节流）
+	wafSvc.SetNotify(func(title, body string) {
+		notifySvc.Send("core", notify.Input{Type: "waf.alert", Level: "warn", Title: title, Body: body})
 	})
 
 	// 插件运行时
@@ -200,6 +217,7 @@ func Run() {
 	srv.Metrics = metricsSvc
 	srv.Logmap = logmapSvc
 	srv.Security = securitySvc
+	srv.WAF = wafSvc
 	srv.Agent = agentSvc
 	srv.Cert = certSvc
 	srv.Updater = updater

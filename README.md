@@ -25,6 +25,7 @@ Go + Vue3 + TypeScript 服务器管理面板：**nginx 管理 + SSH 终端 + 主
 | **证书** | certd 式管线：申请（HTTP-01/DNS-01，lego 多 DNS 提供商）→ 部署目标（本机 nginx / SSH 上传 / 本地脚本，可插件扩展）→ cron 自动续期；证书仓库 + 运行历史实时日志 |
 | **请求地图** | access log 增量解析 + GeoLite2 城市级聚合（城市/国家/坐标），ECharts 世界地图 + 城市散点 + 流向线，WS 实时刷新 |
 | **WAF（安全中心）** | 1s 级 access log 聚合（RPS/4xx/5xx/Top 源）+ 五类攻击判定（扫描/CC/爆破/站点失血/地区突变）+ 内核层 L4（连接数/SYN_RECV/带宽/accept 队列溢出，覆盖日志看不见的流量型攻击）；IP 与国家封禁（GeoIP 展开 CIDR 写入 nginx 原生 geo）、CC 限速、白名单、观察模式、封禁前 5 分钟 dry-run、规则自动封禁与严重事件通知；每秒落一份精简快照，面板被打到失联后可回放；本机回环/白名单来源与「停用应用」关联网站不计入判定。左侧菜单已由「安全」改名「WAF」 |
+| **WAF 规则引擎** | 对 access log 的 URI/查询串/UA/Referer 做内容级检测（参考 SamWaf 的检测思路）：libinjection 词法判定 SQLi/XSS（多轮 URL 解码 + HTML 实体还原 + 第二信号压制误报）、命令执行、路径穿越、webshell、扫描器 UA、敏感路径、自定义正则（按路径/查询串/UA/Referer 分范围）；命中证据（解码后载荷片段）落盘 `data/waf/hits.jsonl`，按 IP 累犯阶梯封禁（默认 10/60/1440 分钟、24 小时清零），封禁批量下发 nginx（一次策略保存 + 一次 reload）；默认观察模式，可在「WAF 规则」页一键切拦截、逐条规则开关/切动作 |
 | **监控** | CPU/内存/负载/网络实时（WS）+ 磁盘用量；历史采样 30 天 |
 | **数据库** | 内置「数据库管理」插件：MySQL/MariaDB、PostgreSQL、SQLite、SQL Server、Oracle、Redis、MongoDB；连接管理（凭据加密）、库表/键/集合浏览、结构与 DDL、分页数据与行级编辑、SQL 与命令控制台、SQL 文件导入 |
 | **MCP** | 面板唯一 `/mcp` 端点（Streamable HTTP + API Key），核心工具与**插件声明的工具聚合**统一对外 |
@@ -158,7 +159,7 @@ ZJPanel/
 │   ├── cmd/zjpanel/
 │   ├── cmd/zjagent/        # 主机 Agent（单二进制：run/install/uninstall/upgrade/doctor）
 │   ├── sdk/plugin/         # 插件 SDK（稳定接口）
-│   ├── internal/           # boot/nginx/site/compose/cert/terminal/docker/metrics/logmap/security/agent/mcp/plugin/update/http
+│   ├── internal/           # boot/nginx/site/compose/cert/terminal/docker/metrics/logmap/security/waf/agent/mcp/plugin/update/http
 │   └── plugins/notifywebhook/  # 内置示例插件
 └── frontend/               # Vue3 + TS + Ant Design Vue
 ```
