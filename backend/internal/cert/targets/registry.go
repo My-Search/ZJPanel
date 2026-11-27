@@ -125,17 +125,17 @@ func RegisterBuiltins(r *TargetRegistry, cfg *pkg.Config, reloadFn func() (strin
 	r.Register(&TargetDef{
 		Type: "ssh_upload", Title: "上传到 SSH 主机",
 		Fields: []certdns.FieldDef{
-			{Key: "hostId", Title: "SSH 主机 ID", Type: "text", Required: true},
-			{Key: "certPath", Title: "证书远程路径", Type: "text", Default: "/etc/nginx/ssl/fullchain.pem"},
-			{Key: "keyPath", Title: "私钥远程路径", Type: "text", Default: "/etc/nginx/ssl/privkey.pem"},
-			{Key: "preScript", Title: "前置命令", Type: "textarea"},
-			{Key: "postScript", Title: "后置命令（如 nginx -s reload）", Type: "textarea", Default: "nginx -s reload"},
+			{Key: "hostId", Title: "SSH 主机", Type: "select", OptionsSource: "hosts", Required: true, Help: "选择「主机」中已配置 SSH 凭据的主机；证书经 SFTP 上传到该主机"},
+			{Key: "certPath", Title: "证书（公钥 fullchain）远程路径", Type: "text", Default: "/etc/nginx/ssl/fullchain.pem", Help: "远程主机上证书文件的完整路径，上级目录不存在会自动创建"},
+			{Key: "keyPath", Title: "私钥远程路径", Type: "text", Default: "/etc/nginx/ssl/privkey.pem", Help: "远程主机上私钥文件的完整路径，上传后建议权限 600"},
+			{Key: "preScript", Title: "上传前命令（可选）", Type: "textarea", Help: "上传证书前在目标主机执行，可用环境变量 CERT_DOMAIN / CERT_PATH / CERT_KEY_PATH"},
+			{Key: "postScript", Title: "上传后命令（如 nginx -s reload）", Type: "textarea", Default: "nginx -s reload", Help: "上传完成后在目标主机执行，常用于重载 Web 服务"},
 		},
 		Owner: "builtin",
 		Runner: func(args DeployArgs) (string, error) {
-			hostID := uint(str2int(str2str(args.Config["hostId"])))
+			hostID := anyToUint(args.Config["hostId"])
 			if hostID == 0 {
-				return "", fmt.Errorf("hostId 必填")
+				return "", fmt.Errorf("请选择 SSH 主机")
 			}
 			client, err := sshDialer(hostID)
 			if err != nil {
@@ -180,24 +180,40 @@ func RegisterBuiltins(r *TargetRegistry, cfg *pkg.Config, reloadFn func() (strin
 		},
 	})
 	r.Register(&TargetDef{
-		Type: "local_script", Title: "执行本地脚本",
+		Type: "local_script", Title: "执行脚本 / 命令（本机或 SSH 主机）",
 		Fields: []certdns.FieldDef{
-			{Key: "script", Title: "脚本内容", Type: "textarea", Required: true, Help: "环境变量: CERT_DOMAIN / CERT_PATH / CERT_KEY_PATH / CERT_EXPIRES"},
+			{Key: "hostId", Title: "目标主机（留空 = 面板本机）", Type: "select", OptionsSource: "hosts", Required: false, Help: "选择 SSH 主机后通过 SSH 在该主机执行；留空则在面板所在主机执行"},
+			{Key: "script", Title: "执行命令 / 脚本内容", Type: "textarea", Required: true, Help: "本机用 sh -c 执行；选择 SSH 主机后通过 SSH 执行。环境变量: CERT_DOMAIN / CERT_PATH / CERT_KEY_PATH / CERT_EXPIRES"},
 		},
 		Owner: "builtin",
 		Runner: func(args DeployArgs) (string, error) {
 			script := strings.TrimSpace(str2str(args.Config["script"]))
 			if script == "" {
-				return "", fmt.Errorf("script 必填")
+				return "", fmt.Errorf("命令/脚本内容必填")
 			}
 			dir := filepath.Join(cfg.DataDir, "certs", fmt.Sprintf("%d", args.TaskID))
+			envs := []string{
+				"CERT_DOMAIN=" + strings.Join(args.Domains, ","),
+				"CERT_PATH=" + filepath.Join(dir, "fullchain.pem"),
+				"CERT_KEY_PATH=" + filepath.Join(dir, "privkey.pem"),
+				"CERT_EXPIRES=" + args.NotAfter.Format("2006-01-02"),
+			}
+			// 选择了 SSH 主机：复用主机凭据拨号，在远程主机执行命令
+			if hostID := anyToUint(args.Config["hostId"]); hostID > 0 {
+				client, err := sshDialer(hostID)
+				if err != nil {
+					return "", err
+				}
+				defer client.Close()
+				out, err := sshRun(client, script, envs)
+				if err != nil {
+					return "", fmt.Errorf("远程命令执行失败: %s", out)
+				}
+				return fmt.Sprintf("已在 %s 执行命令: %s", sshHostLabel(client), strings.TrimSpace(out)), nil
+			}
+			// 留空：在面板所在主机用 sh -c 执行
 			cmd := exec.Command("sh", "-c", script)
-			cmd.Env = append(os.Environ(),
-				"CERT_DOMAIN="+strings.Join(args.Domains, ","),
-				"CERT_PATH="+filepath.Join(dir, "fullchain.pem"),
-				"CERT_KEY_PATH="+filepath.Join(dir, "privkey.pem"),
-				"CERT_EXPIRES="+args.NotAfter.Format("2006-01-02"),
-			)
+			cmd.Env = append(os.Environ(), envs...)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				return "", fmt.Errorf("脚本失败: %s", out)
@@ -263,6 +279,26 @@ func str2int(s string) int64 {
 		n = n*10 + int64(c-'0')
 	}
 	return n
+}
+
+// anyToUint 兼容前端 select 提交的字符串 ID 与 JSON 数字（float64/int/int64/uint）。
+func anyToUint(v any) uint {
+	switch n := v.(type) {
+	case nil:
+		return 0
+	case string:
+		return uint(str2int(n))
+	case float64:
+		return uint(n)
+	case int:
+		return uint(n)
+	case int64:
+		return uint(n)
+	case uint:
+		return n
+	default:
+		return 0
+	}
 }
 
 func strOr(v, def string) string {

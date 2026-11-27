@@ -14,13 +14,22 @@ import (
 // 内置提供商经 lego 注册；外部插件经 SDK 注册（Present/CleanUp 最小接口）。
 // 注册项的 Fields 描述驱动前端凭证表单；Factory 用凭证配置构造 challenge.Provider。
 
+// FieldOption 下拉选项（Type=select 且无 OptionsSource 时使用静态选项）。
+type FieldOption struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
 type FieldDef struct {
-	Key      string `json:"key"`
-	Title    string `json:"title"`
-	Type     string `json:"type"` // text | password | select
-	Default  string `json:"default,omitempty"`
-	Help     string `json:"help,omitempty"`
-	Required bool   `json:"required"`
+	Key      string        `json:"key"`
+	Title    string        `json:"title"`
+	Type     string        `json:"type"` // text | password | textarea | select
+	Default  string        `json:"default,omitempty"`
+	Help     string        `json:"help,omitempty"`
+	Required bool          `json:"required"`
+	Options  []FieldOption `json:"options,omitempty"`
+	// OptionsSource 动态选项来源（如 "hosts"=可 SSH 主机列表）；前端据此拉取并填充，优先级高于 Options。
+	OptionsSource string `json:"optionsSource,omitempty"`
 }
 
 type ProviderDef struct {

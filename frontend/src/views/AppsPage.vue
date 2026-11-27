@@ -8,7 +8,7 @@
           <a-button type="primary" @click="openImport"><PlusOutlined /> 通过 docker-compose.yml 文件导入</a-button>
           <a-button @click="scan"><SyncOutlined /> 重新扫描</a-button>
           <a-tooltip title="现场探测全部网站：所有网站都不可用的应用标记停用，有网站可用的应用恢复正常（需确认）">
-            <a-button :loading="allGoodBusy" @click="declareAllGood">一切安好？</a-button>
+            <a-button :loading="allGoodBusy" @click="declareAllGood"><CheckCircleOutlined /> 一切安好？</a-button>
           </a-tooltip>
           <a-button v-if="hiddenList.length" type="link" size="small" @click="hiddenOpen = true">已删除 {{ hiddenList.length }}</a-button>
           <span class="dim">
@@ -332,7 +332,7 @@ import { wsMessageToText } from '../utils/wsMessage'
 import Sites from './Sites.vue'
 import SiteActions from '../components/SiteActions.vue'
 import DockerPage from './DockerPage.vue'
-import { PlusOutlined, SyncOutlined, DownOutlined, FolderOutlined, CaretRightOutlined, LoadingOutlined } from '@ant-design/icons-vue'
+import { PlusOutlined, SyncOutlined, DownOutlined, FolderOutlined, CaretRightOutlined, LoadingOutlined, CheckCircleOutlined } from '@ant-design/icons-vue'
 
 const { ui, current: termTheme, boxBg } = useTermTheme()
 const tab = ref('compose')

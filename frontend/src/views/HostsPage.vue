@@ -5,7 +5,7 @@
       <div class="list-head">
         <a-input v-model:value="kw" size="small" placeholder="搜索主机 / 地址 / 分组" allow-clear />
         <a-dropdown>
-          <a-button size="small" type="primary" block style="margin-top: 8px">
+          <a-button type="primary" block class="add-host-btn">
             <PlusOutlined /> 添加主机
           </a-button>
           <template #overlay>
@@ -57,10 +57,10 @@
             </div>
           </div>
           <a-space wrap class="dh-actions">
-            <a-button size="small" v-if="!current.local" @click="testHost" :loading="testing">测试连接</a-button>
-            <a-button size="small" type="primary" ghost @click="openTerminal">打开终端</a-button>
+            <a-button size="small" v-if="!current.local" @click="testHost" :loading="testing"><ApiOutlined /> 测试连接</a-button>
+            <a-button size="small" type="primary" ghost @click="openTerminal"><CodeSandboxOutlined /> 打开终端</a-button>
             <a-button v-if="canInstall" size="small" type="primary" :loading="installing" @click="installAgent">安装 Agent</a-button>
-            <a-button v-if="current.online && !current.local" size="small" @click="upgradeAgent" :loading="upgrading">升级 Agent</a-button>
+            <a-button v-if="current.online && !current.local" size="small" @click="upgradeAgent" :loading="upgrading"><ReloadOutlined /> 升级 Agent</a-button>
           </a-space>
         </div>
 
@@ -123,7 +123,7 @@
                 style="margin-bottom: 12px"
               >
                 <template #action>
-                  <a-button size="small" type="primary" ghost :loading="upgrading" @click="upgradeAgent">升级 Agent</a-button>
+                  <a-button size="small" type="primary" ghost :loading="upgrading" @click="upgradeAgent"><ReloadOutlined /> 升级 Agent</a-button>
                 </template>
               </a-alert>
 
@@ -354,7 +354,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { Empty, message } from 'ant-design-vue'
-import { PlusOutlined } from '@ant-design/icons-vue'
+import { PlusOutlined, ApiOutlined, CodeSandboxOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import HostTerminal from '../components/HostTerminal.vue'
 import { get, getQuiet, post, del, wsTopic, fmtBytes, fmtTime } from '../api'
 
@@ -841,6 +841,7 @@ watch(tab, (v) => {
 .list-card { width: 300px; flex: none; display: flex; flex-direction: column; }
 .list-card :deep(.ant-card-body) { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .list-head { flex: none; }
+.add-host-btn { margin-top: 10px; height: 40px; font-size: 14px; font-weight: 500; border-radius: 8px; }
 .list-body { flex: 1; min-height: 0; overflow-y: auto; margin-top: 8px; }
 .host-item { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; transition: background .15s; }
 .host-item:hover { background: rgba(22,119,255,.06); }
@@ -858,10 +859,11 @@ watch(tab, (v) => {
 .ver { font-size: 11px; color: var(--color-slate); }
 .detail-card { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .detail-card :deep(.ant-card-body) { display: flex; flex-direction: column; min-height: 0; flex: 1; }
-.detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 16px 0; flex-wrap: wrap; }
+.detail-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 12px 16px 12px; flex-wrap: wrap; }
 .dh-title { font-size: 16px; font-weight: 600; color: var(--color-ink); }
 .dh-sub { font-size: 12px; color: var(--color-slate); margin-top: 2px; }
 .detail-tabs { flex: 1; min-height: 0; padding: 0 16px; display: flex; flex-direction: column; }
+.detail-tabs :deep(.ant-tabs-nav) { margin-bottom: 12px; }
 /* 让 tabs 内容区成为可伸缩容器，终端 tab 才能填满卡片剩余高度（而不是固定 62vh 后留白） */
 .detail-tabs :deep(.ant-tabs-content-holder) {
   overflow-y: auto; display: flex; flex-direction: column; min-height: 0;

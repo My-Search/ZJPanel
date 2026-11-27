@@ -200,6 +200,16 @@
               <a-form-item v-for="f in targetDef(dt.type).fields" :key="f.key" :label="f.title" style="margin-bottom: 8px" :help="f.help">
                 <a-textarea v-if="f.type === 'textarea'" v-model:value="dt.config[f.key]" :rows="2" />
                 <a-input-password v-else-if="f.type === 'password'" v-model:value="dt.config[f.key]" :placeholder="f.default" />
+                <a-select
+                  v-else-if="f.type === 'select'"
+                  v-model:value="dt.config[f.key]"
+                  :options="fieldOptions(f)"
+                  :placeholder="f.default || ('请选择' + f.title)"
+                  :show-search="f.optionsSource === 'hosts'"
+                  :filter-option="filterHostOption"
+                  allow-clear
+                  style="width: 100%"
+                />
                 <a-input v-else v-model:value="dt.config[f.key]" :placeholder="f.default" />
               </a-form-item>
             </a-form>
@@ -315,6 +325,8 @@ const accounts = ref<any[]>([])
 const credentials = ref<any[]>([])
 const providers = ref<any[]>([])
 const targets = ref<any[]>([])
+// 可 SSH 主机清单（证书 SSH 部署 / 远程脚本目标的下拉数据源，来自 /api/ssh/hosts，已排除内置本机）
+const sshHosts = ref<any[]>([])
 
 const quickAcctOpen = ref(false)
 const quickAcct = ref<any>({})
@@ -382,6 +394,21 @@ const targetOpts = computed(() => targets.value.map(t => ({ label: t.title, valu
 const providerDef = (name: string) => providers.value.find(p => p.name === name)
 const targetDef = (type: string) => targets.value.find(t => t.type === type)
 const targetTitle = (type: string) => targets.value.find(t => t.type === type)?.title || type
+
+// 动态字段下拉选项：optionsSource=hosts 时用已加载的 SSH 主机清单，否则用后端静态 options。
+// value 统一用字符串 ID，保证提交到后端的 hostId 是 string（后端 anyToUint 也兼容数字）。
+const fieldOptions = (f: any) => {
+  if (f?.optionsSource === 'hosts') {
+    return sshHosts.value.map((h: any) => ({
+      label: `${h.name || h.host}（${h.host}${h.port ? ':' + h.port : ''}${h.username ? ' · ' + h.username : ''}）`,
+      value: String(h.id),
+    }))
+  }
+  return f?.options || []
+}
+// 主机下拉支持按名称 / 地址 / 用户名模糊搜索
+const filterHostOption = (input: string, option: any) =>
+  String(option?.label ?? '').toLowerCase().includes(input.toLowerCase())
 const runColor = (s: string) => s === 'success' ? 'green' : s === 'error' ? 'red' : s === 'skip' ? 'orange' : 'blue'
 
 const parseDomains = (s: string) => { try { return JSON.parse(s) } catch { return [s] } }
@@ -390,9 +417,10 @@ const daysLeft = (r: any) => Math.max(0, Math.floor((new Date(r.notAfter).getTim
 let loadSeq = 0
 const loadAll = async () => {
   const seq = ++loadSeq
-  // 7 个接口互不依赖：并发拉取，首屏等待 ≈ 最慢一路，而不是七跳串行之和。
-  // quiet + 末尾统一提示：并发失败逐条弹会一次刷 7 条 toast。
-  const [infosR, tasksR, runsR, acctsR, credsR, provR, targetsR] = await Promise.allSettled([
+  // 核心 7 个接口互不依赖：并发拉取，首屏等待 ≈ 最慢一路，而不是七跳串行之和。
+  // quiet + 末尾统一提示：并发失败逐条弹会一次刷多条 toast。
+  // 第 8 路 /api/ssh/hosts 是部署目标下拉的辅助数据，失败静默（下拉为空，可去主机页添加），不计入失败提示。
+  const [infosR, tasksR, runsR, acctsR, credsR, provR, targetsR, hostsR] = await Promise.allSettled([
     getQuiet<any[]>('/api/cert/infos'),
     getQuiet<any[]>('/api/cert/tasks'),
     getQuiet<any[]>('/api/cert/runs'),
@@ -400,6 +428,7 @@ const loadAll = async () => {
     getQuiet<any[]>('/api/cert/credentials'),
     getQuiet<any[]>('/api/cert/dns-providers'),
     getQuiet<any[]>('/api/cert/targets'),
+    getQuiet<any[]>('/api/ssh/hosts'),
   ])
   if (seq !== loadSeq) return // 期间已有更新的一轮加载，丢弃本轮旧结果
   if (infosR.status === 'fulfilled') infos.value = infosR.value || []
@@ -409,6 +438,7 @@ const loadAll = async () => {
   if (credsR.status === 'fulfilled') credentials.value = credsR.value || []
   if (provR.status === 'fulfilled') providers.value = provR.value || []
   if (targetsR.status === 'fulfilled') targets.value = targetsR.value || []
+  if (hostsR.status === 'fulfilled') sshHosts.value = hostsR.value || []
   const failed = [infosR, tasksR, runsR, acctsR, credsR, provR, targetsR].filter(r => r.status === 'rejected').length
   if (failed) message.error(`证书数据 ${failed} 项加载失败，请稍后重试`)
 }
@@ -441,6 +471,19 @@ const nextStep = async () => {
 }
 
 const saveWizard = async () => {
+  // 提交前校验部署目标必填项（如 SSH 主机、脚本内容），避免等到签发执行才报错
+  for (const dt of wiz.value.deployTargets || []) {
+    const def = targetDef(dt.type)
+    if (!def) continue
+    for (const f of def.fields || []) {
+      if (!f.required) continue
+      const v = dt.config?.[f.key]
+      if (v === undefined || v === null || String(v).trim() === '') {
+        message.warning(`请完善部署目标「${def.title}」的「${f.title}」`)
+        return
+      }
+    }
+  }
   saving.value = true
   try {
     await post('/api/cert/tasks', wiz.value)

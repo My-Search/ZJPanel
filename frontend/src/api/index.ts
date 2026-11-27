@@ -1,6 +1,9 @@
 import axios from 'axios'
 import { message } from 'ant-design-vue'
 
+// 安全入口前缀（后端注入）；未启用为空串。401 跳登录页时需带上该前缀，否则会落到根路径被 404。
+const ENTRY_BASE: string = (window as any).__ZJPANEL_BASE__ || ''
+
 export const http = axios.create({ baseURL: '', timeout: 30000, withCredentials: true })
 
 http.interceptors.response.use(
@@ -9,8 +12,8 @@ http.interceptors.response.use(
     const status = err.response?.status
     const msg = err.response?.data?.error || err.message
     const silent = (err.config as any)?.silent === true
-    if (status === 401 && !location.pathname.startsWith('/login')) {
-      location.href = '/login'
+    if (status === 401 && !location.pathname.startsWith(ENTRY_BASE + '/login')) {
+      location.href = ENTRY_BASE + '/login'
     } else if (msg && !silent) {
       message.error(String(msg).slice(0, 200))
     }

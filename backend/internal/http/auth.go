@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm"
 
 	"zjpanel/backend/internal/agent"
+	"zjpanel/backend/internal/backup"
 	"zjpanel/backend/internal/cert"
 	"zjpanel/backend/internal/compose"
 	"zjpanel/backend/internal/docker"
@@ -63,6 +64,7 @@ type Server struct {
 	Notify   *notify.Service
 	MCPReg   *mcp.Registry
 	MCPSrv   *mcp.Server
+	Backup   *backup.Service
 }
 
 func NewServer(cfg *pkg.Config, db *gorm.DB, auth *middleware.Auth, hub *ws.Hub, box *pkg.SecretBox) *Server {

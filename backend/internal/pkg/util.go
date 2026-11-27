@@ -78,6 +78,7 @@ const (
 	CtxDnsConfig     = "dns_credentials.config_enc"
 	CtxSMTPPass      = "settings.notify.smtp.pass"
 	CtxMySQLConnPwd  = "mysqladmin.connection.password"
+	CtxBackupRemotePass = "settings.backup.remote.pass"
 )
 
 // CtxPluginSetting 插件 password 类型设置项的 AAD 上下文。

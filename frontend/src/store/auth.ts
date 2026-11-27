@@ -1,11 +1,12 @@
 import { defineStore } from 'pinia'
-import { get, post } from '../api'
+import { get, getQuiet, post } from '../api'
 
 export const useAuth = defineStore('auth', {
   state: () => ({ initialized: false, loggedIn: false, username: '' as string, checked: false }),
   actions: {
-    async refresh() {
-      const r = await get<any>('/api/auth/status')
+    // quiet=true 时不弹错误提示：登录页做「是否已登录」探测，后端短暂不可用不应打断用户
+    async refresh(quiet = false) {
+      const r = quiet ? await getQuiet<any>('/api/auth/status') : await get<any>('/api/auth/status')
       this.initialized = r.initialized
       this.loggedIn = r.loggedIn
       this.username = r.username || ''

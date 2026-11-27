@@ -3,6 +3,8 @@ package httpapi
 import (
 	"fmt"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -34,6 +36,7 @@ func (s *Server) RegisterRoutes() {
 	s.registerUpdateRoutes()
 	s.registerPluginRoutes()
 	s.registerNotifyRoutes()
+	s.registerBackupRoutes()
 	s.registerMCPTools()
 	s.registerWSRoutes()
 	s.registerMaintenanceRoute()
@@ -619,6 +622,60 @@ func (s *Server) registerMaintenanceRoute() {
 
 // ===================== 设置 / 审计 =====================
 
+// entryPathSettingKey 安全入口路径在 Setting 表中的键。
+const entryPathSettingKey = "security.entry_path"
+
+// EntryPath 读取当前安全入口（规范化为带前导 /、无尾斜杠；未配置返回空串）。
+// 应急开关 ZJPANEL_ENTRY_OFF=1 时强制关闭（忘记入口、无法登录时可在部署环境设置后重启）。
+func (s *Server) EntryPath() string {
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("ZJPANEL_ENTRY_OFF"))); v == "1" || v == "true" || v == "yes" {
+		return ""
+	}
+	var rec model.Setting
+	if err := s.db.Where("key = ?", entryPathSettingKey).First(&rec).Error; err != nil {
+		return ""
+	}
+	p, err := NormalizeEntryPath(rec.Value)
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
+// NormalizeEntryPath 校验并规范化安全入口：空=关闭；必须 / 开头、3-64 位字母数字_-，
+// 且不能与后端/静态保留前缀冲突。
+func NormalizeEntryPath(raw string) (string, error) {
+	p := strings.TrimSpace(raw)
+	if p == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	p = strings.TrimRight(p, "/")
+	if p == "" || p == "/" {
+		return "", nil
+	}
+	if len(p) < 3 || len(p) > 64 {
+		return "", fmt.Errorf("入口路径长度需在 3-64 个字符之间")
+	}
+	for _, r := range p[1:] {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+			return "", fmt.Errorf("入口路径仅支持字母、数字、下划线与连字符")
+		}
+	}
+	reserved := []string{
+		"/api", "/mcp", "/assets", "/map", "/plugin-assets", "/_maintenance",
+		"/favicon", "/site.webmanifest", "/login", "/plugin",
+	}
+	for _, r := range reserved {
+		if p == r || strings.HasPrefix(p, r+"/") {
+			return "", fmt.Errorf("入口路径不能使用保留前缀 %s", r)
+		}
+	}
+	return p, nil
+}
+
 func (s *Server) registerSettingsRoutes() {
 	g := s.r.Group("/api/settings", s.auth.Require())
 	g.GET("", func(c *gin.Context) {
@@ -636,6 +693,35 @@ func (s *Server) registerSettingsRoutes() {
 			return
 		}
 		c.JSON(http.StatusOK, logs)
+	})
+
+	// 安全入口：读取当前入口路径（未配置为空串，表示不启用）
+	g.GET("/entry", func(c *gin.Context) {
+		entry := s.EntryPath()
+		c.JSON(http.StatusOK, gin.H{"entryPath": entry, "enabled": entry != ""})
+	})
+
+	// 安全入口：保存（空串=关闭，恢复根路径可直接访问）
+	g.PUT("/entry", func(c *gin.Context) {
+		var req struct {
+			EntryPath string `json:"entryPath"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			return
+		}
+		entry, err := NormalizeEntryPath(req.EntryPath)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		rec := model.Setting{Key: entryPathSettingKey, Value: entry}
+		if err := s.db.Save(&rec).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		s.audit(c, "settings.entry", entry)
+		c.JSON(http.StatusOK, gin.H{"ok": true, "entryPath": entry, "enabled": entry != ""})
 	})
 }
 

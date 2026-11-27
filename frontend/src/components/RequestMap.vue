@@ -532,7 +532,7 @@ const rate = ref(0) // 近 5s 请求速率（req/s）
 // 实时流向：一次请求 = 一条「来源黄点 → 服务器」的流星（飞一次后消散）。
 // SSE 逐条推送，每个请求即刻生成一条流星；请求频率由流星出现的密集程度表达，
 // 不做合并计数，也不按次数缩放线宽/光点大小。总量上限防高 QPS 爆量。
-const LIVE_FLOW_CAP = 120
+const LIVE_FLOW_CAP = 72
 
 const handleEntry = (e: any) => {
   const entry = normalizeEntry(e, true)
@@ -554,19 +554,29 @@ const handleEntry = (e: any) => {
       }
     }
   }
-  summary.value.recent = [e, ...(summary.value.recent || [])].slice(0, 100)
+  // 实时 entry 已直接写入 captureRing（悬停明细数据源）；summary.recent 仅在 load/SSE summary 时由后端填充，
+  // 这里不再每条请求都重建响应式数组，避免高 QPS 下的额外 Vue 开销。
   if (!inspectRoute.value) scheduleRender()
 }
 
-// 高 QPS 下逐条 setOption 会卡顿：合并到动画帧，每帧最多渲染一次
+// 高 QPS 下逐条 setOption 会卡顿：实时增量按最小间隔批量渲染（而非每帧一次）。
+// ECharts lines 的流星粒子动画由其内部 rAF 驱动，两次 setOption 之间会连续播放；
+// 若每帧都 setOption，effect 会被反复重建/重置，表现为流星抖动、掉帧。节流到 ~160ms
+// 既把数据更新合并成批，又给特效动画留出连续播放窗口。强制渲染（load/冻结/恢复/主题）走 renderMap 不受此限。
+const RENDER_MIN_INTERVAL = 160
 let renderQueued = false
+let renderTimer: any = null
+let lastRenderAt = 0
 const scheduleRender = () => {
   if (renderQueued) return
   renderQueued = true
-  requestAnimationFrame(() => {
+  const wait = Math.max(0, RENDER_MIN_INTERVAL - (Date.now() - lastRenderAt))
+  renderTimer = setTimeout(() => {
     renderQueued = false
+    renderTimer = null
+    lastRenderAt = Date.now()
     if (active) renderMap()
-  })
+  }, wait)
 }
 
 // 飞线寿命清扫：超过一个动画周期的线移除（一个请求只飞一次），顺带更新请求速率；
@@ -587,7 +597,7 @@ const startSweep = () => {
       if (len) {
         const cut = now - FLOW_LIFETIME
         const keep = liveFlows.value.filter(f => f.ts > cut)
-        if (keep.length !== len) { liveFlows.value = keep; renderMap() }
+        if (keep.length !== len) { liveFlows.value = keep; scheduleRender() }
       }
     }
     // 速率统计基于 entryTimes（全部请求），流星列表有封顶且寿命只有 4.3s，不能拿来算速率
@@ -627,7 +637,9 @@ const ensureChart = async () => {
     const [echarts, geo] = await Promise.all([preloadEcharts, preloadGeo])
     if (!mapBox.value || !active) return // 初始化期间页面已被切走
     if (geo) echarts.registerMap('world', geo as any)
-    chart = echarts.init(mapBox.value)
+    // 限制 devicePixelRatio≤2：4K/Retina 屏默认 DPR=3 会让 canvas 像素量翻 9 倍，
+    // 流星粒子动画填充率压力大；2 倍在地图线条/圆点上清晰度与性能更平衡。
+    chart = echarts.init(mapBox.value, null, { renderer: 'canvas', devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2) })
     // 悬停流星线 → 暂停流向并展开该来源的请求树（点击空处/继续按钮恢复）
     chart.on('mouseover', onChartOver)
   })().finally(() => { initPromise = null })
@@ -711,7 +723,9 @@ const renderMap = async (force = false, reset = false) => {
       id: 'flows',
       // 数据流：沿线流动的圆形光点带短拖尾（数据流点效果）；悬停冻结时关闭 effect，留下静态高亮线
       type: 'lines', coordinateSystem: 'geo', zlevel: 2, silent: paused,
-      effect: { show: !paused, period: 4, trailLength: 0.2, symbol: 'circle', symbolSize: 6, color: '#ffd54d' },
+      // 关闭数据更新补间：高频换数据时线条不做形变过渡，避免抖动；流动感由 effect 粒子动画承担
+      animationDurationUpdate: 0,
+      effect: { show: !paused, period: 3.5, trailLength: 0.15, symbol: 'circle', symbolSize: 5, color: '#ffd54d' },
       lineStyle: { color: '#3b82f6', width: 1.2, opacity: 0.35, curveness: 0.35 },
       emphasis: { disabled: true }, // 高亮由数据项 lineStyle 控制，避免 hover 过渡与冻结渲染互相打架
       data: flows,
@@ -726,7 +740,7 @@ const renderMap = async (force = false, reset = false) => {
       id: 'sources',
       // 请求来源点：同一来源城市只画一个；涟漪收敛到 1.7 屏，避免同城叠成光斑
       type: paused ? 'scatter' : 'effectScatter', coordinateSystem: 'geo', zlevel: 3,
-      ...(paused ? {} : { rippleEffect: { scale: 1.7, brushType: 'stroke', number: 3 } }),
+      ...(paused ? {} : { rippleEffect: { scale: 1.5, brushType: 'stroke', number: 2 } }),
       itemStyle: { color: '#ffd54d' },
       data: srcPoints,
     },
@@ -735,7 +749,7 @@ const renderMap = async (force = false, reset = false) => {
       // 服务器位置：红色小点（缩小，避免喧宾夺主）；探测不到位置时不渲染
       type: paused ? 'scatter' : 'effectScatter', coordinateSystem: 'geo', zlevel: 3,
       symbolSize: 7,
-      ...(paused ? {} : { rippleEffect: { scale: 1.8, brushType: 'stroke', number: 3 } }),
+      ...(paused ? {} : { rippleEffect: { scale: 1.5, brushType: 'stroke', number: 2 } }),
       itemStyle: { color: '#ff5722' },
       data: serverLocKnown.value ? [{ value: serverPoint.value, name: serverLabel.value }] : [],
     },
@@ -944,6 +958,7 @@ const stop = () => {
   clearInterval(timer); timer = null
   clearInterval(sweepTimer); sweepTimer = null
   clearInterval(treeTimer); treeTimer = null
+  clearTimeout(renderTimer); renderTimer = null; renderQueued = false // 丢弃待渲染帧，避免切走后回调
   resetInspect() // 页面切走时收起明细，避免 keep-alive 回来后还挂着旧冻结画面
 }
 onMounted(start)

@@ -11,6 +11,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"zjpanel/backend/internal/agent"
+	"zjpanel/backend/internal/backup"
 	"zjpanel/backend/internal/bus"
 	"zjpanel/backend/internal/cert"
 	"zjpanel/backend/internal/cert/targets"
@@ -225,9 +226,10 @@ func Run() {
 	srv.Updater = updater
 	srv.Plugins = pluginMgr
 	srv.Notify = notifySvc
+	srv.Backup = backup.New(cfg, db, box)
 	srv.MCPReg = mcpReg
 	srv.MCPSrv = mcpSrv
-	httpapi.RegisterStatic(srv.Engine())
+	srv.RegisterStatic(srv.Engine())
 	srv.RegisterRoutes()
 
 	addr := fmt.Sprintf(":%d", cfg.Port)

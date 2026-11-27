@@ -1,13 +1,19 @@
 <template>
   <a-card size="small" :body-style="{ padding: '12px' }">
-    <a-space style="margin-bottom: 12px" wrap>
-      <a-select v-model:value="root" style="width: 150px" :options="rootOpts" @change="onRootChange" />
-      <a-button @click="testNginx">nginx -t</a-button>
-      <a-button type="primary" ghost @click="reloadNginx">重载 nginx</a-button>
-      <a-tag :color="running ? 'green' : 'red'">{{ running ? 'nginx 运行中' : 'nginx 未运行' }}</a-tag>
-      <span v-if="currentPath" class="dim">{{ root }}/{{ currentPath }}</span>
-      <a-button type="primary" :disabled="!currentPath" @click="saveFile">保存</a-button>
-    </a-space>
+    <div class="nginx-toolbar">
+      <a-select v-model:value="root" style="width: 172px" :options="rootOpts" @change="onRootChange">
+        <template #prefix><FolderOpenOutlined /></template>
+      </a-select>
+      <a-button @click="testNginx"><SafetyCertificateOutlined />nginx -t</a-button>
+      <a-button type="primary" ghost @click="reloadNginx"><ReloadOutlined />重载 nginx</a-button>
+      <span v-if="currentPath" class="dim nginx-path">{{ root }}/{{ currentPath }}</span>
+      <a-button type="primary" :disabled="!currentPath" @click="saveFile"><SaveOutlined />保存</a-button>
+      <a-tag class="nginx-status" :color="running ? 'green' : 'red'">
+        <CheckCircleFilled v-if="running" />
+        <CloseCircleFilled v-else />
+        {{ running ? 'nginx 运行中' : 'nginx 未运行' }}
+      </a-tag>
+    </div>
 
     <a-row :gutter="12">
       <a-col :span="7" class="tree-col">
@@ -30,6 +36,9 @@
 <script setup lang="ts">
 import { onActivated, onMounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
+import {
+  SafetyCertificateOutlined, ReloadOutlined, SaveOutlined, CheckCircleFilled, CloseCircleFilled, FolderOpenOutlined,
+} from '@ant-design/icons-vue'
 import { get, put, post } from '../api'
 import AceEditor from '../components/AceEditor.vue'
 
@@ -139,6 +148,10 @@ onActivated(loadPage)
 
 <style scoped>
 .dim { color: var(--color-slate); font-size: 12px; }
+/* 工具条：flex 换行，状态标签用 margin-left:auto 始终贴最右 */
+.nginx-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.nginx-path { margin-left: 4px; }
+.nginx-status { margin-left: auto; margin-inline-end: 0; display: inline-flex; align-items: center; gap: 6px; }
 .tree-col { max-height: 620px; overflow: auto; }
 .editor-wrap { height: 620px; border: 1px solid var(--border-card); border-radius: var(--radius-inputs); }
 .editor-empty { height: 100%; display: flex; flex-direction: column; justify-content: center; }

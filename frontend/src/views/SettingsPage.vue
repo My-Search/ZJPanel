@@ -3,6 +3,21 @@
   <a-card size="small">
     <a-tabs>
       <a-tab-pane key="general" tab="常规">
+        <a-card size="small" title="访问安全入口" style="margin-bottom: 16px">
+          <a-alert type="warning" show-icon style="margin-bottom: 12px"
+            message="启用后，访问域名根 / 或其他未知路径将返回 404，只有输入下方秘密入口路径才能打开登录页。请牢记入口地址；入口仅隐藏页面，接口仍需登录鉴权。若忘记入口，可在部署环境设置环境变量 ZJPANEL_ENTRY_OFF=1 后重启面板临时关闭。" />
+          <a-form layout="inline">
+            <a-form-item label="入口路径">
+              <a-input v-model:value="entryInput" style="width: 260px" placeholder="如 /admin-x7k2（留空=关闭）" />
+            </a-form-item>
+            <a-form-item>
+              <a-button type="primary" :loading="entrySaving" @click="saveEntry">保存入口</a-button>
+            </a-form-item>
+          </a-form>
+          <div class="dim" style="margin-top: 8px">
+            当前状态：{{ entryEnabled ? `已启用，访问地址 ${origin}${entryPath}` : '未启用（根路径可直接打开登录页）' }}
+          </div>
+        </a-card>
         <a-descriptions :column="2" bordered size="small">
           <a-descriptions-item label="面板版本">{{ version }}</a-descriptions-item>
           <a-descriptions-item label="面板端口">{{ settings.port }}</a-descriptions-item>
@@ -73,6 +88,91 @@
           </template>
         </a-table>
       </a-tab-pane>
+
+      <a-tab-pane key="backup" tab="备份与恢复">
+        <a-spin :spinning="backupBusy">
+          <a-row :gutter="16">
+            <!-- 左：备份范围 + 操作 -->
+            <a-col :xs="24" :md="10">
+              <a-card size="small" title="备份范围" class="backup-card">
+                <a-checkbox :checked="allItemsChecked" @change="toggleAllItems">全选（完整配置迁移）</a-checkbox>
+                <a-checkbox-group v-model:value="backupItems" class="item-group">
+                  <div v-for="it in backupItemMetas" :key="it.key" class="item-row">
+                    <a-checkbox :value="it.key">
+                      <div class="item-label">{{ it.label }}</div>
+                      <div class="item-desc">{{ it.desc }}</div>
+                    </a-checkbox>
+                  </div>
+                </a-checkbox-group>
+                <a-divider style="margin: 12px 0" />
+                <a-space>
+                  <a-button type="primary" :loading="creating" @click="createBackup">立即备份</a-button>
+                  <a-upload :show-upload-list="false" :before-upload="restoreBefore">
+                    <a-button :loading="restoring">从备份包恢复</a-button>
+                  </a-upload>
+                </a-space>
+                <div class="dim" style="margin-top: 8px">
+                  配置级迁移：打包面板数据库、证书、安全/WAF 策略、插件数据、Nginx 站点配置与 Compose 项目声明；不含站点上传文件、Docker 数据卷与业务数据库。
+                </div>
+              </a-card>
+
+              <a-card size="small" title="远程存储" class="backup-card">
+                <a-form layout="vertical">
+                  <a-form-item label="存储类型">
+                    <a-select v-model:value="remote.kind" :options="remoteKindOptions" />
+                  </a-form-item>
+                  <template v-if="remote.kind === 'webdav'">
+                    <a-form-item label="WebDAV 地址">
+                      <a-input v-model:value="remote.url" placeholder="https://dav.example.com/remote.php/dav/files/user" />
+                    </a-form-item>
+                    <a-row :gutter="12">
+                      <a-col :span="12">
+                        <a-form-item label="用户名">
+                          <a-input v-model:value="remote.username" />
+                        </a-form-item>
+                      </a-col>
+                      <a-col :span="12">
+                        <a-form-item label="密码">
+                          <a-input-password v-model:value="remote.password" :placeholder="remote.passwordSet ? '已设置，留空沿用' : ''" />
+                        </a-form-item>
+                      </a-col>
+                    </a-row>
+                    <a-form-item label="远程目录">
+                      <a-input v-model:value="remote.remoteDir" placeholder="留空存到根目录" />
+                    </a-form-item>
+                  </template>
+                  <a-alert v-if="remote.kind === 'googledrive' || remote.kind === 'onedrive'" type="info" show-icon
+                    message="该云盘通道（OAuth 授权）尚未接入，当前仅支持 WebDAV。" />
+                  <a-space>
+                    <a-button @click="testRemote">测试连接</a-button>
+                    <a-button type="primary" @click="saveRemote">保存远程配置</a-button>
+                  </a-space>
+                </a-form>
+              </a-card>
+            </a-col>
+
+            <!-- 右：备份记录 -->
+            <a-col :xs="24" :md="14">
+              <a-card size="small" title="备份记录">
+                <a-table :data-source="backupList" :columns="backupCols" size="small" row-key="name" :pagination="{ pageSize: 10 }">
+                  <template #bodyCell="{ column, record }">
+                    <template v-if="column.key === 'createdAt'">{{ fmtTime(record.createdAt) }}</template>
+                    <template v-if="column.key === 'size'">{{ fmtBytes(record.size) }}</template>
+                    <template v-if="column.key === 'items'">{{ (record.items || []).length }} 项</template>
+                    <template v-if="column.key === 'action'">
+                      <a-space :size="4">
+                        <a-button size="small" @click="downloadBackup(record)">下载</a-button>
+                        <a-button size="small" @click="uploadRemote(record)">上传远程</a-button>
+                        <a-button size="small" danger @click="removeBackup(record)">删除</a-button>
+                      </a-space>
+                    </template>
+                  </template>
+                </a-table>
+              </a-card>
+            </a-col>
+          </a-row>
+        </a-spin>
+      </a-tab-pane>
     </a-tabs>
   </a-card>
   </a-spin>
@@ -81,7 +181,7 @@
 <script setup lang="ts">
 import { computed, onActivated, ref } from 'vue'
 import { message } from 'ant-design-vue'
-import { getQuiet, put, post, fmtTime } from '../api'
+import { getQuiet, put, post, del, fmtTime, fmtBytes, http } from '../api'
 import { useAuth } from '../store/auth'
 import AceEditor from '../components/AceEditor.vue'
 
@@ -103,6 +203,139 @@ const newP2 = ref('')
 const newU = ref('')
 const unPw = ref('')
 const audit = ref<any[]>([])
+
+// ---- 安全入口 ----
+const entryInput = ref('')
+const entryPath = ref('')
+const entryEnabled = ref(false)
+const entrySaving = ref(false)
+const origin = window.location.origin
+
+const loadEntry = async () => {
+  try {
+    const r = await getQuiet<any>('/api/settings/entry')
+    entryPath.value = r?.entryPath || ''
+    entryEnabled.value = !!r?.enabled
+    entryInput.value = entryPath.value
+  } catch { /* 忽略：未配置时保持关闭态 */ }
+}
+
+const saveEntry = async () => {
+  entrySaving.value = true
+  try {
+    const r = await put('/api/settings/entry', { entryPath: entryInput.value.trim() })
+    if (!r.ok) return
+    entryPath.value = r.entryPath || ''
+    entryEnabled.value = !!r.enabled
+    entryInput.value = entryPath.value
+    if (r.enabled) {
+      message.success(`入口已启用，即将跳转到 ${r.entryPath}`)
+      // 启用后旧路径会 404，跳到新入口下的设置页（后端注入 base，前端路由正常）
+      setTimeout(() => { window.location.href = r.entryPath + '/settings' }, 800)
+    } else {
+      message.success('安全入口已关闭，根路径可直接访问')
+      setTimeout(() => { window.location.href = '/settings' }, 800)
+    }
+  } finally { entrySaving.value = false }
+}
+
+// ---- 备份与恢复 ----
+const backupBusy = ref(false)
+const creating = ref(false)
+const restoring = ref(false)
+const backupItems = ref<string[]>([])
+const backupItemMetas = ref<any[]>([])
+const backupList = ref<any[]>([])
+const remote = ref<any>({ enabled: false, kind: 'local', url: '', username: '', password: '', passwordSet: false, remoteDir: '' })
+const remoteKindOptions = [
+  { value: 'local', label: '仅本地' },
+  { value: 'webdav', label: 'WebDAV' },
+  { value: 'googledrive', label: 'Google Drive（待接入）' },
+  { value: 'onedrive', label: 'OneDrive（待接入）' },
+]
+const backupCols = [
+  { title: '时间', dataIndex: 'createdAt', key: 'createdAt', width: 160 },
+  { title: '大小', dataIndex: 'size', key: 'size', width: 90 },
+  { title: '范围', dataIndex: 'items', key: 'items', width: 80 },
+  { title: '操作', key: 'action' },
+]
+const allItemsChecked = computed(() => backupItemMetas.value.length > 0 && backupItems.value.length === backupItemMetas.value.length)
+
+const loadBackup = async () => {
+  const [itemsR, listR, remoteR] = await Promise.allSettled([
+    getQuiet('/api/backup/items'),
+    getQuiet('/api/backup/list'),
+    getQuiet('/api/backup/remote'),
+  ])
+  if (itemsR.status === 'fulfilled') backupItemMetas.value = itemsR.value?.items || []
+  if (listR.status === 'fulfilled') backupList.value = listR.value?.list || []
+  if (remoteR.status === 'fulfilled' && remoteR.value) {
+    remote.value = { ...remote.value, ...remoteR.value, password: '' }
+  }
+  if (backupItems.value.length === 0 && backupItemMetas.value.length > 0) {
+    backupItems.value = backupItemMetas.value.map((i: any) => i.key)
+  }
+}
+
+const toggleAllItems = (e: any) => {
+  backupItems.value = e.target.checked ? backupItemMetas.value.map((i: any) => i.key) : []
+}
+
+const createBackup = async () => {
+  creating.value = true
+  try {
+    const r = await post('/api/backup/create', { items: backupItems.value })
+    if (r.ok) {
+      message.success('备份已生成')
+      await loadBackup()
+    }
+  } finally { creating.value = false }
+}
+
+const downloadBackup = (record: any) => {
+  window.open(`/api/backup/download?name=${encodeURIComponent(record.name)}`, '_blank')
+}
+
+const uploadRemote = async (record: any) => {
+  backupBusy.value = true
+  try {
+    const r = await post(`/api/backup/${encodeURIComponent(record.name)}/upload-remote`)
+    if (r.ok) message.success('已上传到远程存储')
+  } finally { backupBusy.value = false }
+}
+
+const removeBackup = async (record: any) => {
+  await del(`/api/backup/${encodeURIComponent(record.name)}`)
+  message.success('已删除')
+  await loadBackup()
+}
+
+const restoreBefore = (file: File) => {
+  restoring.value = true
+  const fd = new FormData()
+  fd.append('file', file)
+  fd.append('items', backupItems.value.join(','))
+  http.post('/api/backup/restore', fd, { headers: { 'Content-Type': 'multipart/form-data' } })
+    .then((resp: any) => {
+      const r = resp.data
+      if (r.ok) message.success(`恢复完成：还原 ${r.result?.restored?.length || 0} 项`)
+      else message.error(r.error || '恢复失败')
+    })
+    .catch(() => message.error('恢复失败'))
+    .finally(() => { restoring.value = false })
+  return false
+}
+
+const testRemote = async () => {
+  const r = await post('/api/backup/remote/test', remote.value)
+  if (r.ok) message.success('连接成功')
+  else message.error(r.error || '连接失败')
+}
+
+const saveRemote = async () => {
+  const r = await put('/api/backup/remote', remote.value)
+  if (r.ok) { message.success('远程配置已保存'); await loadBackup() }
+}
 
 const auditCols: any[] = [
   { title: "时间", dataIndex: "time", key: "time", width: 170 },
@@ -129,6 +362,8 @@ const load = async () => {
     if (auditR.status === 'fulfilled') audit.value = auditR.value || []
     if (tplR.status === 'fulfilled' && tplR.value) maintTemplate.value = tplR.value.content
     if (setR.status === 'rejected') message.error('设置加载失败，请稍后重试')
+    loadBackup()
+    loadEntry()
   } finally { loading.value = false }
 }
 const checkUpdate = async () => {
@@ -190,4 +425,9 @@ onActivated(load)
 
 <style scoped>
 .dim { color: var(--color-slate); font-size: 12px; }
+.backup-card { margin-bottom: 16px; }
+.item-group { margin-top: 12px; }
+.item-row { padding: 6px 0; }
+.item-label { font-size: 13px; }
+.item-desc { font-size: 12px; color: var(--color-slate); }
 </style>

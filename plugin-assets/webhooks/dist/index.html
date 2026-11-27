@@ -26,7 +26,6 @@
   .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 12px; }
   .hook-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .hook-id { font-weight: 600; font-size: 15px; }
-  .tag { font-size: 11px; padding: 1px 8px; border-radius: 10px; background: var(--primary-weak); color: var(--primary); }
   .hook-dot { width: 8px; height: 8px; border-radius: 50%; background: #c9cdd4; display: inline-block; flex: none; }
   .hook-dot.on { background: var(--green); box-shadow: 0 0 0 2px rgba(82,196,26,.16); }
   html[data-theme='dark'] .hook-dot { background: #5a5a5a; }
@@ -152,11 +151,11 @@ let live = null; // 当前实时订阅：{runId, hookId, startedMs, es, pollTime
 
 function hostLabel(id) {
   const h = hosts.find(x => x.id === id);
-  if (h) return (h.name || h.host) + '（' + (h.username || 'root') + '@' + h.host + '）';
+  if (h) return h.name || h.host || ('主机#' + id);
   const raw = allHosts.find(x => x.id === id);
   if (!raw) return '主机#' + id + '（已删除）';
   if (raw.local) return '本机（内置主机）';
-  return (raw.name || raw.host || ('主机#' + id)) + '（未配置 SSH 凭据）';
+  return raw.name || raw.host || ('主机#' + id);
 }
 function targetLabel(t) {
   if (!t) return '本机';
@@ -167,7 +166,7 @@ function targetLabel(t) {
 // 执行位置文案：主机可用时展示「主机 · 名称」；失效时给出原因并提供重新关联入口
 function targetMeta(id, hookId) {
   if (!id) return '本机';
-  if (hosts.find(x => x.id === id)) return '<span class="tag">主机 · ' + esc(hostLabel(id)) + '</span>';
+  if (hosts.find(x => x.id === id)) return '主机 · ' + esc(hostLabel(id));
   const raw = allHosts.find(x => x.id === id);
   const why = !raw ? '主机已删除' : raw.local ? '内置本机请直接选「本机」' : '该主机未配置 SSH 凭据';
   return '<span class="warn">关联主机不可用（' + why + '）</span> '

@@ -551,12 +551,15 @@ func (s *Service) detect(w *win, l4 L4Stat, now time.Time) []autoBan {
 		}
 	}
 
+	// CC 攻击：10s 窗口内请求数达到「速率阈值(r/s) × 10」才算突发；阈值走策略配置（默认 20 r/s）。
+	ccReq := s.ccThreshold() * 10
 	for ip, c := range w.ip10 {
-		if c < 20 {
+		if c < int64(ccReq) {
 			continue
 		}
+		rps := c / 10
 		s.emit("CC 攻击", "warn", w.ipSite[ip], ip, w.ipCountry[ip], w.ipPath[ip], w.ipUA[ip],
-			fmt.Sprintf("10s 内 %d 次请求（约 %d rps）", c, c/10), int(c), now)
+			fmt.Sprintf("10s 内 %d 次请求（约 %d rps）", c, rps), int(c), now)
 	}
 
 	if w.total >= 60 && w.s5*100 >= w.total*5 {

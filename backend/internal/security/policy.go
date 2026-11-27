@@ -221,6 +221,16 @@ func (s *Service) inWhitelist(ip string) bool {
 	return ipInList(ip, wl)
 }
 
+// ccThreshold 读取当前策略的 CC 速率阈值（r/s）；策略缺失或未配置时回落到默认值。
+func (s *Service) ccThreshold() int {
+	s.polMu.Lock()
+	defer s.polMu.Unlock()
+	if s.pol == nil || s.pol.CCRate <= 0 {
+		return 20
+	}
+	return s.pol.CCRate
+}
+
 // ipInList 纯函数版白名单判定：调用方已持有/不需要策略锁时使用。
 func ipInList(ip string, wl []string) bool {
 	parsed := net.ParseIP(strings.TrimSuffix(ip, "/32"))

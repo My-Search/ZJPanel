@@ -1,6 +1,10 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuth } from '../store/auth'
 
+// 安全入口 base：后端在启用隐秘入口时于 index.html 注入 window.__ZJPANEL_BASE__；
+// 未启用时为空串，等价于根路径部署。vue-router 内部路由仍以 /dashboard 等为准，base 仅影响浏览器 URL 前缀。
+export const ENTRY_BASE: string = (window as any).__ZJPANEL_BASE__ || ''
+
 // 路由 → 页面标题映射：浏览器标签栏显示当前页面名称，多标签时一眼区分
 const TITLE_MAP: Record<string, string> = {
   '/dashboard': '仪表盘',
@@ -20,7 +24,7 @@ const TITLE_MAP: Record<string, string> = {
 }
 
 const router = createRouter({
-  history: createWebHistory(),
+  history: createWebHistory(ENTRY_BASE),
   routes: [
     { path: '/login', component: () => import('../views/Login.vue'), meta: { public: true } },
     {
