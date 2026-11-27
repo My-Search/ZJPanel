@@ -364,6 +364,10 @@ const hosts = ref<any[]>([])
 const current = ref<any>(null)
 const kw = ref('')
 const tab = ref('overview')
+// 刷新/从菜单返回时回到上次的主机与标签：终端会话按主机常驻，恢复后直接 attach
+const HOST_KEY = 'zj.hosts.current'
+const TAB_KEY = 'zj.hosts.tab'
+const TABS = ['overview', 'defense', 'events', 'terminal', 'settings']
 const m = ref<any>({})
 const ports = ref<any[]>([])
 const events = ref<any[]>([])
@@ -501,8 +505,13 @@ const uptimeText = computed(() => {
 const load = async () => {
   const list = await get<any[]>('/api/hosts')
   hosts.value = list
-  if (!current.value && list.length) select(list[0])
-  else if (current.value) {
+  if (!current.value && list.length) {
+    const savedId = Number(localStorage.getItem(HOST_KEY))
+    const saved = list.find((x: any) => x.id === savedId)
+    select(saved || list[0])
+    const savedTab = localStorage.getItem(TAB_KEY) || ''
+    if (saved && TABS.includes(savedTab)) tab.value = savedTab
+  } else if (current.value) {
     const h = list.find(x => x.id === current.value.id)
     if (h) current.value = h
   }
@@ -550,6 +559,7 @@ const loadChecks = async (hostId = current.value?.id) => {
 }
 const select = async (h: any) => {
   current.value = h
+  localStorage.setItem(HOST_KEY, String(h.id))
   tab.value = 'overview'
   edit.name = h.name
   edit.group = h.group || ''
@@ -818,6 +828,7 @@ onUnmounted(() => {
 })
 watch(() => current.value?.id, () => loadDetail())
 watch(tab, (v) => {
+  localStorage.setItem(TAB_KEY, v)
   if (v === 'defense') {
     loadChecks()
     if (canCheck.value) refreshFirewall()

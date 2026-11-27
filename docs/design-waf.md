@@ -1,6 +1,6 @@
 # WAF 规则引擎设计（参考 SamWaf）
 
-> 状态：v0.2.x 已落地（`backend/internal/waf` + `/api/waf` + 「WAF 规则」页）
+> 状态：v0.2.x 已落地（`backend/internal/waf` + `/api/waf`；原「WAF 规则」页已并入「WAF」页「策略与规则」标签）
 > 参考项目：`SamWaf`（Go 自研 WAF，反向代理式）
 
 ## 1. 为什么不是照搬 SamWaf
@@ -28,7 +28,7 @@ ZJPanel 的架构契约是**「面板只管理宿主机 nginx，不做流量代�
 | 多轮 URL 解码（`RawQuery` 已多轮解码）+ HTML 实体/Unicode 还原 | `decodeLayers`（最多 3 层）+ `decodeEntities`（`&lt;`/`&#x27;`/`\u003c`）|
 | 多信号判定压误报（libinjection 命中 + 执行信号才判 XSS；SQLi 补高危关键字兜底） | XSS 要求命中 libinjection 且含 `<字母`/`on…=`/`javascript:` 等执行信号；SQLi 命中后要求引号/注释/SQL 结构词等第二信号 |
 | 规则动作分级：拦截 / 放行 / 仅记录，按优先级仲裁 | 规则 `action` = block / observe，全局 `blockMode` 可整体降级为观察 |
-| 逐条规则可开关、可改动作、自定义规则 | 「WAF 规则」页逐条 Switch + 动作下拉；自定义正则规则（作用范围 url/query/ua/referer）|
+| 逐条规则可开关、可改动作、自定义规则 | 「WAF」页「策略与规则」标签逐条 Switch + 动作下拉；自定义正则规则（作用范围 url/query/ua/referer）|
 | 封禁带时长、累犯递增 | 阶梯封禁：默认 `10 / 60 / 1440` 分钟，超出取最后一级；`banResetHours`（默认 24h）内无新命中则重新从第一级算 |
 | 攻击日志保留证据（payload 片段） | 命中记录含解码后的证据片段，环形 1000 条 + 落盘 `data/waf/hits.jsonl`（8MB 滚动）|
 | 扫描器 UA 库 | 内置 UA 正则（sqlmap/nikto/nuclei/fscan/xray…），**排除 curl/wget 等通用客户端**避免误杀 |

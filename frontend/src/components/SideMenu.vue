@@ -7,7 +7,6 @@
     <a-menu-item key="/certs"><template #icon><SafetyCertificateOutlined /></template>证书</a-menu-item>
     <a-menu-item key="/monitor"><template #icon><DashboardOutlined /></template>监控</a-menu-item>
     <a-menu-item key="/waf"><template #icon><SafetyOutlined /></template>WAF</a-menu-item>
-    <a-menu-item key="/waf/rules"><template #icon><SecurityScanOutlined /></template>WAF 规则</a-menu-item>
     <a-menu-item key="/mcp"><template #icon><ApiOutlined /></template>MCP</a-menu-item>
     <a-menu-item key="/plugins"><template #icon><AppstoreAddOutlined /></template>插件</a-menu-item>
     <a-menu-item key="/settings"><template #icon><SettingOutlined /></template>设置</a-menu-item>
@@ -23,7 +22,7 @@ import { useTheme } from '../store/theme'
 import {
   AppstoreOutlined, ClusterOutlined, CodeOutlined,
   SafetyCertificateOutlined, DashboardOutlined, SafetyOutlined,
-  ApiOutlined, AppstoreAddOutlined, SettingOutlined, CloudServerOutlined, SecurityScanOutlined,
+  ApiOutlined, AppstoreAddOutlined, SettingOutlined, CloudServerOutlined,
   // 插件菜单图标池（icon 名来自插件 manifest 的 menu.icon，kebab-case）
   ThunderboltOutlined, DatabaseOutlined, ClockCircleOutlined,
   CloudOutlined, FileTextOutlined, FolderOutlined, KeyOutlined,
