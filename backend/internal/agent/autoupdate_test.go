@@ -1,6 +1,9 @@
 package agent
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestVersionNewer(t *testing.T) {
 	cases := []struct {
@@ -34,6 +37,22 @@ func TestNormalizeArch(t *testing.T) {
 	for in, want := range cases {
 		if got := normalizeArch(in); got != want {
 			t.Errorf("normalizeArch(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// 连续失败时指数退避拉长冷却窗口，封顶 1 小时；首次失败回到基础 10 分钟。
+func TestAutoUpgradeBackoff(t *testing.T) {
+	cases := map[int]time.Duration{
+		0:  10 * time.Minute,
+		1:  20 * time.Minute,
+		2:  40 * time.Minute,
+		3:  time.Hour,
+		99: time.Hour,
+	}
+	for fails, want := range cases {
+		if got := autoUpgradeBackoff(fails); got != want {
+			t.Errorf("autoUpgradeBackoff(%d) = %v, want %v", fails, got, want)
 		}
 	}
 }

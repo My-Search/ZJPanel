@@ -86,7 +86,9 @@ agent → panel  metric  {ts, series...}
 **更新感知**（三层，主次明确）：
 
 1. **握手协商（主）**：Agent 每次重连上报 `version` + `protocol`，面板比对 → 标记「落后 N 个版本 / 协议不兼容」。离线机器也能在面板看到“该升级”。
-2. **面板下发（执行）**：`upgrade` 指令携带目标版本 + 下载地址 + 签名；Agent 下载校验 → 驻留新槽 → 切 symlink → 重启 → 新进程自检通过并回报；失败由 systemd 拉起旧槽（`previous` symlink 保留）。
+   - **回连自动升级**（已落地，`autoupdate.go`；`ZJPANEL_AGENT_AUTOUPDATE=0` 可关）：面板内置 Agent 比上报版本新时立即下发 `upgrade`，无感跟进面板版本。守卫条件：仅 linux + 已内置架构（amd64/arm64）；面板自身是预发布（`-rc`/dev）不下发，目标是 dev 构建时可升到正式版；Agent 未上报版本（`""`）不动。
+   - **冷却与退避**：与手动升级共用 `kind=upgrade` 记录作冷却通道——最近 10 分钟已有升级指令则不重复下发（升级失败时 Agent 保持旧版本重连，没有冷却会形成「每次重连都下载一遍」）；连续失败按 10m→20m→40m 指数退避、封顶 1h（内存态，面板重启清零），冷却查询出错保守跳过本轮。
+2. **面板下发（执行）**：`upgrade` 指令携带目标版本 + 下载地址（`/api/agent/bin/<arch>`，token 鉴权）+ sha256；Agent 下载校验 → 驻留新槽 → 切 symlink → 重启 → 新进程自检通过并回报；失败由 systemd 拉起旧槽（`previous` symlink 保留）。
 3. **Agent 定时自检（兜底）**：每 1h ±10min 抖动检查一次（可关），只上报不自动执行。
 
 **面板展示**：

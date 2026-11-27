@@ -115,18 +115,21 @@ type Service struct {
 
 	// 自动升级去重：同一主机同一时刻只跑一次检测/下发
 	upgrading map[uint]bool
+	// 自动升级连续失败次数（内存态，重启清零）：用于指数退避拉长冷却窗口
+	upgradeFails map[uint]int
 }
 
 func New(cfg *pkg.Config, db *gorm.DB, box *pkg.SecretBox, hub *ws.Hub) *Service {
 	return &Service{
 		cfg: cfg, db: db, box: box, hub: hub,
-		conns:     map[uint]*conn{},
-		boot:      map[string]bootEntry{},
-		metrics:   map[uint]*Metrics{},
-		events:    map[uint][]Event{},
-		alive:     map[uint]time.Time{},
-		waiters:   map[string]chan result{},
-		upgrading: map[uint]bool{},
+		conns:        map[uint]*conn{},
+		boot:         map[string]bootEntry{},
+		metrics:      map[uint]*Metrics{},
+		events:       map[uint][]Event{},
+		alive:        map[uint]time.Time{},
+		waiters:      map[string]chan result{},
+		upgrading:    map[uint]bool{},
+		upgradeFails: map[uint]int{},
 	}
 }
 

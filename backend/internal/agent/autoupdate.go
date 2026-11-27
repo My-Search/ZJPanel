@@ -12,9 +12,33 @@ import (
 
 // 自动升级：Agent 每次回连（hello）时比对自身版本与面板内置 Agent 版本，
 // 面板版本更新则立即下发 upgrade 指令。手动升级同样走这条通道，因此
-// 最近 10 分钟已有升级指令时不再重复下发，避免失败场景每次重连都触发。
+// 最近 10 分钟已有升级指令时不再重复下发，避免失败场景每次重连都触发；
+// 连续失败再按 10m→20m→40m 指数退避（封顶 1h），长期坏机不再刷屏。
 
 const autoUpgradeCooldown = 10 * time.Minute
+
+// autoUpgradeBackoff 连续失败时指数退避：10m→20m→40m→封顶 1h。
+// 避免长期坏机（磁盘满/凭据失效）每 10 分钟重试一次并刷一条告警。
+func autoUpgradeBackoff(fails int) time.Duration {
+	d := autoUpgradeCooldown << fails
+	if d <= 0 || d > time.Hour {
+		d = time.Hour
+	}
+	return d
+}
+
+// markUpgradeFail / markUpgradeOK 维护连续失败计数，成功一次即清零。
+func (s *Service) markUpgradeFail(hostID uint) {
+	s.mu.Lock()
+	s.upgradeFails[hostID]++
+	s.mu.Unlock()
+}
+
+func (s *Service) markUpgradeOK(hostID uint) {
+	s.mu.Lock()
+	delete(s.upgradeFails, hostID)
+	s.mu.Unlock()
+}
 
 func (s *Service) maybeAutoUpgrade(hostID uint, agentVer, osName, arch string) {
 	if s.cfg == nil || !s.cfg.AgentAutoUpdate {
@@ -50,10 +74,18 @@ func (s *Service) maybeAutoUpgrade(hostID uint, agentVer, osName, arch string) {
 
 		// 冷却期内已有升级记录（手动或上次自动）就不再重复：升级失败时
 		// Agent 会保持旧版本重连，没有冷却会形成「每次重连都下载一遍」。
+		// 冷却窗口随连续失败次数指数退避；查询出错时保守跳过本轮，
+		// 避免把失败当成「无记录」而重复下发。
+		s.mu.Lock()
+		cd := autoUpgradeBackoff(s.upgradeFails[hostID])
+		s.mu.Unlock()
 		var recent int64
-		_ = s.db.Model(&model.AgentCommand{}).
-			Where("host_id = ? AND kind = ? AND created_at > ?", hostID, "upgrade", time.Now().Add(-autoUpgradeCooldown)).
-			Count(&recent).Error
+		if err := s.db.Model(&model.AgentCommand{}).
+			Where("host_id = ? AND kind = ? AND created_at > ?", hostID, "upgrade", time.Now().Add(-cd)).
+			Count(&recent).Error; err != nil {
+			slog.Warn("Agent 自动升级冷却查询失败，本轮跳过", "host", hostID, "err", err)
+			return
+		}
 		if recent > 0 {
 			return
 		}
@@ -69,15 +101,18 @@ func (s *Service) maybeAutoUpgrade(hostID uint, agentVer, osName, arch string) {
 			"version": panelVer,
 		}, 90*time.Second)
 		if err != nil {
+			s.markUpgradeFail(hostID)
 			slog.Warn("Agent 自动升级失败", "host", hostID, "err", err)
 			s.emitSystem(hostID, "Agent 自动升级", "warn", "升级指令失败："+err.Error())
 			return
 		}
 		if !res.OK {
+			s.markUpgradeFail(hostID)
 			slog.Warn("Agent 自动升级被拒绝", "host", hostID, "output", res.Output)
 			s.emitSystem(hostID, "Agent 自动升级", "warn", "升级未执行："+firstLine(res.Output))
 			return
 		}
+		s.markUpgradeOK(hostID)
 		s.emitSystem(hostID, "Agent 自动升级", "info", agentVer+" → "+panelVer+"，等待 Agent 重启回连")
 	}()
 }
