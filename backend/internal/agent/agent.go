@@ -109,6 +109,7 @@ type Service struct {
 	boot    map[string]bootEntry
 	metrics map[uint]*Metrics
 	events  map[uint][]Event
+	alive   map[uint]time.Time // 最近一次 hello/heartbeat，用于识别半开连接
 	waiters map[string]chan result
 	evSeq   int64
 }
@@ -120,6 +121,7 @@ func New(cfg *pkg.Config, db *gorm.DB, box *pkg.SecretBox, hub *ws.Hub) *Service
 		boot:    map[string]bootEntry{},
 		metrics: map[uint]*Metrics{},
 		events:  map[uint][]Event{},
+		alive:   map[uint]time.Time{},
 		waiters: map[string]chan result{},
 	}
 }
@@ -176,11 +178,18 @@ func (s *Service) ResolveToken(tok string) (hostID uint, bootstrap bool, ok bool
 }
 
 // Online 主机当前是否有活跃连接。
+// 除连接存在外还要求最近 60s 内有 hello/heartbeat：TCP 半开时 conn 仍在，
+// 但心跳已停，不能继续显示「在线」。
 func (s *Service) Online(hostID uint) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, ok := s.conns[hostID]
-	return ok
+	if _, ok := s.conns[hostID]; !ok {
+		return false
+	}
+	if t, ok := s.alive[hostID]; ok && time.Since(t) > 60*time.Second {
+		return false
+	}
+	return true
 }
 
 // LatestMetrics 最近一次指标。
@@ -248,12 +257,17 @@ func (s *Service) serve(hostID uint, c *websocket.Conn, bootstrap bool, bootTok 
 	s.mu.Unlock()
 
 	defer func() {
+		removed := false
 		s.mu.Lock()
 		if cur, ok := s.conns[hostID]; ok && cur == ac {
 			delete(s.conns, hostID)
+			removed = true
 		}
 		s.mu.Unlock()
-		s.markOffline(hostID)
+		// 被新连接替换时旧 serve 也会走到这里，不能把新连接的状态标成离线
+		if removed {
+			s.markOffline(hostID)
+		}
 	}()
 
 	tokenToSend := ""
@@ -325,6 +339,9 @@ func (s *Service) onHello(hostID uint, ac *conn, msg map[string]any, newToken st
 		return
 	}
 	now := time.Now()
+	s.mu.Lock()
+	s.alive[hostID] = now
+	s.mu.Unlock()
 	upd := map[string]any{
 		"agent_id": str(msg["agentId"]), "agent_status": "online", "agent_version": version,
 		"agent_proto": proto, "agent_last_seen": &now, "remote_ip": str(msg["remoteIp"]),
@@ -349,6 +366,9 @@ func (s *Service) onHello(hostID uint, ac *conn, msg map[string]any, newToken st
 
 func (s *Service) onHeartbeat(hostID uint, msg map[string]any) {
 	now := time.Now()
+	s.mu.Lock()
+	s.alive[hostID] = now
+	s.mu.Unlock()
 	_ = s.db.Model(&model.SshHost{}).Where("id = ?", hostID).
 		Updates(map[string]any{"agent_status": "online", "agent_last_seen": &now})
 
@@ -471,10 +491,14 @@ func (s *Service) flushQueued(hostID uint) {
 }
 
 func (s *Service) markOffline(hostID uint) {
-	now := time.Now()
+	s.mu.Lock()
+	delete(s.alive, hostID)
+	s.mu.Unlock()
+	// 不改 agent_last_seen：保留最后一次真实心跳时间，前端显示「最后在线」才有意义
 	_ = s.db.Model(&model.SshHost{}).Where("id = ?", hostID).
-		Updates(map[string]any{"agent_status": "offline", "agent_last_seen": &now})
+		Update("agent_status", "offline")
 	slog.Info("Agent 下线", "host", hostID)
+	s.emitSystem(hostID, "Agent 下线", "warn", "连接已断开，等待 Agent 回连")
 }
 
 func (s *Service) emitSystem(hostID uint, kind, severity, detail string) {

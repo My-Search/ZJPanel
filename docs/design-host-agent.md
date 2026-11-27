@@ -241,6 +241,7 @@ Agent 侧：`GET /api/agent/time|install.sh|bin/:arch`、`WS /api/agent/ws`、`P
 - `go build ./...`、`npm run build`、`go test ./internal/agent/ ./cmd/zjagent/` 全部通过。
 - 端到端（Windows 本机）：`/api/agent/register` 生成 bootstrap token → `zjagent run` 出站连 `/api/agent/ws` → 首帧 `hello` 认证 → `welcome` 下发长期 token（日志「已换取长期 token」）→ 面板主机状态 `online`、`agentProto=1`、`osArch=windows/amd64`、`lastSeen` 更新。
 - 指令闭环：`POST /api/hosts/:id/check/ssh` 下发 `ssh_audit` → Agent 回 `cmdResult` → 事件流出现「指令完成：ssh_audit」，失败原因（Windows 无 `/etc/ssh/sshd_config`）如实回传。
+- 在线态：`Online` 同时要求连接存在且 60s 内有 hello/heartbeat；概览每 5s 轮询指标与主机列表，下线事件推送后立即刷新，避免半开连接导致「永远在线、数字不动」。
 
 ### 与文档的偏差（有意）
 

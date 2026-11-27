@@ -77,6 +77,9 @@
                 <a-col :xs="12" :md="6"><a-card size="small" class="stat"><div class="stat-label">磁盘 /</div><div class="stat-value">{{ pct((m.diskTotal || 0) - (m.diskUsed || 0), m.diskTotal) }}<span class="unit">%</span></div><div class="stat-sub">已用 {{ fmtBytes(m.diskUsed) }} / {{ fmtBytes(m.diskTotal) }}</div></a-card></a-col>
                 <a-col :xs="12" :md="6"><a-card size="small" class="stat"><div class="stat-label">连接 / SSH</div><div class="stat-value">{{ m.conns ?? '-' }}<span class="unit">/ {{ m.sshSessions ?? '-' }}</span></div><div class="stat-sub">运行 {{ uptimeText }}</div></a-card></a-col>
               </a-row>
+              <div v-if="!current.local" class="overview-meta">
+                每 5 秒自动刷新 · 指标采样 {{ m.t ? fmtTime(m.t) : '等待上报' }}
+              </div>
 
               <a-row :gutter="12" style="margin-top: 12px">
                 <a-col :xs="24" :lg="14">
@@ -510,17 +513,46 @@ const select = async (h: any) => {
   await loadDetail()
 }
 
+// 概览轮询：只刷新指标/端口/在线态，不清空已有数据，避免每次刷新闪一下
+const loadMetrics = async () => {
+  const c = current.value
+  if (!c || c.local) return
+  const hostId = c.id
+  try {
+    const r = await getQuiet<any>(`/api/hosts/${hostId}/metrics`)
+    if (current.value?.id !== hostId) return
+    m.value = r.metrics || {}
+    ports.value = (r.metrics?.ports || []).map((p: any) => ({ ...p, key: `${p.proto}-${p.port}` }))
+    if (typeof r.online === 'boolean' && current.value) {
+      current.value = { ...current.value, online: r.online, agentStatus: r.online ? 'online' : (current.value.agentStatus === 'local' ? 'local' : 'offline') }
+    }
+  } catch { /* 离线/瞬时失败正常 */ }
+}
+
+const loadEvents = async () => {
+  const c = current.value
+  if (!c) return
+  try { events.value = await getQuiet(`/api/hosts/${c.id}/events?limit=50`) } catch { /* ignore */ }
+}
+
 const loadDetail = async () => {
   if (!current.value) return
   m.value = {}
   ports.value = []
   events.value = []
+  await Promise.all([loadMetrics(), loadEvents()])
+}
+
+// 主机页停留期间定时刷新：Agent 15s 一次心跳，5s 轮询能及时反映状态与指标
+let pollTimer: any = null
+let pollBusy = false
+const pollNow = async () => {
+  if (document.hidden || pollBusy) return
+  pollBusy = true
   try {
-    const r = await getQuiet(`/api/hosts/${current.value.id}/metrics`)
-    m.value = r.metrics || {}
-    ports.value = (r.metrics?.ports || []).map((p: any) => ({ ...p, key: `${p.proto}-${p.port}` }))
-  } catch { /* 离线时正常 */ }
-  try { events.value = await getQuiet(`/api/hosts/${current.value.id}/events?limit=50`) } catch { /* ignore */ }
+    try { await load() } catch { /* 网络抖动不影响下一轮 */ }
+    await loadMetrics()
+  } finally { pollBusy = false }
 }
 
 const testHost = async () => {
@@ -724,9 +756,15 @@ onMounted(async () => {
   syncNarrow()
   mq.addEventListener('change', syncNarrow)
   await load()
-  unsub = wsTopic('host-event', () => { load(); if (current.value) loadDetail() })
+  // 主机列表与详情数据不会自己推送（只有事件会），页面停留时靠轮询保持更新
+  pollTimer = setInterval(pollNow, 5000)
+  unsub = wsTopic('host-event', () => { load(); loadMetrics(); loadEvents() })
 })
-onUnmounted(() => { unsub?.(); mq.removeEventListener('change', syncNarrow) })
+onUnmounted(() => {
+  unsub?.()
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+  mq.removeEventListener('change', syncNarrow)
+})
 watch(() => current.value?.id, () => loadDetail())
 watch(tab, (v) => { if (v === 'defense' && canCheck.value) refreshFirewall() })
 </script>
@@ -766,6 +804,7 @@ watch(tab, (v) => { if (v === 'defense' && canCheck.value) refreshFirewall() })
 .stat-value { font-size: 24px; font-weight: 600; line-height: 1.25; color: var(--color-ink); }
 .unit { font-size: 12px; font-weight: 400; color: var(--color-slate); margin-left: 3px; }
 .stat-sub { font-size: 12px; color: var(--color-slate); }
+.overview-meta { margin-top: 8px; font-size: 12px; color: var(--color-slate); }
 .hint { font-size: 12px; color: var(--color-slate); margin-top: 2px; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .defense-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 2px 0 12px; }
