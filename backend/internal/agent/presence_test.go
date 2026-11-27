@@ -14,7 +14,7 @@ func TestOnlineRequiresFreshHeartbeat(t *testing.T) {
 
 	s.alive[1] = time.Now().Add(-2 * time.Minute)
 	if s.Online(1) {
-		t.Fatal("超过 60s 没有心跳的 TCP 半开连接不应显示在线")
+		t.Fatal("超过 45s 没有心跳的 TCP 半开连接不应显示在线")
 	}
 
 	s.alive[1] = time.Now()

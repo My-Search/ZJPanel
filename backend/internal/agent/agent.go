@@ -178,15 +178,15 @@ func (s *Service) ResolveToken(tok string) (hostID uint, bootstrap bool, ok bool
 }
 
 // Online 主机当前是否有活跃连接。
-// 除连接存在外还要求最近 60s 内有 hello/heartbeat：TCP 半开时 conn 仍在，
-// 但心跳已停，不能继续显示「在线」。
+// 除连接存在外还要求最近 45s 内有 hello/heartbeat（心跳 15s 一次）：TCP 半开时
+// conn 仍在，但心跳已停，不能继续显示「在线」。
 func (s *Service) Online(hostID uint) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.conns[hostID]; !ok {
 		return false
 	}
-	if t, ok := s.alive[hostID]; ok && time.Since(t) > 60*time.Second {
+	if t, ok := s.alive[hostID]; ok && time.Since(t) > 45*time.Second {
 		return false
 	}
 	return true
@@ -255,6 +255,25 @@ func (s *Service) serve(hostID uint, c *websocket.Conn, bootstrap bool, bootTok 
 	}
 	s.conns[hostID] = ac
 	s.mu.Unlock()
+
+	// 服务端定时下发 tick：Agent 侧读超时 30s，面板重启/网络半开时能在一个
+	// tick 周期内发现断连并重连，而不是等应用层心跳 90s 超时才恢复。
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		t := time.NewTicker(10 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				if err := ac.send(map[string]any{"type": "tick"}); err != nil {
+					return
+				}
+			}
+		}
+	}()
 
 	defer func() {
 		removed := false

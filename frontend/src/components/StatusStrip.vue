@@ -49,22 +49,32 @@ const fmtNet = (v: number) => {
 
 <style scoped>
 .status-strip {
-  display: flex; align-items: center; gap: 4px 18px; flex-wrap: wrap;
-  border-top: 1px solid var(--border-card); margin-top: 6px; padding: 6px 10px 0;
-  color: var(--color-slate); font-size: 12px; min-height: 30px; user-select: none;
+  display: flex; align-items: center; gap: 4px 12px; flex-wrap: nowrap;
+  overflow-x: auto; scrollbar-width: none;
+  border-top: 1px solid var(--border-card); margin-top: 6px; padding: 5px 2px 0;
+  color: var(--color-slate); font-size: 12px; min-height: 26px; user-select: none;
 }
-.item { display: inline-flex; align-items: center; gap: 6px; }
+.status-strip::-webkit-scrollbar { display: none; }
+.item { display: inline-flex; align-items: center; gap: 4px; flex: none; }
 .ico { font-size: 12px; }
-.val { min-width: 44px; }
-.bar { width: 64px; height: 5px; border-radius: 3px; background: rgba(148, 163, 184, .25); overflow: hidden; }
+.val { min-width: 30px; }
+.bar { width: 44px; height: 5px; border-radius: 3px; background: rgba(148, 163, 184, .25); overflow: hidden; }
 .fill { display: block; height: 100%; border-radius: 3px; transition: width .5s ease; }
 .fill.cpu { background: #6366f1; }
 .fill.mem { background: #0ea5e9; }
 .fill.disk { background: #10b981; }
-.net .val { min-width: 110px; }
-.waiting { color: var(--color-slate); font-size: 12px; }
+.net .val { min-width: 92px; }
+.waiting { color: var(--color-slate); font-size: 12px; flex: none; }
 @media (max-width: 767px) {
-  .status-strip { gap: 4px 12px; }
-  .bar { width: 44px; }
+  .status-strip { gap: 4px 10px; }
+  .bar { width: 32px; }
+  .net .val { min-width: 80px; }
+}
+/* 文件面板展开后终端区可能只有 300px 左右：去掉进度条与固定宽度，保证单行 */
+@container (max-width: 520px) {
+  .status-strip { gap: 4px 8px; }
+  .bar { display: none; }
+  .val { min-width: 0; }
+  .net .val { min-width: 0; }
 }
 </style>

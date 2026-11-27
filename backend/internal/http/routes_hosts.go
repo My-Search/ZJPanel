@@ -18,6 +18,24 @@ import (
 	"zjpanel/backend/internal/terminal"
 )
 
+// hostListStatus 让列表里的 agentStatus 与 online 布尔值保持同一语义：
+// 连接已断时，即使 DB 还留着上一次 online，也必须返回 offline，否则前端标题
+// 会显示「在线」、防御页却按 online=false 禁用全部检查。
+func hostListStatus(local, online bool, stored string) string {
+	switch {
+	case local:
+		return "local"
+	case online:
+		return "online"
+	case stored == "online":
+		return "offline"
+	case stored == "":
+		return "none"
+	default:
+		return stored
+	}
+}
+
 // registerHostRoutes 主机（终端 + Agent）与 Agent 侧端点。
 // 一条主机记录同时服务「SSH 终端」和「受管主机」，不再有第二套清单。
 func (s *Server) registerHostRoutes() {
@@ -29,18 +47,12 @@ func (s *Server) registerHostRoutes() {
 		items := make([]map[string]any, 0, len(hosts))
 		for _, h := range hosts {
 			online := h.Local || s.Agent.Online(h.ID)
-			status := h.AgentStatus
-			if h.Local {
-				status = "local"
-			} else if online {
-				status = "online"
-			} else if status == "" {
-				status = "none"
-			}
+			status := hostListStatus(h.Local, online, h.AgentStatus)
 			items = append(items, map[string]any{
 				"id": h.ID, "name": h.Name, "host": h.Host, "port": h.Port,
 				"username": h.Username, "authType": h.AuthType, "local": h.Local,
 				"group": h.Group, "tags": h.Tags, "claimed": h.Claimed,
+				"online": online,
 				"agentStatus": status, "agentVersion": h.AgentVersion, "agentProto": h.AgentProto,
 				"osArch": h.OSArch, "remoteIp": h.RemoteIP, "lastSeen": h.AgentLastSeen,
 				"outdated":     h.AgentStatus != "none" && h.AgentStatus != "local" && h.AgentVersion != "" && h.AgentVersion != buildinfo.Version,

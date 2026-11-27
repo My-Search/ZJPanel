@@ -208,8 +208,8 @@ func (c *client) loop(ctx context.Context) {
 }
 
 func (c *client) connect(ctx context.Context) error {
-	dialCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
+	dialCtx, dialCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer dialCancel()
 	url := wsURL(c.cfg.Panel)
 	conn, _, err := websocket.Dial(dialCtx, url, nil)
 	if err != nil {
@@ -218,8 +218,12 @@ func (c *client) connect(ctx context.Context) error {
 	if c.conn != nil {
 		_ = c.conn.Close(websocket.StatusNormalClosure, "")
 	}
+	// 单条连接的生命周期：Read 退出后必须取消心跳 goroutine，否则 connect 会
+	// 卡在 <-done 上永不返回，断线后 Agent 也就永远不会重连。
+	connCtx, cancel := context.WithCancel(ctx)
 	c.conn = conn
 	defer func() {
+		cancel()
 		_ = conn.Close(websocket.StatusNormalClosure, "")
 		c.conn = nil
 	}()
@@ -244,7 +248,7 @@ func (c *client) connect(ctx context.Context) error {
 		defer tk.Stop()
 		for {
 			select {
-			case <-ctx.Done():
+			case <-connCtx.Done():
 				return
 			case <-tk.C:
 				m := collect()
@@ -252,13 +256,14 @@ func (c *client) connect(ctx context.Context) error {
 			}
 		}
 	}()
-	defer func() { <-done }()
+	defer func() { cancel(); <-done }()
 
 	// 补传断网期间的事件
 	c.flushSpool()
 
 	for {
-		readCtx, rc := context.WithTimeout(ctx, 90*time.Second)
+		// 服务端每 10s 下发 tick；30s 没收到任何数据说明连接已死，快速重连。
+		readCtx, rc := context.WithTimeout(connCtx, 30*time.Second)
 		mt, data, err := conn.Read(readCtx)
 		rc()
 		if err != nil {

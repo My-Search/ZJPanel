@@ -322,11 +322,11 @@ watch(() => ui.isDark, () => {
 .ht-state { margin-inline-end: 0; }
 .dim { color: var(--color-slate); font-size: 12px; }
 .ht-body { flex: 1; min-height: 0; min-width: 0; display: flex; gap: 10px; }
-.ht-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.ht-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; container-type: inline-size; }
 .ht-term { flex: 1; min-height: 0; border-radius: 8px; overflow: hidden; padding: 6px 8px; background: #0d1117; }
 html[data-theme='light'] .ht-term { background: #fff; }
 html[data-theme='light'] .ht-side { background: #fff; }
-.ht-side { width: min(420px, 45%); flex: none; min-height: 0; }
+.ht-side { width: min(420px, 45%); flex: none; min-height: 0; min-width: 0; overflow: hidden; }
 
 @media (max-width: 900px) {
   /* 窄屏文件面板改为覆盖层，终端不再被挤成一条缝 */

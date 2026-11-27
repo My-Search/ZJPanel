@@ -111,8 +111,12 @@
             <div class="pane defense-pane">
               <a-alert
                 v-if="!current.online || current.local" type="warning" show-icon
-                message="主机防御需要 Agent 在线；请先安装并等待回连。"
-              />
+                :message="current.local ? '内置主机不运行 Agent，无法执行主机防御检查。' : `主机防御需要 Agent 在线${current.lastSeen ? '（最后心跳 ' + fmtTime(current.lastSeen) + '）' : ''}；请检查 Agent 服务或等待回连。`"
+              >
+                <template v-if="!current.local" #action>
+                  <a-button size="small" :loading="agentChecking" @click="refreshAgentStatus">刷新状态</a-button>
+                </template>
+              </a-alert>
               <a-alert
                 v-else-if="current.outdated" type="warning" show-icon
                 :message="`Agent 版本落后（${current.agentVersion || '-'} → ${current.panelVersion}），防御检查与封禁需先升级 Agent。`"
@@ -448,9 +452,9 @@ const fwMeta = computed(() => {
 })
 const bans = computed(() => fw.value?.bans || [])
 
-const statusClass = (h: any) => h.local ? 'dot-local' : h.online || h.agentStatus === 'online' ? 'dot-on' : h.agentStatus === 'pending' ? 'dot-pending' : h.agentStatus === 'uninstalled' ? 'dot-off' : 'dot-off'
-const statusText = (h: any) => h.local ? '内置' : h.agentStatus === 'local' ? '内置' : h.online || h.agentStatus === 'online' ? '在线' : h.agentStatus === 'pending' ? '待回连' : h.agentStatus === 'uninstalled' ? '已卸载' : h.agentStatus === 'none' || !h.agentStatus ? '未安装' : '离线'
-const statusColor = (h: any) => h.local ? 'blue' : h.online || h.agentStatus === 'online' ? 'green' : h.agentStatus === 'pending' ? 'orange' : 'default'
+const statusClass = (h: any) => h.local ? 'dot-local' : h.online ? 'dot-on' : h.agentStatus === 'pending' ? 'dot-pending' : h.agentStatus === 'uninstalled' ? 'dot-off' : 'dot-off'
+const statusText = (h: any) => h.local ? '内置' : h.agentStatus === 'local' ? '内置' : h.online ? '在线' : h.agentStatus === 'pending' ? '待回连' : h.agentStatus === 'uninstalled' ? '已卸载' : h.agentStatus === 'none' || !h.agentStatus ? '未安装' : '离线'
+const statusColor = (h: any) => h.local ? 'blue' : h.online ? 'green' : h.agentStatus === 'pending' ? 'orange' : 'default'
 
 const portCols = [
   { title: '协议', dataIndex: 'proto', key: 'proto', width: 70 },
@@ -495,6 +499,21 @@ const load = async () => {
   else if (current.value) {
     const h = list.find(x => x.id === current.value.id)
     if (h) current.value = h
+  }
+}
+
+const agentChecking = ref(false)
+// 手动刷新一次主机列表与指标，避免防御页停留在旧的在线态
+const refreshAgentStatus = async () => {
+  agentChecking.value = true
+  try {
+    await load()
+    await loadMetrics()
+    if (current.value) message.success(current.value.online ? 'Agent 在线' : 'Agent 仍未回连')
+  } catch (e: any) {
+    message.error(e?.message || '刷新失败')
+  } finally {
+    agentChecking.value = false
   }
 }
 

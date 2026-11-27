@@ -528,7 +528,7 @@ defineExpose({ pickFiles })
 </script>
 
 <style scoped>
-.fm-panel { height: 100%; display: flex; flex-direction: column; overflow: hidden; font-size: 13px; }
+.fm-panel { height: 100%; display: flex; flex-direction: column; overflow: hidden; font-size: 13px; min-width: 0; }
 .fm-list, .fm-editor { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
 
 /* ---------- 头部：地址栏 + 工具栏 ---------- */
