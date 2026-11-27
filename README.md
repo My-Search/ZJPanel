@@ -101,7 +101,7 @@ cd backend && go build -o zjpanel ./cmd/zjpanel
 
 ## 插件开发
 
-外部插件 = `plugin.yaml + main.go`（可含 `dist/` 前端页），打成 zip 在「插件」页安装：
+外部插件 = `plugin.yaml + main.go`（可含 `dist/` 前端页），打进 zip 在「插件」页安装，也可直接填 GitHub 仓库地址（`owner/repo` 或仓库/Release 的 zip 直链）在线拉取（仓库需公开、插件文件在根目录）：
 
 ```yaml
 # plugin.yaml

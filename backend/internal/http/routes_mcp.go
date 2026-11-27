@@ -160,6 +160,28 @@ func (s *Server) registerPluginRoutes() {
 		s.audit(c, "plugin.install", id)
 		c.JSON(http.StatusOK, resp)
 	})
+	// 从 GitHub 安装：仓库地址（owner/repo）、归档 zip 或 Release zip 直链。
+	g.POST("/install-github", func(c *gin.Context) {
+		var req struct {
+			URL string `json:"url"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil || strings.TrimSpace(req.URL) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "请填写 GitHub 仓库地址"})
+			return
+		}
+		data, source, err := plugin.DownloadGitHubZip(req.URL)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		id, err := s.Plugins.InstallZip(data)
+		if err == nil {
+			s.audit(c, "plugin.install.github", id)
+			c.JSON(http.StatusOK, gin.H{"ok": true, "id": id, "source": source})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	})
 	g.POST("/:id/enable", func(c *gin.Context) {
 		if err := s.Plugins.Enable(c.Param("id")); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

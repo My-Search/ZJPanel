@@ -7,6 +7,7 @@
       <a-upload :show-upload-list="false" :custom-request="doInstall" accept=".zip">
         <a-button type="primary">安装插件（zip）</a-button>
       </a-upload>
+      <a-button @click="githubOpen = true">从 GitHub 安装</a-button>
       <a-button @click="load">刷新</a-button>
     </a-space>
 
@@ -31,6 +32,17 @@
       </a-col>
     </a-row>
     </a-spin>
+
+    <a-modal v-model:open="githubOpen" title="从 GitHub 安装插件" :confirm-loading="githubInstalling"
+      ok-text="下载并安装" @ok="installFromGithub" destroy-on-close>
+      <a-alert type="info" show-icon style="margin-bottom: 12px"
+        message="插件文件需在仓库根目录（plugin.yaml + main.go）；默认分支会打包成 zip 下载，仓库需公开。" />
+      <a-input v-model:value="githubURL" placeholder="owner/repo 或 https://github.com/owner/repo"
+        allow-clear @press-enter="installFromGithub" />
+      <div class="dim" style="margin-top: 8px">
+        也支持 Release 附件或归档 zip 的直链；私有仓库暂不支持，请先公开仓库或直接上传 zip。
+      </div>
+    </a-modal>
 
     <a-modal v-model:open="settingsOpen" :title="'设置 · ' + (settingsPlugin?.name || '')" @ok="saveSettings">
       <a-form layout="vertical">
@@ -58,6 +70,9 @@ const settingsOpen = ref(false)
 const settingsPlugin = ref<any>(null)
 const settingsDefs = ref<any[]>([])
 const settingsValues = ref<Record<string, string>>({})
+const githubOpen = ref(false)
+const githubURL = ref('')
+const githubInstalling = ref(false)
 
 const load = async () => { loading.value = true; plugins.value = await get('/api/plugins'); loading.value = false }
 // 插件安装/启停/卸载会影响侧栏菜单挂载，变更后联动强制刷新菜单缓存
@@ -72,6 +87,22 @@ const doInstall = async (opt: any) => {
     message.success(`已安装 ${r.id}，点击启用运行`)
     reloadWithMenu()
   } catch { /* 拦截器提示 */ }
+}
+
+// 从 GitHub 拉取 zip 安装：后端只允许 GitHub 域名、限制 32MB。
+const installFromGithub = async () => {
+  const url = githubURL.value.trim()
+  if (!url) { message.warning('请填写 GitHub 仓库地址'); return }
+  githubInstalling.value = true
+  try {
+    const r = await post('/api/plugins/install-github', { url })
+    message.success(`已安装 ${r.id}，点击启用运行`)
+    githubOpen.value = false
+    githubURL.value = ''
+    reloadWithMenu()
+  } catch { /* 拦截器已提示具体失败原因 */ } finally {
+    githubInstalling.value = false
+  }
 }
 const openSettings = async (p: any) => {
   settingsPlugin.value = p
