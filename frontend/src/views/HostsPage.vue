@@ -523,9 +523,6 @@ const loadMetrics = async () => {
     if (current.value?.id !== hostId) return
     m.value = r.metrics || {}
     ports.value = (r.metrics?.ports || []).map((p: any) => ({ ...p, key: `${p.proto}-${p.port}` }))
-    if (typeof r.online === 'boolean' && current.value) {
-      current.value = { ...current.value, online: r.online, agentStatus: r.online ? 'online' : (current.value.agentStatus === 'local' ? 'local' : 'offline') }
-    }
   } catch { /* 离线/瞬时失败正常 */ }
 }
 
