@@ -174,7 +174,8 @@ func (s *Server) registerBackupRoutes() {
 			return
 		}
 		s.audit(c, "backup.oauth.start", req.Kind)
-		c.JSON(http.StatusOK, gin.H{"url": authURL, "redirectUri": redirect})
+		// ok 字段保持回传：老前端按 r.ok && r.url 判断，缺 ok 会被当成发起失败。
+		c.JSON(http.StatusOK, gin.H{"ok": true, "url": authURL, "redirectUri": redirect})
 	})
 
 	// 授权回调：Google / Microsoft 会把浏览器重定向到这里（顶层导航带 Cookie，登录态可用）。

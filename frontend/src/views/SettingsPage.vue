@@ -420,8 +420,9 @@ const startOAuth = async () => {
     return: '/settings?tab=backup',
     redirectUri: oauthRedirect.value,
   })
-  if (!r.ok || !r.url) {
-    message.error(r.error || '无法发起授权')
+  // 以授权地址为准：后端成功时返回 { ok, url }，个别代理/旧版本可能不带 ok。
+  if (!r?.url) {
+    message.error(r?.error || '无法发起授权')
     return
   }
   const win = window.open(r.url, '_blank')
