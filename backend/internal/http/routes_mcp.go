@@ -156,8 +156,10 @@ func (s *Server) registerPluginRoutes() {
 		resp := gin.H{"ok": err == nil, "id": id}
 		if err != nil {
 			resp["error"] = err.Error()
+			s.audit(c, "plugin.install", fh.Filename+" 失败: "+err.Error()) // 失败也留痕，记录来源文件名与原因
+		} else {
+			s.audit(c, "plugin.install", id)
 		}
-		s.audit(c, "plugin.install", id)
 		c.JSON(http.StatusOK, resp)
 	})
 	// 从 GitHub 安装：仓库地址（owner/repo）、归档 zip 或 Release zip 直链。
@@ -169,18 +171,22 @@ func (s *Server) registerPluginRoutes() {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "请填写 GitHub 仓库地址"})
 			return
 		}
+		// 失败同样留痕：detail 记来源 URL 与原因，便于排查仓库是否公开、地址是否有效。
+		failDetail := req.URL + " 失败: "
 		data, source, err := plugin.DownloadGitHubZip(req.URL)
 		if err != nil {
+			s.audit(c, "plugin.install.github", failDetail+err.Error())
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		id, err := s.Plugins.InstallZip(data)
-		if err == nil {
-			s.audit(c, "plugin.install.github", id)
-			c.JSON(http.StatusOK, gin.H{"ok": true, "id": id, "source": source})
+		if err != nil {
+			s.audit(c, "plugin.install.github", failDetail+err.Error())
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		s.audit(c, "plugin.install.github", id)
+		c.JSON(http.StatusOK, gin.H{"ok": true, "id": id, "source": source})
 	})
 	g.POST("/:id/enable", func(c *gin.Context) {
 		if err := s.Plugins.Enable(c.Param("id")); err != nil {

@@ -62,6 +62,10 @@ func NormalizeGitHubURL(raw string) (string, error) {
 			return fmt.Sprintf("https://github.com/%s/%s/archive/HEAD.zip", parts[0], repo), nil
 		}
 		if strings.HasSuffix(strings.ToLower(path), ".zip") {
+			// blob/tree 是网页视图，下载到的是 HTML 而非 zip；提前拒绝，给出准确提示
+			if strings.Contains(path, "/blob/") || strings.Contains(path, "/tree/") {
+				return "", errors.New("这是网页地址，请填仓库地址（owner/repo）或 zip 直链")
+			}
 			// Release 资产 / archive 归档直链
 			return "https://github.com/" + path, nil
 		}

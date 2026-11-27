@@ -14,6 +14,8 @@ func TestNormalizeGitHubURL(t *testing.T) {
 		{"https://github.com/My-Search/ZJPanel/releases/download/v1/plugin.zip", "https://github.com/My-Search/ZJPanel/releases/download/v1/plugin.zip", true},
 		{"https://codeload.github.com/My-Search/ZJPanel/zip/refs/heads/main", "https://codeload.github.com/My-Search/ZJPanel/zip/refs/heads/main", true},
 		{"https://github.com/My-Search/ZJPanel/tree/main", "", false},
+		{"https://github.com/My-Search/ZJPanel/blob/main/plugin.zip", "", false},  // 网页视图带 .zip 后缀，提前拒绝
+		{"https://github.com/My-Search/ZJPanel/tree/main/dist/plugin.zip", "", false},
 		{"http://github.com/My-Search/ZJPanel", "", false},
 		{"https://github.com.evil.com/a/b", "", false},
 		{"https://gitlab.com/a/b", "", false},
