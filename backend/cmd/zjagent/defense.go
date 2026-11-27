@@ -369,13 +369,26 @@ var riskyPorts = map[int]struct {
 	5900:  {"VNC", "warn"},
 }
 
+// isLoopbackAddr 判断监听地址是否仅本机可达；0.0.0.0、私网 IP、公网 IP 都算对外/局域网暴露。
+func isLoopbackAddr(addr string) bool {
+	if addr == "0.0.0.0" || addr == "" {
+		return false
+	}
+	if strings.HasPrefix(addr, "v6:") {
+		// collectPorts 对 IPv6 只保留后 8 位，::1 的尾段是 00000001
+		return addr == "v6:00000001"
+	}
+	ip := net.ParseIP(addr)
+	return ip != nil && ip.IsLoopback()
+}
+
 func exposureAudit() (bool, string) {
 	findings := []finding{}
 	ports := collectPorts()
 	public := []string{}
 	risky := []string{}
 	for _, p := range ports {
-		if p.Addr != "0.0.0.0" {
+		if isLoopbackAddr(p.Addr) {
 			continue
 		}
 		public = append(public, fmt.Sprintf("%d/%s", p.Port, p.Proto))
@@ -383,7 +396,7 @@ func exposureAudit() (bool, string) {
 			risky = append(risky, fmt.Sprintf("%d %s", p.Port, meta.Name))
 			addFinding(&findings,
 				fmt.Sprintf("高危端口 %d", p.Port),
-				fmt.Sprintf("%s（0.0.0.0）", meta.Name),
+				fmt.Sprintf("%s（%s）", meta.Name, p.Addr),
 				meta.Risk,
 				"仅监听内网地址或用防火墙限制来源；数据库/缓存类不应直接暴露公网",
 			)
@@ -525,6 +538,7 @@ func banIP(p map[string]any) (bool, string) {
 	if parsed == nil || parsed.To4() == nil {
 		return false, "仅支持合法 IPv4 地址"
 	}
+	ip = parsed.To4().String()
 	if secs < 60 {
 		secs = 60
 	}
@@ -546,9 +560,11 @@ func banIP(p map[string]any) (bool, string) {
 
 func unbanIP(p map[string]any) (bool, string) {
 	ip := str(p["ip"])
-	if net.ParseIP(ip) == nil || net.ParseIP(ip).To4() == nil {
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() == nil {
 		return false, "仅支持合法 IPv4 地址"
 	}
+	ip = parsed.To4().String()
 	out, err := nftRun("delete", "element", "inet", zjTable, "banned", ip)
 	if err != nil {
 		if strings.Contains(out, "No such file") || strings.Contains(out, "does not exist") {

@@ -73,6 +73,18 @@ func TestWebshellPatterns(t *testing.T) {
 	}
 }
 
+func TestIsLoopbackAddr(t *testing.T) {
+	cases := map[string]bool{
+		"127.0.0.1": true, "0.0.0.0": false, "192.168.1.5": false,
+		"203.0.113.9": false, "v6:00000001": true, "v6:abcdef01": false,
+	}
+	for addr, want := range cases {
+		if got := isLoopbackAddr(addr); got != want {
+			t.Fatalf("%s: 期望 %v，实际 %v", addr, want, got)
+		}
+	}
+}
+
 func TestExecDispatchDefense(t *testing.T) {
 	c := &client{}
 	for _, kind := range []string{"webshell_audit", "firewall_status", "exposure_audit"} {
