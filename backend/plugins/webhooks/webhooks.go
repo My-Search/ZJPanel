@@ -1,7 +1,7 @@
 // Package webhooks 内置插件：Webhooks 服务（参考 adnanh/webhook 能力集）。
 // 能力：Hook 管理（CRUD + 密钥自动生成）、GitHub X-Hub-Signature (payload-hash-sha1) 签名校验的
 // 免鉴权接收端点（外部 CI 直接 POST）、部署命令执行与运行日志（环形保留）、可选 SMTP 邮件通知、
-// send_webhook MCP 工具、绑定终端 SSH 主机远端执行（sshHostId，0=面板本机）。
+// send_webhook MCP 工具、绑定主机页中的 SSH 主机远端执行（sshHostId，0=面板本机）。
 // API 挂 /api/plugin/webhooks/*（面板登录态），接收端挂 /api/pub/plugin/webhooks/hook/<id>。
 package webhooks
 
@@ -39,7 +39,7 @@ type Hook struct {
 	Secret      string `json:"secret"`              // GitHub Webhook Secret（payload-hash-sha1 校验）
 	ProjectPath string `json:"projectPath"`         // 工作目录（本机为容器内路径；SSH 时为远端路径）
 	DeployCmd   string `json:"deployCmd"`           // 部署命令（bash -c 执行）
-	SSHHostID   uint   `json:"sshHostId,omitempty"` // >0 = 绑定终端 SSH 主机远端执行；0 = 面板本机
+	SSHHostID   uint   `json:"sshHostId,omitempty"` // >0 = 绑定主机页中的 SSH 主机远端执行；0 = 面板本机
 	NotifyMail  string `json:"notifyMail"`          // 通知邮箱（空=不发邮件）
 	Enabled     bool   `json:"enabled"`
 	CreatedAt   string `json:"createdAt"`
@@ -94,8 +94,8 @@ func (p *Plugin) Meta() sdk.Meta {
 	return sdk.Meta{
 		ID:          "webhooks",
 		Name:        "Webhooks 服务",
-		Version:     "0.3.2",
-		Description: "Webhook 接收端（GitHub 签名校验）+ 部署执行 + 运行日志（执行中实时输出）+ 邮件通知 + 绑定 SSH 主机远端执行；替代独立 webhook 服务",
+		Version:     "0.3.3",
+		Description: "Webhook 接收端（GitHub 签名校验）+ 部署执行 + 运行日志（执行中实时输出）+ 邮件通知 + 绑定主机页中的 SSH 主机远端执行；替代独立 webhook 服务",
 		Permissions: []string{"http", "exec"},
 		Menu:        []sdk.Menu{{Title: "Webhooks", Icon: "thunderbolt", Path: "/"}},
 		Settings: []sdk.SettingDef{

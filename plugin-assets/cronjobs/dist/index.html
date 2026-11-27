@@ -91,7 +91,7 @@ try {
   <div class="card" style="color:var(--dim);font-size:12px">
     标准 5 段 cron 表达式（分 时 日 月 周），任务随面板启动自动调度；常用预设：<code>*/5 * * * *</code> 每 5 分钟 ·
     <code>0 3 * * *</code> 每天凌晨 3 点 · <code>0 * * * *</code> 每小时整点。
-    执行位置可选面板本机或终端已保存的 SSH 主机；绑定 SSH 后命令在该主机上以登录 shell 环境执行（与手动开终端一致）。
+    执行位置可选面板本机或「主机」页里的主机（需已配置 SSH 密码/私钥）；绑定后命令在该主机上以登录 shell 环境执行（与手动开终端一致）。
     执行中可实时查看输出，完成后自动落历史记录。
   </div>
   <div id="list"></div>
@@ -114,8 +114,8 @@ try {
       </div>
       <div><label>超时（秒，默认 3600）</label><input id="f_timeout" type="number" placeholder="3600"></div>
       <div style="grid-column:1/-1"><label>命令（bash 执行）</label><input id="f_cmd" placeholder="bash /opt/backup/backup.sh"></div>
-      <div><label>执行位置</label><select id="f_target"></select></div>
-      <div><label>工作目录（可选，SSH 时先 cd 到该目录）</label><input id="f_dir" placeholder="/opt/backup"></div>
+      <div><label>执行位置（关联主机）</label><select id="f_target"></select></div>
+      <div><label>工作目录（可选，远端主机时先 cd 到该目录）</label><input id="f_dir" placeholder="/opt/backup"></div>
       <div><label><input type="checkbox" id="f_enabled" checked style="width:auto"> 启用（保存后立即生效）</label></div>
     </div>
     <div class="modal-foot">
@@ -150,6 +150,7 @@ function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;',
 
 let tasks = [];
 let hosts = [];
+let allHosts = [];
 let activeRuns = [];
 let lastActive = [];
 let logsCache = {};
@@ -170,20 +171,35 @@ function sinceOf(startAt) {
 function targetLabel(t) {
   if (!t) return '本机';
   const s = String(t);
-  if (s.indexOf('ssh:') === 0) return 'SSH · ' + esc(hostLabel(+s.slice(4)));
+  if (s.indexOf('ssh:') === 0) return '主机 · ' + esc(hostLabel(+s.slice(4)));
   return esc(s);
 }
 function hostLabel(id) {
   const h = hosts.find(x => x.id === id);
-  return h ? (h.name || h.host) + '（' + h.username + '@' + h.host + '）' : '主机#' + id + '（已删除）';
+  if (h) return (h.name || h.host) + '（' + (h.username || 'root') + '@' + h.host + '）';
+  const raw = allHosts.find(x => x.id === id);
+  if (!raw) return '主机#' + id + '（已删除）';
+  if (raw.local) return '本机（内置主机）';
+  return (raw.name || raw.host || ('主机#' + id)) + '（未配置 SSH 凭据）';
+}
+// 执行位置文案：主机可用时展示「主机 · 名称」；失效时给出原因并提供重新关联入口
+function targetMeta(id, taskId) {
+  if (!id) return '本机';
+  if (hosts.find(x => x.id === id)) return '<span class="tag">主机 · ' + esc(hostLabel(id)) + '</span>';
+  const raw = allHosts.find(x => x.id === id);
+  const why = !raw ? '主机已删除' : raw.local ? '内置本机请直接选「本机」' : '该主机未配置 SSH 凭据';
+  return '<span class="warn">关联主机不可用（' + why + '）</span> '
+    + '<button class="btn small" onclick="openEditor(\'' + esc(taskId) + '\')">重新关联</button>';
 }
 async function loadAll() {
   const [ts, hs] = await Promise.all([
     api('/tasks'),
-    fetch('/api/ssh/hosts').then(r => r.json()).catch(() => []),
+    fetch('/api/hosts').then(r => r.json()).catch(() => []),
   ]);
   tasks = ts || [];
-  hosts = Array.isArray(hs) ? hs : [];
+  allHosts = Array.isArray(hs) ? hs : [];
+  // 只有配置了 SSH 密码/私钥的非内置主机才能作为执行目标；内置本机由 value=0 单独表示
+  hosts = allHosts.filter(h => !h.local && h.host && h.authType && h.authType !== 'none' && h.authType !== 'local');
   render();
 }
 function render() {
@@ -205,7 +221,7 @@ function render() {
         </div>
       </div>
       <div class="meta">表达式：<code>${esc(t.cron)}</code> · 命令：<code>${esc(t.command)}</code>
-        · 执行位置：${t.sshHostId ? '<span class="tag">SSH · ' + esc(hostLabel(t.sshHostId)) + '</span>' : '本机'}
+        · 执行位置：${targetMeta(t.sshHostId, t.id)}
         ${t.workDir ? ' · 目录：' + esc(t.workDir) : ''} · 超时：${t.timeout > 0 ? t.timeout + 's' : '3600s'}
         ${t.enabled && t.nextRun ? ' · <span class="ok">下次执行：' + esc(t.nextRun) + '</span>' : ''}</div>
       <div id="logs-${esc(t.id)}"></div>
@@ -236,9 +252,9 @@ function openEditor(id) {
   $('#f_enabled').checked = id ? !!t.enabled : true;
   const sel = $('#f_target');
   sel.innerHTML = '<option value="0">本机（面板执行环境）</option>' +
-    hosts.map(h => `<option value="${h.id}">SSH · ${esc(hostLabel(h.id))}</option>`).join('');
+    hosts.map(h => `<option value="${h.id}">主机 · ${esc(hostLabel(h.id))}</option>`).join('');
   if (t.sshHostId && !hosts.find(h => h.id === t.sshHostId)) {
-    sel.innerHTML += `<option value="${t.sshHostId}">${esc(hostLabel(t.sshHostId))}</option>`;
+    sel.innerHTML += `<option value="${t.sshHostId}">${esc(hostLabel(t.sshHostId))}，请重新选择</option>`;
   }
   sel.value = String(t.sshHostId || 0);
   $('#editorMask').classList.add('open');
@@ -246,11 +262,15 @@ function openEditor(id) {
 function closeEditor() { $('#editorMask').classList.remove('open'); }
 
 async function saveTask() {
+  const target = +$('#f_target').value || 0;
+  if (target > 0 && !hosts.find(h => h.id === target)) {
+    toast('关联主机已删除或未配置 SSH 凭据，请重新选择执行主机'); $('#f_target').focus(); return;
+  }
   const body = {
     id: $('#f_id').value.trim(), name: $('#f_name').value.trim(),
     cron: $('#f_cron').value.trim(), command: $('#f_cmd').value.trim(),
     workDir: $('#f_dir').value.trim(), timeout: +$('#f_timeout').value || 0,
-    sshHostId: +$('#f_target').value || 0,
+    sshHostId: target,
     enabled: $('#f_enabled').checked,
   };
   const r = await api('/tasks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });

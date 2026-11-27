@@ -100,8 +100,8 @@ type Context interface {
 	// Notify 发送统一通知：站内信必发；邮件按面板「通知设置」的类型订阅发给收件人。
 	// nType 建议用带前缀的消息类型（如 cron.failed、<pluginId>.something），level 取 info|warn|error。
 	Notify(nType, level, title, body string)
-	// SSHExec 用终端已保存的 SSH 主机执行命令（非交互；登录 shell 包裹，PATH 与手动开终端一致）。
-	// hostID 为 SSH 主机管理中的 ID；timeoutSec<=0 按 3600 处理。
+	// SSHExec 用主机页中已保存的 SSH 主机执行命令（非交互；登录 shell 包裹，PATH 与手动开终端一致）。
+	// hostID 为主机管理中的 ID；timeoutSec<=0 按 3600 处理。
 	// 返回 stdout+stderr 合并输出与远端退出码；连接失败/超时 exitCode=-1，
 	// 超时错误可用 errors.Is(err, ErrExecTimeout) 判定。
 	SSHExec(hostID uint, command string, timeoutSec int) (output string, exitCode int, err error)

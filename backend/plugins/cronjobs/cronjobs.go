@@ -1,7 +1,7 @@
 // Package cronjobs 内置插件：定时任务管理。
 // 能力：任务 CRUD（名称 + 5 段 cron + shell 命令）、启停、手动执行、超时控制、
 // 按 cron 表达式自动调度（复用面板 robfig/cron）、执行日志（环形保留最近 20 次）、
-// 下次执行时间展示、绑定终端 SSH 主机远端执行（sshHostId，0=面板本机）。
+// 下次执行时间展示、绑定主机页中的 SSH 主机远端执行（sshHostId，0=面板本机）。
 // API 挂 /api/plugin/cronjobs/*（面板登录态）。
 package cronjobs
 
@@ -36,7 +36,7 @@ type Task struct {
 	Cron      string `json:"cron"`
 	Command   string `json:"command"`
 	WorkDir   string `json:"workDir,omitempty"`
-	SSHHostID uint   `json:"sshHostId,omitempty"` // >0 = 绑定终端 SSH 主机远端执行；0 = 面板本机
+	SSHHostID uint   `json:"sshHostId,omitempty"` // >0 = 绑定主机页中的 SSH 主机远端执行；0 = 面板本机
 	Timeout   int    `json:"timeout"`             // 秒；0/负数 = 3600
 	Enabled   bool   `json:"enabled"`
 	CreatedAt string `json:"createdAt"`
@@ -112,8 +112,8 @@ func (p *Plugin) Meta() sdk.Meta {
 	return sdk.Meta{
 		ID:          "cronjobs",
 		Name:        "定时任务",
-		Version:     "0.3.0",
-		Description: "定时任务管理：cron 调度 / 手动执行 / 执行中实时日志（SSE + 轮询降级）/ 超时控制 / 历史记录 / 绑定 SSH 主机远端执行；替代独立 crontab 管理",
+		Version:     "0.3.1",
+		Description: "定时任务管理：cron 调度 / 手动执行 / 执行中实时日志（SSE + 轮询降级）/ 超时控制 / 历史记录 / 绑定主机页中的 SSH 主机远端执行；替代独立 crontab 管理",
 		Permissions: []string{"exec"},
 		Menu:        []sdk.Menu{{Title: "定时任务", Icon: "clock-circle", Path: "/"}},
 	}
