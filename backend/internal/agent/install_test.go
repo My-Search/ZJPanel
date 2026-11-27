@@ -27,11 +27,11 @@ func TestInstallScriptIsIdempotentAndGuarded(t *testing.T) {
 	})
 	for _, want := range []string{
 		"set -eu",
-		"id -u",                  // 必须 root 才继续
-		"systemctl",              // 依赖 systemd
-		"sha256sum",              // 校验二进制
-		"versions/$VERSION",     // 双槽版本目录
-		"ln -sfn",                // symlink 原子切换
+		"id -u",             // 必须 root 才继续
+		"systemctl",         // 依赖 systemd
+		"sha256sum",         // 校验二进制
+		"versions/$VERSION", // 双槽版本目录
+		"ln -sfn",           // symlink 原子切换
 		"/etc/systemd/system/zjagent.service",
 		"https://panel.example.com",
 		"tok123",

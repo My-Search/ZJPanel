@@ -10,19 +10,20 @@ import (
 // Config 面板运行配置：全部来自环境变量，容器部署时由 docker-compose/entrypoint 注入。
 // 服务层只依赖本包，不依赖 boot，避免循环引用。
 type Config struct {
-	DataDir       string // 面板数据目录（SQLite/证书/插件/geoip）
-	AppDir        string // 程序安装目录（内置插件前端资产 /app/plugin-assets）
-	Port          int    // 面板 HTTP 端口
-	NginxPrefix   string // nginx 配置根（/etc/nginx）
-	NginxLogsDir  string // nginx 日志目录
-	NginxHTMLDir  string // nginx 默认页目录
-	NginxBin      string // nginx 可执行文件（默认 "nginx"，走 PATH）
-	ComposeRoot   string // docker-compose 项目扫描根目录
-	UpdateURL     string // 版本清单 URL（检查更新）
-	DeployDir     string // 面板自身 compose 部署目录（宿主机路径），容器自更新据此改写镜像 tag
-	ChallengePort int    // ACME HTTP-01 本地挑战端口（nginx 将 /.well-known/acme-challenge 转发到此）
-	LogmapRing    int    // 请求地图环形窗口容量（条，默认 2 万；内存占用 ≈ 容量 × ~170B）
-	TrustedProxies []string // 可信反代 CIDR：仅来自这些地址的 X-Forwarded-For 才参与 ClientIP 解析
+	DataDir         string   // 面板数据目录（SQLite/证书/插件/geoip）
+	AppDir          string   // 程序安装目录（内置插件前端资产 /app/plugin-assets）
+	Port            int      // 面板 HTTP 端口
+	NginxPrefix     string   // nginx 配置根（/etc/nginx）
+	NginxLogsDir    string   // nginx 日志目录
+	NginxHTMLDir    string   // nginx 默认页目录
+	NginxBin        string   // nginx 可执行文件（默认 "nginx"，走 PATH）
+	ComposeRoot     string   // docker-compose 项目扫描根目录
+	UpdateURL       string   // 版本清单 URL（检查更新）
+	DeployDir       string   // 面板自身 compose 部署目录（宿主机路径），容器自更新据此改写镜像 tag
+	ChallengePort   int      // ACME HTTP-01 本地挑战端口（nginx 将 /.well-known/acme-challenge 转发到此）
+	LogmapRing      int      // 请求地图环形窗口容量（条，默认 2 万；内存占用 ≈ 容量 × ~170B）
+	TrustedProxies  []string // 可信反代 CIDR：仅来自这些地址的 X-Forwarded-For 才参与 ClientIP 解析
+	AgentAutoUpdate bool     // Agent 回连时自动升级到面板内置版本（默认开，ZJPANEL_AGENT_AUTOUPDATE=0 关闭）
 }
 
 func env(key, def string) string {
@@ -48,21 +49,35 @@ func envInt(key string, def int) int {
 	return def
 }
 
+// envBool 解析开关：0/false/off/no 为关闭，其余非空值为开启（未设置时取 def）。
+func envBool(key string, def bool) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if v == "" {
+		return def
+	}
+	switch v {
+	case "0", "false", "off", "no":
+		return false
+	}
+	return true
+}
+
 // LoadConfig 读取配置；无环境变量且非 Linux 时回退到本地 dev 目录（Windows 开发用）。
 func LoadConfig() *Config {
 	cfg := &Config{
-		DataDir:       env("ZJPANEL_DATA", "/data"),
-		AppDir:        env("ZJPANEL_APP_DIR", "/app"),
-		Port:          envInt("ZJPANEL_PORT", 9000),
-		NginxPrefix:   env("ZJPANEL_NGINX_PREFIX", "/etc/nginx"),
-		NginxLogsDir:  env("ZJPANEL_NGINX_LOGS", "/var/log/nginx"),
-		NginxHTMLDir:  env("ZJPANEL_NGINX_HTML", "/usr/share/nginx/html"),
-		NginxBin:      env("ZJPANEL_NGINX_BIN", "nginx"),
-		ComposeRoot:   env("ZJPANEL_COMPOSE_ROOT", "/compose"),
-		UpdateURL:     env("ZJPANEL_UPDATE_URL", "https://api.github.com/repos/My-Search/ZJPanel/releases/latest"),
-		DeployDir:    env("ZJPANEL_DEPLOY_DIR", ""),
-		ChallengePort: envInt("ZJPANEL_CHALLENGE_PORT", 9100),
-		LogmapRing:    envInt("ZJPANEL_LOGMAP_RING", 20000),
+		DataDir:         env("ZJPANEL_DATA", "/data"),
+		AppDir:          env("ZJPANEL_APP_DIR", "/app"),
+		Port:            envInt("ZJPANEL_PORT", 9000),
+		NginxPrefix:     env("ZJPANEL_NGINX_PREFIX", "/etc/nginx"),
+		NginxLogsDir:    env("ZJPANEL_NGINX_LOGS", "/var/log/nginx"),
+		NginxHTMLDir:    env("ZJPANEL_NGINX_HTML", "/usr/share/nginx/html"),
+		NginxBin:        env("ZJPANEL_NGINX_BIN", "nginx"),
+		ComposeRoot:     env("ZJPANEL_COMPOSE_ROOT", "/compose"),
+		UpdateURL:       env("ZJPANEL_UPDATE_URL", "https://api.github.com/repos/My-Search/ZJPanel/releases/latest"),
+		DeployDir:       env("ZJPANEL_DEPLOY_DIR", ""),
+		ChallengePort:   envInt("ZJPANEL_CHALLENGE_PORT", 9100),
+		LogmapRing:      envInt("ZJPANEL_LOGMAP_RING", 20000),
+		AgentAutoUpdate: envBool("ZJPANEL_AGENT_AUTOUPDATE", true),
 	}
 	// 可信代理：默认仅本机回环（单容器部署中同容器 nginx 经 127.0.0.1 反代面板）。
 	// 特殊值 "none" = 完全不信任任何代理头；多值逗号分隔 CIDR。

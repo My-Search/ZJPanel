@@ -112,17 +112,21 @@ type Service struct {
 	alive   map[uint]time.Time // 最近一次 hello/heartbeat，用于识别半开连接
 	waiters map[string]chan result
 	evSeq   int64
+
+	// 自动升级去重：同一主机同一时刻只跑一次检测/下发
+	upgrading map[uint]bool
 }
 
 func New(cfg *pkg.Config, db *gorm.DB, box *pkg.SecretBox, hub *ws.Hub) *Service {
 	return &Service{
 		cfg: cfg, db: db, box: box, hub: hub,
-		conns:   map[uint]*conn{},
-		boot:    map[string]bootEntry{},
-		metrics: map[uint]*Metrics{},
-		events:  map[uint][]Event{},
-		alive:   map[uint]time.Time{},
-		waiters: map[string]chan result{},
+		conns:     map[uint]*conn{},
+		boot:      map[string]bootEntry{},
+		metrics:   map[uint]*Metrics{},
+		events:    map[uint][]Event{},
+		alive:     map[uint]time.Time{},
+		waiters:   map[string]chan result{},
+		upgrading: map[uint]bool{},
 	}
 }
 
@@ -379,6 +383,8 @@ func (s *Service) onHello(hostID uint, ac *conn, msg map[string]any, newToken st
 		"token": newToken, "version": version,
 	}
 	_ = ac.send(welcome)
+	// 回连即检查：面板内置的 Agent 版本更新时立即自动升级（失败有冷却，不会刷屏重试）
+	go s.maybeAutoUpgrade(hostID, version, str(msg["os"]), str(msg["arch"]))
 	slog.Info("Agent 上线", "host", hostID, "version", version, "os", osarch)
 	s.emitSystem(hostID, "Agent 上线", "info", name+" "+version)
 }

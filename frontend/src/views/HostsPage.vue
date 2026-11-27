@@ -119,7 +119,7 @@
               </a-alert>
               <a-alert
                 v-else-if="current.outdated" type="warning" show-icon
-                :message="`Agent 版本落后（${current.agentVersion || '-'} → ${current.panelVersion}），防御检查与封禁需先升级 Agent。`"
+                :message="`Agent 版本落后（${current.agentVersion || '-'} → ${current.panelVersion}），回连时会自动升级；也可点右侧立即升级。`"
                 style="margin-bottom: 12px"
               >
                 <template #action>
