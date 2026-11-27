@@ -11,8 +11,8 @@ import (
 	"zjpanel/backend/internal/pkg"
 )
 
-// loadRemote 读取远程存储配置；密码等敏感字段落库前加密，读出时解密。
-func (s *Service) loadRemote() RemoteConfig {
+// loadRemoteRaw 读取远程存储配置原样（敏感字段仍是密文），用于保存时沿用旧值。
+func (s *Service) loadRemoteRaw() RemoteConfig {
 	var v model.Setting
 	if err := s.db.Where("key = ?", settingRemoteKey).First(&v).Error; err != nil {
 		return RemoteConfig{Kind: StorageLocal}
@@ -21,47 +21,103 @@ func (s *Service) loadRemote() RemoteConfig {
 	if json.Unmarshal([]byte(v.Value), &rc) != nil {
 		return RemoteConfig{Kind: StorageLocal}
 	}
-	// 解密已加密的密码（空则保留空）。
-	if rc.Password != "" && s.box != nil {
-		if p, err := s.box.OpenCtx(pkg.CtxBackupRemotePass, rc.Password); err == nil {
-			rc.Password = p
-		}
-	}
 	return rc
 }
 
-// saveRemote 保存远程存储配置；密码用 SecretBox 加密后落库。
+// openCtx 解密单个敏感字段；解密失败（旧密钥/脏数据）按未设置处理，避免把密文当明文用。
+func (s *Service) openCtx(ctx, v string) string {
+	if v == "" || s.box == nil {
+		return v
+	}
+	if p, err := s.box.OpenCtx(ctx, v); err == nil {
+		return p
+	}
+	return ""
+}
+
+// loadRemote 读取远程存储配置，并解密密码 / 客户端密钥 / 刷新令牌。
+func (s *Service) loadRemote() RemoteConfig {
+	rc := s.loadRemoteRaw()
+	rc.Password = s.openCtx(pkg.CtxBackupRemotePass, rc.Password)
+	rc.ClientSecret = s.openCtx(pkg.CtxBackupRemoteSecret, rc.ClientSecret)
+	rc.RefreshToken = s.openCtx(pkg.CtxBackupRemoteToken, rc.RefreshToken)
+	return rc
+}
+
+// seal 加密敏感字段（空值保留空）。
+func (s *Service) seal(ctx, v string) (string, error) {
+	if v == "" || s.box == nil {
+		return v, nil
+	}
+	return s.box.SealECtx(ctx, v)
+}
+
+// saveRemote 保存远程存储配置：三处敏感字段加密落库。
+// 传空值表示「沿用已有密文」，避免前端不回传明文时把已保存的凭据清空。
 func (s *Service) saveRemote(rc RemoteConfig) error {
+	prev := s.loadRemoteRaw()
 	store := rc
-	if store.Password != "" && s.box != nil {
-		enc, err := s.box.SealECtx(pkg.CtxBackupRemotePass, store.Password)
+	// 选了远程通道就等于启用（前端无独立开关，避免上传时报「未启用远程存储」）
+	store.Enabled = store.Kind != "" && store.Kind != StorageLocal
+
+	if store.Password == "" {
+		store.Password = prev.Password
+	} else {
+		enc, err := s.seal(pkg.CtxBackupRemotePass, store.Password)
 		if err != nil {
 			return err
 		}
 		store.Password = enc
 	}
+
+	if store.ClientSecret == "" {
+		store.ClientSecret = prev.ClientSecret
+	} else {
+		enc, err := s.seal(pkg.CtxBackupRemoteSecret, store.ClientSecret)
+		if err != nil {
+			return err
+		}
+		store.ClientSecret = enc
+	}
+
+	if store.RefreshToken == "" {
+		store.RefreshToken = prev.RefreshToken
+	} else {
+		enc, err := s.seal(pkg.CtxBackupRemoteToken, store.RefreshToken)
+		if err != nil {
+			return err
+		}
+		store.RefreshToken = enc
+	}
+
 	b, err := json.Marshal(store)
 	if err != nil {
 		return err
 	}
 	rec := model.Setting{Key: settingRemoteKey, Value: string(b)}
-	if err := s.db.Save(&rec).Error; err != nil {
-		return err
-	}
-	return nil
+	return s.db.Save(&rec).Error
 }
 
-// RemoteView 向前端返回的远程配置（脱敏：密码不回传明文，仅返回是否已设置）。
+// RemoteView 向前端返回的远程配置（脱敏：敏感字段不回传明文，仅返回是否已设置）。
 type RemoteView struct {
 	RemoteConfig
-	PasswordSet bool `json:"passwordSet"`
+	PasswordSet     bool `json:"passwordSet"`
+	ClientSecretSet bool `json:"clientSecretSet"`
+	Authorized      bool `json:"authorized"` // 云盘是否已完成 OAuth 授权
 }
 
 func (s *Service) RemoteConfigView() RemoteView {
 	rc := s.loadRemote()
-	view := RemoteView{RemoteConfig: rc, PasswordSet: rc.Password != ""}
-	// 不把解密后的密码带回前端。
+	view := RemoteView{
+		RemoteConfig:    rc,
+		PasswordSet:     rc.Password != "",
+		ClientSecretSet: rc.ClientSecret != "",
+		Authorized:      rc.RefreshToken != "",
+	}
+	// 不把明文/令牌带回前端。
 	view.Password = ""
+	view.ClientSecret = ""
+	view.RefreshToken = ""
 	return view
 }
 
@@ -124,6 +180,17 @@ func (s *Service) DeleteFromRemote(name string) error {
 func (s *Service) TestRemote(rc RemoteConfig) error {
 	if rc.Kind == StorageLocal || rc.Kind == "" {
 		return nil
+	}
+	// 传入配置通常来自前端（敏感字段为空）：用已保存的密文补齐，避免测试时缺凭据。
+	prev := s.loadRemote()
+	if rc.Password == "" {
+		rc.Password = prev.Password
+	}
+	if rc.ClientSecret == "" {
+		rc.ClientSecret = prev.ClientSecret
+	}
+	if rc.RefreshToken == "" {
+		rc.RefreshToken = prev.RefreshToken
 	}
 	prov, err := NewProvider(rc)
 	if err != nil {

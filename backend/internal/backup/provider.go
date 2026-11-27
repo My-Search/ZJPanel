@@ -2,10 +2,11 @@ package backup
 
 import (
 	"fmt"
+	"strings"
 )
 
 // Provider 远程存储抽象：上传/下载/列举/删除备份包。
-// 现有实现：WebDAV；Google Drive / OneDrive 为 OAuth 体系，预留接入位。
+// 实现：WebDAV、Google Drive、OneDrive（后两者走 OAuth，见 oauth.go）。
 type Provider interface {
 	// Upload 把本地文件上传到远程目录，返回远程对象名。
 	Upload(localPath, remoteName string) error
@@ -24,11 +25,33 @@ func NewProvider(rc RemoteConfig) (Provider, error) {
 	switch rc.Kind {
 	case StorageWebDAV:
 		return newWebDAV(rc), nil
-	case StorageGoogleDrive, StorageOneDrive:
-		return nil, fmt.Errorf("该云盘通道尚未接入，当前仅支持 WebDAV")
+	case StorageGoogleDrive:
+		return newGDrive(rc), nil
+	case StorageOneDrive:
+		return newOneDrive(rc), nil
 	default:
 		return nil, nil
 	}
+}
+
+// dirSegments 把远程目录配置拆成逐级目录名；空值回退到默认目录，剔除 . / .. 等危险段。
+func dirSegments(remoteDir, def string) []string {
+	d := strings.Trim(strings.TrimSpace(remoteDir), "/")
+	if d == "" {
+		d = def
+	}
+	var out []string
+	for _, p := range strings.Split(d, "/") {
+		p = strings.TrimSpace(p)
+		if p == "" || p == "." || p == ".." {
+			continue
+		}
+		out = append(out, p)
+	}
+	if len(out) == 0 {
+		return []string{def}
+	}
+	return out
 }
 
 // nopProvider 占位（本地存储场景）。
@@ -41,3 +64,11 @@ func (nopProvider) Download(string, string) error { return nil }
 func (nopProvider) Delete(string) error           { return nil }
 func (nopProvider) List() ([]string, error)       { return nil, nil }
 func (nopProvider) Test() error                   { return nil }
+
+// String 便于日志输出通道类型。
+func (rc RemoteConfig) String() string {
+	if rc.Kind == "" {
+		return StorageLocal
+	}
+	return fmt.Sprintf("%s(%s)", rc.Kind, rc.RemoteDir)
+}

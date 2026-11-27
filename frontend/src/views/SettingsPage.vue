@@ -1,7 +1,7 @@
 <template>
   <a-spin :spinning="loading">
   <a-card size="small">
-    <a-tabs>
+    <a-tabs v-model:value="activeTab">
       <a-tab-pane key="general" tab="常规">
         <a-card size="small" title="访问安全入口" style="margin-bottom: 16px">
           <a-alert type="warning" show-icon style="margin-bottom: 12px"
@@ -112,14 +112,14 @@
                   </a-upload>
                 </a-space>
                 <div class="dim" style="margin-top: 8px">
-                  配置级迁移：打包面板数据库、证书、安全/WAF 策略、插件数据、Nginx 站点配置与 Compose 项目声明；不含站点上传文件、Docker 数据卷与业务数据库。
+                  配置级 + 应用目录迁移：打包面板数据库、证书、安全/WAF 策略、插件数据、Nginx 站点配置，以及 docker-compose.yml 所在的应用目录整体（编排文件、配置与挂载的本地数据）；不含 Docker 命名卷与站点上传文件。
                 </div>
               </a-card>
 
               <a-card size="small" title="远程存储" class="backup-card">
                 <a-form layout="vertical">
                   <a-form-item label="存储类型">
-                    <a-select v-model:value="remote.kind" :options="remoteKindOptions" />
+                    <a-select v-model:value="remote.kind" :options="remoteKindOptions" @change="onKindChange" />
                   </a-form-item>
                   <template v-if="remote.kind === 'webdav'">
                     <a-form-item label="WebDAV 地址">
@@ -141,8 +141,44 @@
                       <a-input v-model:value="remote.remoteDir" placeholder="留空存到根目录" />
                     </a-form-item>
                   </template>
-                  <a-alert v-if="remote.kind === 'googledrive' || remote.kind === 'onedrive'" type="info" show-icon
-                    message="该云盘通道（OAuth 授权）尚未接入，当前仅支持 WebDAV。" />
+                  <template v-if="remote.kind === 'googledrive' || remote.kind === 'onedrive'">
+                    <a-alert type="info" show-icon style="margin-bottom: 12px"
+                      :message="remote.kind === 'googledrive' ? '需自建 Google OAuth 应用' : '需自建 Azure 应用注册'"
+                      :description="remote.kind === 'googledrive'
+                        ? '在 Google Cloud Console 创建「Web 应用」类型的 OAuth 客户端并启用 Google Drive API，把下方回调地址加入「已获授权的重定向 URI」。面板仅申请 drive.file 权限，只能读写由面板创建的文件。'
+                        : '在 Azure 门户注册应用，添加「Web」平台并填入下方回调地址，API 权限勾选 Microsoft Graph 的 Files.ReadWrite 与 offline_access。备份会写入 OneDrive 的 ZJPanel 目录。'" />
+                    <a-form-item label="Client ID">
+                      <a-input v-model:value="remote.clientId" placeholder="OAuth 应用的客户端 ID" />
+                    </a-form-item>
+                    <a-form-item label="Client Secret">
+                      <a-input-password v-model:value="remote.clientSecret"
+                        :placeholder="remote.clientSecretSet ? '已设置，留空沿用' : 'OAuth 应用的客户端密钥'" />
+                    </a-form-item>
+                    <a-form-item label="回调地址（需加入厂商白名单）">
+                      <a-input-group compact>
+                        <a-input :value="oauthRedirect" readonly style="width: calc(100% - 68px)" />
+                        <a-button style="width: 68px" @click="copyRedirect">复制</a-button>
+                      </a-input-group>
+                    </a-form-item>
+                    <a-form-item label="远程目录">
+                      <a-input v-model:value="remote.remoteDir" placeholder="留空存到 ZJPanel 目录" />
+                    </a-form-item>
+                    <a-form-item label="授权状态">
+                      <a-space wrap>
+                        <a-tag :color="remote.authorized ? 'green' : 'default'">
+                          {{ remote.authorized ? `已连接${remote.account ? ' · ' + remote.account : ''}` : '未授权' }}
+                        </a-tag>
+                        <a-button size="small" type="primary" ghost :loading="authorizing" @click="startOAuth">
+                          {{ remote.authorized ? '重新授权' : '授权并连接' }}
+                        </a-button>
+                        <a-popconfirm v-if="remote.authorized" title="断开后需重新授权才能上传到该云盘，确定断开？"
+                          ok-text="断开" cancel-text="取消" @confirm="clearOAuth">
+                          <a-button size="small" danger>断开</a-button>
+                        </a-popconfirm>
+                      </a-space>
+                      <div v-if="authorizing" class="dim" style="margin-top: 6px">已打开授权窗口，完成授权后会自动回填状态…</div>
+                    </a-form-item>
+                  </template>
                   <a-space>
                     <a-button @click="testRemote">测试连接</a-button>
                     <a-button type="primary" @click="saveRemote">保存远程配置</a-button>
@@ -187,6 +223,8 @@ import AceEditor from '../components/AceEditor.vue'
 
 const auth = useAuth()
 const authName = computed(() => auth.username)
+// 设置页 Tab：从授权回调返回时带 ?tab=backup，直接落到备份页
+const activeTab = ref('general')
 const settings = ref<any>({})
 const version = ref('')
 const info = ref<any>(null)
@@ -246,13 +284,24 @@ const restoring = ref(false)
 const backupItems = ref<string[]>([])
 const backupItemMetas = ref<any[]>([])
 const backupList = ref<any[]>([])
-const remote = ref<any>({ enabled: false, kind: 'local', url: '', username: '', password: '', passwordSet: false, remoteDir: '' })
+const remote = ref<any>({
+  enabled: false, kind: 'local', url: '', username: '', password: '', passwordSet: false, remoteDir: '',
+  clientId: '', clientSecret: '', clientSecretSet: false, refreshToken: '', account: '', authorized: false,
+})
 const remoteKindOptions = [
   { value: 'local', label: '仅本地' },
   { value: 'webdav', label: 'WebDAV' },
-  { value: 'googledrive', label: 'Google Drive（待接入）' },
-  { value: 'onedrive', label: 'OneDrive（待接入）' },
+  { value: 'googledrive', label: 'Google Drive' },
+  { value: 'onedrive', label: 'OneDrive' },
 ]
+const oauthRedirect = ref('')
+const authorizing = ref(false)
+let oauthTimer: number | undefined
+
+// 回调地址按浏览器实际访问地址生成（反代/自定义域名下最可靠），并原样展示给用户去厂商后台加白名单。
+const computeRedirect = () => {
+  oauthRedirect.value = `${location.origin}/api/backup/oauth/callback`
+}
 const backupCols = [
   { title: '时间', dataIndex: 'createdAt', key: 'createdAt', width: 160 },
   { title: '大小', dataIndex: 'size', key: 'size', width: 90 },
@@ -262,6 +311,7 @@ const backupCols = [
 const allItemsChecked = computed(() => backupItemMetas.value.length > 0 && backupItems.value.length === backupItemMetas.value.length)
 
 const loadBackup = async () => {
+  computeRedirect()
   const [itemsR, listR, remoteR] = await Promise.allSettled([
     getQuiet('/api/backup/items'),
     getQuiet('/api/backup/list'),
@@ -270,7 +320,7 @@ const loadBackup = async () => {
   if (itemsR.status === 'fulfilled') backupItemMetas.value = itemsR.value?.items || []
   if (listR.status === 'fulfilled') backupList.value = listR.value?.list || []
   if (remoteR.status === 'fulfilled' && remoteR.value) {
-    remote.value = { ...remote.value, ...remoteR.value, password: '' }
+    remote.value = { ...remote.value, ...remoteR.value, password: '', clientSecret: '' }
   }
   if (backupItems.value.length === 0 && backupItemMetas.value.length > 0) {
     backupItems.value = backupItemMetas.value.map((i: any) => i.key)
@@ -335,6 +385,77 @@ const testRemote = async () => {
 const saveRemote = async () => {
   const r = await put('/api/backup/remote', remote.value)
   if (r.ok) { message.success('远程配置已保存'); await loadBackup() }
+  return !!r.ok
+}
+
+// 切换通道后旧通道的授权不算数，等重新授权再显示已连接。
+const onKindChange = () => {
+  remote.value.authorized = false
+  remote.value.account = ''
+}
+
+// ---- 云盘 OAuth ----
+const copyRedirect = async () => {
+  try {
+    await navigator.clipboard.writeText(oauthRedirect.value)
+    message.success('回调地址已复制')
+  } catch {
+    message.warning('复制失败，请手动选择复制')
+  }
+}
+
+// 先落库客户端凭据（授权回调要用），再打开厂商授权页，轮询授权状态。
+const startOAuth = async () => {
+  if (!remote.value.clientId.trim()) {
+    message.warning('请先填写 Client ID')
+    return
+  }
+  if (!remote.value.clientSecret.trim() && !remote.value.clientSecretSet) {
+    message.warning('请先填写 Client Secret')
+    return
+  }
+  if (!(await saveRemote())) return
+  const r = await post('/api/backup/oauth/start', {
+    kind: remote.value.kind,
+    return: '/settings?tab=backup',
+    redirectUri: oauthRedirect.value,
+  })
+  if (!r.ok || !r.url) {
+    message.error(r.error || '无法发起授权')
+    return
+  }
+  const win = window.open(r.url, '_blank')
+  if (!win) {
+    // 弹窗被拦截：直接当前页跳转，回调页会自动关回设置页
+    location.href = r.url
+    return
+  }
+  authorizing.value = true
+  window.clearInterval(oauthTimer)
+  let tries = 0
+  oauthTimer = window.setInterval(async () => {
+    tries += 1
+    if (tries > 150) { // 约 5 分钟未完成则停止轮询
+      window.clearInterval(oauthTimer)
+      authorizing.value = false
+      return
+    }
+    const cur = await getQuiet('/api/backup/remote')
+    if (cur?.authorized && cur?.kind === remote.value.kind) {
+      window.clearInterval(oauthTimer)
+      authorizing.value = false
+      message.success(`云盘授权成功${cur.account ? '：' + cur.account : ''}`)
+      await loadBackup()
+    }
+  }, 2000)
+}
+
+const clearOAuth = async () => {
+  const r = await post('/api/backup/oauth/clear', {})
+  if (r.ok) {
+    message.success('已断开云盘授权')
+    await loadBackup()
+  }
 }
 
 const auditCols: any[] = [
@@ -347,6 +468,8 @@ const auditCols: any[] = [
 const loading = ref(false)
 
 const load = async () => {
+  const tab = new URLSearchParams(location.search).get('tab')
+  if (tab) activeTab.value = tab
   loading.value = true
   try {
     // 四个接口互不依赖：并发拉取，避免版本/审计/维护模板逐个等前面返回。

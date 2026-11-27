@@ -161,7 +161,7 @@ func (w *webDAV) List() ([]string, error) {
 
 // PROPFIND 响应解析（仅取 href 与是否集合）。
 type propfindResp struct {
-	XMLName  xmlName    `xml:"multistatus"`
+	XMLName   xmlName        `xml:"multistatus"`
 	Responses []propResponse `xml:"response"`
 }
 

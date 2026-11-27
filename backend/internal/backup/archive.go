@@ -22,39 +22,50 @@ type collectedFile struct {
 	archive string
 }
 
+// walkDir 递归收集目录下所有普通文件；单文件不可读不阻断整体打包，skipDirs 按目录名跳过。
+// 符号链接/设备/套接字不收录：tar 无法原样还原它们，且可能指向目录之外。
+func walkDir(root, archivePrefix string, skipDirs map[string]bool, files *[]collectedFile) error {
+	root = filepath.Clean(root)
+	st, err := os.Stat(root)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // 目录尚未生成：跳过，不算错误
+		}
+		return err
+	}
+	if !st.IsDir() {
+		return nil
+	}
+	return filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil
+		}
+		if info.IsDir() {
+			if skipDirs != nil && skipDirs[filepath.Base(p)] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, p)
+		if err != nil {
+			return nil
+		}
+		*files = append(*files, collectedFile{
+			src:     p,
+			archive: filepath.ToSlash(filepath.Join(archivePrefix, rel)),
+		})
+		return nil
+	})
+}
+
 // collect 按所选项目收集文件清单（不读取内容，仅列路径与大小）。
 func (s *Service) collect(items []string) ([]collectedFile, error) {
 	var files []collectedFile
-	addDir := func(root, archivePrefix string, skipDirs map[string]bool) error {
-		root = filepath.Clean(root)
-		st, err := os.Stat(root)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil // 目录尚未生成：跳过，不算错误
-			}
-			return err
-		}
-		if !st.IsDir() {
-			return nil
-		}
-		return filepath.Walk(root, func(p string, info os.FileInfo, err error) error {
-			if err != nil {
-				return nil // 单文件不可读不阻断整体打包
-			}
-			if info.IsDir() {
-				if skipDirs != nil && skipDirs[filepath.Base(p)] {
-					return filepath.SkipDir
-				}
-				return nil
-			}
-			rel, err := filepath.Rel(root, p)
-			if err != nil {
-				return nil
-			}
-			archive := filepath.ToSlash(filepath.Join(archivePrefix, rel))
-			files = append(files, collectedFile{src: p, archive: archive})
-			return nil
-		})
+	addDir := func(root, archivePrefix string) {
+		_ = walkDir(root, archivePrefix, nil, &files)
 	}
 
 	for _, it := range items {
@@ -68,17 +79,17 @@ func (s *Service) collect(items []string) ([]collectedFile, error) {
 				}
 			}
 		case ItemCerts:
-			_ = addDir(filepath.Join(s.cfg.DataDir, "certs"), "certs", nil)
+			addDir(filepath.Join(s.cfg.DataDir, "certs"), "certs")
 		case ItemSecurity:
 			p := filepath.Join(s.cfg.DataDir, "security", "policy.json")
 			if st, err := os.Stat(p); err == nil && !st.IsDir() {
 				files = append(files, collectedFile{src: p, archive: "security/policy.json"})
 			}
 		case ItemPlugins:
-			_ = addDir(filepath.Join(s.cfg.DataDir, "plugins-data"), "plugins-data", nil)
+			addDir(filepath.Join(s.cfg.DataDir, "plugins-data"), "plugins-data")
 		case ItemNginx:
 			for _, sub := range []string{"sites-available", "sites-enabled", "conf.d"} {
-				_ = addDir(filepath.Join(s.cfg.NginxPrefix, sub), filepath.Join("nginx", sub), nil)
+				addDir(filepath.Join(s.cfg.NginxPrefix, sub), filepath.Join("nginx", sub))
 			}
 		case ItemCompose:
 			if err := s.collectCompose(&files); err != nil {
@@ -89,7 +100,14 @@ func (s *Service) collect(items []string) ([]collectedFile, error) {
 	return files, nil
 }
 
-// collectCompose 扫描 ComposeRoot 一级目录，收录各项目的 compose 文件与 zjpanel.json 声明。
+// composeFileNames ComposeRoot 下一个目录顶层出现这些文件即视为「站点应用目录」。
+var composeFileNames = map[string]bool{
+	"docker-compose.yml": true, "docker-compose.yaml": true,
+	"compose.yml": true, "compose.yaml": true,
+}
+
+// collectCompose 扫描 ComposeRoot 一级目录：凡顶层含 compose 文件的，整个目录递归打包。
+// 整目录迁移意味着应用配置、挂载的本地文件与业务数据一并带走（Docker 命名数据卷除外）。
 func (s *Service) collectCompose(files *[]collectedFile) error {
 	root := s.cfg.ComposeRoot
 	st, err := os.Stat(root)
@@ -106,38 +124,31 @@ func (s *Service) collectCompose(files *[]collectedFile) error {
 	if err != nil {
 		return err
 	}
-	composeNames := []string{"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())
-		// 收录该目录下的 compose 文件与声明文件（仅顶层，不递归应用内部数据目录）。
-		dirEntries, err := os.ReadDir(dir)
-		if err != nil {
+		if !hasComposeFile(dir) {
 			continue
 		}
-		for _, de := range dirEntries {
-			if de.IsDir() {
-				continue
-			}
-			name := de.Name()
-			isCompose := false
-			for _, cn := range composeNames {
-				if name == cn {
-					isCompose = true
-					break
-				}
-			}
-			if !isCompose && name != "zjpanel.json" {
-				continue
-			}
-			src := filepath.Join(dir, name)
-			archive := filepath.ToSlash(filepath.Join("compose", e.Name(), name))
-			*files = append(*files, collectedFile{src: src, archive: archive})
-		}
+		_ = walkDir(dir, filepath.Join("compose", e.Name()), nil, files)
 	}
 	return nil
+}
+
+// hasComposeFile 判断目录顶层是否存在 compose 文件。
+func hasComposeFile(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false
+	}
+	for _, de := range entries {
+		if !de.IsDir() && composeFileNames[de.Name()] {
+			return true
+		}
+	}
+	return false
 }
 
 // Build 按所选项目生成备份包，返回包信息（文件名、大小、清单、SHA256）。
@@ -224,14 +235,14 @@ func (s *Service) Build(items []string) (*BackupRecord, error) {
 	}
 	finalStat, _ := os.Stat(path)
 	rec := &BackupRecord{
-		Name:      name,
-		Path:      path,
-		Size:      0,
-		CreatedAt: now,
-		Items:     items,
-		FileCount: len(manifestFiles),
+		Name:         name,
+		Path:         path,
+		Size:         0,
+		CreatedAt:    now,
+		Items:        items,
+		FileCount:    len(manifestFiles),
 		Uncompressed: total,
-		SHA256:    hex.EncodeToString(hash.Sum(nil)),
+		SHA256:       hex.EncodeToString(hash.Sum(nil)),
 	}
 	if finalStat != nil {
 		rec.Size = finalStat.Size()
@@ -312,21 +323,36 @@ func (s *Service) restoreTarget(archive string) (string, error) {
 	case strings.HasPrefix(archive, "db/"):
 		return filepath.Join(s.cfg.DataDir, filepath.Base(archive)), nil
 	case strings.HasPrefix(archive, "certs/"):
-		rel := strings.TrimPrefix(archive, "certs/")
-		return filepath.Join(s.cfg.DataDir, "certs", rel), nil
+		return safeJoin(filepath.Join(s.cfg.DataDir, "certs"), strings.TrimPrefix(archive, "certs/"))
 	case archive == "security/policy.json":
 		return filepath.Join(s.cfg.DataDir, "security", "policy.json"), nil
 	case strings.HasPrefix(archive, "plugins-data/"):
-		rel := strings.TrimPrefix(archive, "plugins-data/")
-		return filepath.Join(s.cfg.DataDir, "plugins-data", rel), nil
+		return safeJoin(filepath.Join(s.cfg.DataDir, "plugins-data"), strings.TrimPrefix(archive, "plugins-data/"))
 	case strings.HasPrefix(archive, "nginx/"):
-		rel := strings.TrimPrefix(archive, "nginx/")
-		return filepath.Join(s.cfg.NginxPrefix, rel), nil
+		return safeJoin(s.cfg.NginxPrefix, strings.TrimPrefix(archive, "nginx/"))
 	case strings.HasPrefix(archive, "compose/"):
-		rel := strings.TrimPrefix(archive, "compose/")
-		return filepath.Join(s.cfg.ComposeRoot, rel), nil
+		return safeJoin(s.cfg.ComposeRoot, strings.TrimPrefix(archive, "compose/"))
 	}
 	return "", fmt.Errorf("未知归档路径: %s", archive)
+}
+
+// safeJoin 把包内相对路径拼到目标根目录，拒绝 .. 越界（备份包可能来自外部，不能直接信任）。
+func safeJoin(base, rel string) (string, error) {
+	rel = filepath.FromSlash(strings.TrimPrefix(rel, "/"))
+	if rel == "" {
+		return "", fmt.Errorf("非法归档路径: %s", rel)
+	}
+	for _, seg := range strings.Split(rel, string(os.PathSeparator)) {
+		if seg == ".." {
+			return "", fmt.Errorf("非法归档路径: %s", rel)
+		}
+	}
+	dest := filepath.Join(base, rel)
+	cleanBase := filepath.Clean(base)
+	if dest != cleanBase && !strings.HasPrefix(dest, cleanBase+string(os.PathSeparator)) {
+		return "", fmt.Errorf("归档路径越界: %s", rel)
+	}
+	return dest, nil
 }
 
 // itemOfArchive 根据包内路径判断所属备份项。
