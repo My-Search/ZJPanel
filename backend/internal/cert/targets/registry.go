@@ -32,9 +32,9 @@ type DeployArgs struct {
 }
 
 type TargetDef struct {
-	Type   string `json:"type"`
-	Title  string `json:"title"`
-	Fields []certdns.FieldDef
+	Type   string                                `json:"type"`
+	Title  string                                `json:"title"`
+	Fields []certdns.FieldDef                    `json:"fields"`
 	Runner func(args DeployArgs) (string, error) `json:"-"`
 	Owner  string                                `json:"owner"` // builtin | 插件 id
 }

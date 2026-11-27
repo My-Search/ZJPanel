@@ -193,7 +193,7 @@
             message="签发成功后并行执行以下部署目标（可多个）；不添加则证书仅保存到仓库。" />
           <div v-for="(dt, i) in wiz.deployTargets" :key="i" class="target-card">
             <div class="target-head">
-              <a-select v-model:value="dt.type" style="width: 280px" :options="targetOpts" @change="dt.config = {}" />
+              <a-select v-model:value="dt.type" style="width: 280px" :options="targetOpts" @change="dt.config = defaultTargetConfig(dt.type)" />
               <a-button size="small" danger @click="wiz.deployTargets.splice(i, 1)">移除</a-button>
             </div>
             <a-form v-if="targetDef(dt.type)" layout="vertical" style="margin: 0">
@@ -220,7 +220,7 @@
             </a-button>
             <template #overlay>
               <a-menu>
-                <a-menu-item v-for="t in targets" :key="t.type" @click="wiz.deployTargets.push({ type: t.type, config: {} })">
+                <a-menu-item v-for="t in targets" :key="t.type" @click="wiz.deployTargets.push(newTarget(t.type))">
                   {{ t.title }}
                 </a-menu-item>
               </a-menu>
@@ -395,6 +395,17 @@ const providerDef = (name: string) => providers.value.find(p => p.name === name)
 const targetDef = (type: string) => targets.value.find(t => t.type === type)
 const targetTitle = (type: string) => targets.value.find(t => t.type === type)?.title || type
 
+// 新建/切换部署目标时预填后端声明的默认值（如 SSH 证书路径、nginx -s reload），
+// 字段直接可见，不需要用户猜默认值是什么。
+const defaultTargetConfig = (type: string) => {
+  const cfg: any = {}
+  for (const f of targetDef(type)?.fields || []) {
+    if (f.default) cfg[f.key] = f.default
+  }
+  return cfg
+}
+const newTarget = (type: string) => ({ type, config: defaultTargetConfig(type) })
+
 // 动态字段下拉选项：optionsSource=hosts 时用已加载的 SSH 主机清单，否则用后端静态 options。
 // value 统一用字符串 ID，保证提交到后端的 hostId 是 string（后端 anyToUint 也兼容数字）。
 const fieldOptions = (f: any) => {
@@ -452,7 +463,7 @@ const openWizard = (t?: any) => {
       name: '', domains: [], challenge: 'http',
       acmeAccountId: accounts.value[0]?.id, dnsCredentialId: null,
       renewDays: 20, cronSpec: '0 3 * * *', enabled: true,
-      deployTargets: [{ type: 'nginx_site', config: {} }],
+      deployTargets: [newTarget('nginx_site')],
     }
   }
   step.value = 0
