@@ -300,7 +300,7 @@ func webshellAudit() (bool, string) {
 				return nil
 			}
 			info, err := d.Info()
-			if err != nil || info.Size() > 1<<20 {
+			if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
 				return nil
 			}
 			b, err := os.ReadFile(path)

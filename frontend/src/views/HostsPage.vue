@@ -153,6 +153,43 @@
                 </a-col>
               </a-row>
 
+              <a-card size="small" class="def-fw" title="主机层封禁">
+                <template #extra>
+                  <a-tag :color="fw?.active ? 'green' : 'orange'">
+                    {{ fwText }}
+                  </a-tag>
+                </template>
+                <div class="fw-bar">
+                  <span class="fw-dot" :class="fw?.active ? 'on' : 'off'" />
+                  <span class="fw-meta">{{ fwMeta }}</span>
+                  <span class="hint">已封禁 {{ bans.length }} 个 IP</span>
+                </div>
+
+                <div class="ban-form">
+                  <a-input v-model:value="banIp" placeholder="IPv4 地址，如 203.0.113.10" class="ban-input" allow-clear />
+                  <a-select v-model:value="banTtl" :options="ttlOptions" class="ban-ttl" />
+                  <a-button danger :disabled="!canCheck || !banIp" :loading="banning" @click="doBan">封禁</a-button>
+                </div>
+
+                <a-table
+                  v-if="bans.length" :data-source="bans" :columns="banCols" row-key="ip" size="small"
+                  :pagination="false" class="ban-table" :scroll="{ x: 360 }" style="margin-top: 4px"
+                >
+                  <template #bodyCell="{ column, record }">
+                    <template v-if="column.key === 'ip'"><span class="mono">{{ record.ip }}</span></template>
+                    <template v-else-if="column.key === 'expires'">{{ fmtTtl(record.expires) || '到期时间未知' }}</template>
+                    <template v-else-if="column.key === 'act'">
+                      <a-button size="small" type="link" danger @click="doUnban(record.ip)">解封</a-button>
+                    </template>
+                  </template>
+                </a-table>
+                <div v-else class="hint" style="margin-top: 8px">暂无封禁。封禁写入独立表 inet zjpanel，不改动系统已有防火墙规则。</div>
+
+                <div class="hint" style="margin-top: 8px">
+                  封禁立即生效并自动过期。请谨慎封禁面板或 SSH 来源 IP，误封可能切断 Agent 回连；封禁记录可在「事件」追溯。
+                </div>
+              </a-card>
+
               <a-card size="small" class="def-result" title="检查结果">
                 <template #extra>
                   <a-radio-group v-model:value="findFilter" size="small" button-style="solid" class="def-filter">
@@ -177,43 +214,6 @@
                   </template>
                 </a-table>
                 <a-empty v-else :image="simpleImage" description="还没有检查结果，点上方「检查」或「全部检查」" />
-              </a-card>
-
-              <a-card size="small" class="def-fw" title="主机层封禁">
-                <template #extra>
-                  <a-tag :color="fw?.active ? 'green' : 'orange'">
-                    {{ fwText }}
-                  </a-tag>
-                </template>
-                <div class="fw-bar">
-                  <span class="fw-dot" :class="fw?.active ? 'on' : 'off'" />
-                  <span class="fw-meta">{{ fwMeta }}</span>
-                  <span class="hint">已封禁 {{ bans.length }} 个 IP</span>
-                </div>
-
-                <div class="ban-form">
-                  <a-input v-model:value="banIp" placeholder="IPv4 地址，如 203.0.113.10" class="ban-input" allow-clear />
-                  <a-select v-model:value="banTtl" :options="ttlOptions" class="ban-ttl" />
-                  <a-button danger :disabled="!canCheck || !banIp" :loading="banning" @click="doBan">封禁</a-button>
-                </div>
-
-                <a-table
-                  v-if="bans.length" :data-source="bans" :columns="banCols" row-key="ip" size="small"
-                  :pagination="false" class="ban-table" style="margin-top: 4px"
-                >
-                  <template #bodyCell="{ column, record }">
-                    <template v-if="column.key === 'ip'"><span class="mono">{{ record.ip }}</span></template>
-                    <template v-else-if="column.key === 'expires'">{{ fmtTtl(record.expires) || '到期时间未知' }}</template>
-                    <template v-else-if="column.key === 'act'">
-                      <a-button size="small" type="link" danger @click="doUnban(record.ip)">解封</a-button>
-                    </template>
-                  </template>
-                </a-table>
-                <div v-else class="hint" style="margin-top: 8px">暂无封禁。封禁写入独立表 inet zjpanel，不改动系统已有防火墙规则。</div>
-
-                <div class="hint" style="margin-top: 8px">
-                  封禁立即生效并自动过期。请谨慎封禁面板或 SSH 来源 IP，误封可能切断 Agent 回连；封禁记录可在「事件」追溯。
-                </div>
               </a-card>
             </div>
           </a-tab-pane>
@@ -470,7 +470,7 @@ const defCols = [
 const banCols = [
   { title: 'IP', dataIndex: 'ip', key: 'ip', width: 160 },
   { title: '剩余时间', dataIndex: 'expires', key: 'expires', width: 130 },
-  { title: '', key: 'act', width: 70 },
+  { title: '操作', key: 'act', width: 70 },
 ]
 
 const pct = (used: any, total: any) => {
@@ -598,12 +598,14 @@ const saveHost = async () => {
   } finally { saving.value = false }
 }
 
-const runCheck = async (kind: string, silent = false) => {
-  if (!canCheck.value) return false
+const runCheck = async (kind: string, silent = false, hostId = current.value?.id) => {
+  if (!canCheck.value || !hostId) return false
   const def = checkDefs.find(d => d.kind === kind)
   checks[kind].loading = true
   try {
-    const r = await post<any>(`/api/hosts/${current.value.id}/check/${kind}`)
+    const r = await post<any>(`/api/hosts/${hostId}/check/${kind}`)
+    // 检查期间切了主机：结果丢弃，避免写到新主机名下
+    if (current.value?.id !== hostId) return false
     checks[kind].findings = r.result?.findings || []
     checks[kind].at = new Date().toISOString()
     if (!silent) message.success(`${def?.title || kind}检查完成`)
@@ -611,26 +613,32 @@ const runCheck = async (kind: string, silent = false) => {
   } catch (e: any) {
     message.error(e?.response?.data?.error || `${def?.title || kind}检查失败`)
     return false
-  } finally { checks[kind].loading = false }
+  } finally { if (current.value?.id === hostId) checks[kind].loading = false }
 }
 
 const runAllChecks = async () => {
-  if (!canCheck.value) return
+  if (!canCheck.value || !current.value) return
+  const hostId = current.value.id
   runningAll.value = true
   let okCount = 0
   try {
     for (const d of checkDefs) {
-      if (await runCheck(d.kind, true)) okCount++
+      if (current.value?.id !== hostId) break
+      if (await runCheck(d.kind, true, hostId)) okCount++
     }
-    message[okCount === checkDefs.length ? 'success' : 'warning'](`完成 ${okCount}/${checkDefs.length} 项检查`)
+    if (current.value?.id === hostId) {
+      message[okCount === checkDefs.length ? 'success' : 'warning'](`完成 ${okCount}/${checkDefs.length} 项检查`)
+    }
   } finally { runningAll.value = false }
 }
 
 const refreshFirewall = async () => {
   if (!current.value) return
+  const hostId = current.value.id
   fwLoading.value = true
   try {
-    fw.value = await getQuiet<any>(`/api/hosts/${current.value.id}/firewall`)
+    const r = await getQuiet<any>(`/api/hosts/${hostId}/firewall`)
+    if (current.value?.id === hostId) fw.value = r
   } catch (e: any) {
     message.error(e?.response?.data?.error || '获取防火墙状态失败')
   } finally { fwLoading.value = false }

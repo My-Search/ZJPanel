@@ -225,6 +225,8 @@ const connect = (fresh: boolean) => {
     ws = null
     clearStatsTimer()
     if (disposed) return
+    // 隐藏 Tab 不后台重连：回到终端时由 active 监听补建，避免堆积无人使用的会话
+    if (!props.active) { state.value = 'idle'; return }
     if (state.value === 'closed') return
     state.value = 'reconnecting'
     clearReconnect()

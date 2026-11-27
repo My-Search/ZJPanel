@@ -519,14 +519,18 @@ func collectPorts() []agent.Port {
 			ports = append(ports, agent.Port{Proto: proto, Addr: addr, Port: int(port)})
 		}
 	}
-	// 同端口 IPv4/IPv6 双栈只保留一条，避免表格刷屏
-	seen := map[int]bool{}
+	// 同端口 IPv4/IPv6 双栈只保留一条，避免表格刷屏。
+	// 若先出现的是回环地址、后出现的是非回环监听，优先保留后者（暴露面审计需要真实对外地址）。
+	idx := map[int]int{}
 	out := ports[:0]
 	for _, p := range ports {
-		if seen[p.Port] {
+		if i, ok := idx[p.Port]; ok {
+			if isLoopbackAddr(out[i].Addr) && !isLoopbackAddr(p.Addr) {
+				out[i] = p
+			}
 			continue
 		}
-		seen[p.Port] = true
+		idx[p.Port] = len(out)
 		out = append(out, p)
 	}
 	return out
