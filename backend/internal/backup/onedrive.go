@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -208,7 +207,6 @@ func (o *onedrive) Upload(localPath, remoteName string) error {
 			return err
 		}
 		req.ContentLength = int64(n)
-		req.Header.Set("Content-Length", strconv.Itoa(n))
 		req.Header.Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", offset, offset+int64(n)-1, st.Size()))
 		resp, err := o.client.Do(req)
 		if err != nil {
