@@ -926,7 +926,7 @@ watch(tab, (v) => {
   .host-item.active { border-color: rgba(22,119,255,.35); }
   .host-addr { display: none; }
   .detail-card { width: 100%; min-width: 0; min-height: 0; overflow: hidden; }
-  .detail-head { flex-direction: column; align-items: stretch; gap: 8px; padding: 12px 12px 0; }
+  .detail-head { flex-direction: column; align-items: stretch; gap: 10px; padding: 12px 12px 18px; }
   .dh-title { font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; }
   .dh-sub { font-size: 11px; overflow-wrap: anywhere; }
   .dh-actions { width: 100%; flex-wrap: wrap; }
@@ -943,8 +943,8 @@ watch(tab, (v) => {
   .stat-value { font-size: 20px; }
   .cmd-box, .out-box { font-size: 11px; }
   .detail-head { padding-top: 10px; }
-  .detail-tabs :deep(.ant-tabs-nav) { margin-bottom: 8px; }
+  .detail-tabs :deep(.ant-tabs-nav) { margin: 2px 0 14px; }
   .detail-tabs :deep(.ant-tabs-nav-list) { flex-wrap: nowrap; }
-  .detail-tabs :deep(.ant-tabs-tab) { padding: 8px 0; font-size: 13px; }
+  .detail-tabs :deep(.ant-tabs-tab) { padding: 8px 0 10px; font-size: 13px; }
 }
 </style>
