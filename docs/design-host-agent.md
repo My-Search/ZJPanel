@@ -197,13 +197,13 @@ Event { ...现有字段, HostID, Layer(l7|l4|host) }   // 与 security.Event 同
 
 Agent：`POST /api/hosts/:id/agent/install|uninstall|upgrade`、`GET /api/hosts/:id/agent/doctor`
 
-防御：`POST /api/hosts/:id/check/:kind`、`POST /api/hosts/:id/apply`、`POST /api/hosts/:id/rollback`
+防御：`POST /api/hosts/:id/check/:kind`（ssh/accounts/persistence/exposure/webshell，只读）、`POST /api/hosts/:id/apply`、`POST /api/hosts/:id/rollback`（规划）
 
-数据：`GET /api/hosts/:id/metrics|ports|processes|events`
+主机层封禁：`GET /api/hosts/:id/firewall`、`POST /api/hosts/:id/bans`（body: ip/seconds）、`DELETE /api/hosts/:id/bans/:ip`
 
-封禁：`POST /api/bans`、`DELETE /api/bans/:id`、`GET /api/bans`
+数据：`GET /api/hosts/:id/metrics|events|commands`
 
-Agent 侧：`GET /api/agent/install.sh`、`GET /api/agent/bin/{os}/{arch}`、`WS /api/agent/ws`、`GET /api/agent/pending`、`POST /api/agent/claim`
+Agent 侧：`GET /api/agent/time|install.sh|bin/:arch`、`WS /api/agent/ws`、`POST /api/agent/register`
 
 ## 13. 分期
 
@@ -233,6 +233,7 @@ Agent 侧：`GET /api/agent/install.sh`、`GET /api/agent/bin/{os}/{arch}`、`WS
 | API | hosts CRUD、test/claim、agent install/uninstall/upgrade、metrics/events/commands、check/ssh；Agent 侧 `time`/`install.sh`/`bin/:arch`/`ws`/`register` | `backend/internal/http/routes_hosts.go` |
 | MCP | `host_list`、`host_metrics`、`host_events`、`host_check_ssh`（均只读） | `backend/internal/http/routes_mcp.go` |
 | 前端 | 新增主机页（左列表右详情，Tab：概览/防御/事件/终端/设置；两种添加入口；安装输出弹窗；升级/卸载/删除）；终端页支持 `?host=`/`?local=1` 与「装 Agent」；菜单去终端、加主机、安全→WAF | `frontend/src/views/HostsPage.vue`、`TerminalPage.vue`、`SideMenu.vue`、`router/index.ts` |
+| 终端内嵌 | 主机页「终端」Tab 不再跳转：内嵌单会话终端（复用 `/api/ws/terminal`、create/attach、二进制帧、5s stats），底部 `StatusStrip` 显示资源，右侧 `TermFilePanel` 负责上传/下载/在线编辑/压缩解压；「多标签终端」仍跳 `/terminal?host=` | `frontend/src/components/HostTerminal.vue`、`TermFilePanel.vue` |
 | 分发 | Dockerfile 构建 `zjagent` 并按 TARGETARCH 落到 `/app/agent/zjagent-linux-*`；`BinaryPath` 兼容 `AppDir/agent`、`DataDir/agent` | `Dockerfile`、`internal/agent/install.go` |
 
 ### 验证记录
@@ -249,10 +250,25 @@ Agent 侧：`GET /api/agent/install.sh`、`GET /api/agent/bin/{os}/{arch}`、`WS
 4. 「版本落后」用 `agentVersion != buildinfo.Version` 判定，够用且不引入 semver 依赖；灰度/分批升级未做。
 5. 终端页路由 `/terminal` 保留（主机页以 `?host=` 调用），旧深链不失效；菜单入口已收进「主机」。
 
-### 后续（P1+）
+### 后续（P1+，2026-11-27 已补第一版）
 
-- 防御：账号异常、持久化点（cron/authorized_keys/systemd）、端口暴露、nftables 封禁执行器。
+v1.0.29 起 defense 后续能力落地，仍坚持「检查只读、动作带 TTL、独立表不碰系统规则」：
+
+| 能力 | 实现 | 代码位置 |
+|---|---|---|
+| 账号基线 | passwd 中非 root 的 UID 0、空密码、shadow 权限、sudoers NOPASSWD、authorized_keys 权限过宽 | `backend/cmd/zjagent/defense.go` |
+| 持久化点 | /etc/crontab、cron.d、用户 crontab、profile.d、rc.local、ld.so.preload、systemd 单元（近 7 天变更 + ExecStart 可疑命令） | 同上 |
+| 暴露面 | 0.0.0.0 监听端口、21/23/2375/3306/5432/6379/9200/11211/27017/5900 高危端口、nftables/ufw/firewalld/iptables 生效状态 | 同上 |
+| Webshell | /var/www、nginx 默认目录、/home、/opt 下 php/jsp/asp 特征扫描（eval/assert/命令执行/base64/ProcessStartInfo），20s、3 万文件上限 | 同上 |
+| 主机层封禁 | 独立表 `inet zjpanel` + timeout set + input drop；仅 IPv4、TTL 60s~7d、到期自动解封；不修改用户既有防火墙规则 | `defense.go`、`routes_hosts.go` |
+| 前端 | 防御页五张检查卡 + 结果表（按类型过滤）+ 防火墙状态 + 封禁/解封列表 | `frontend/src/views/HostsPage.vue` |
+| 接口 | `POST /api/hosts/:id/check/{ssh\|accounts\|persistence\|exposure\|webshell}`、`GET /api/hosts/:id/firewall`、`POST/DELETE /api/hosts/:id/bans[/:ip]` | `routes_hosts.go` |
+
+尚未做：封禁中心 `Ban{scope}` 与 WAF 共用数据源、sshd 配置自动加固/回滚、批量安装与灰度升级、`host_ports/processes` MCP 工具。Webshell 为特征匹配（非沙箱/静态解析），只用于发现线索，需人工复核。
+
+### 更早遗留（P1+）
+
 - 封禁中心 `Ban{scope}` 重构，WAF 与主机共用数据源。
-- 批量安装、灰度升级、`host_ports/processes` 等 MCP 工具、webshell 扫描。
+- 批量安装、灰度升级、`host_ports/processes` 等 MCP 工具。
 - 已知限制：Agent 指标采集依赖 `/proc`，Windows 仅用于协议联调，指标为 0。
 

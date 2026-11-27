@@ -261,27 +261,92 @@ func (s *Server) registerHostRoutes() {
 		c.JSON(http.StatusOK, cmds)
 	})
 
-	// 主机防御检查：当前实现 SSH 基线审计（只读，不改配置）。
+	// 主机防御检查：只读基线审计（不改系统配置）。
+	// ssh=SSH 基线 accounts=账号 persistence=持久化 exposure=暴露面 webshell=后门特征
 	g.POST("/:id/check/:kind", func(c *gin.Context) {
 		kind := c.Param("kind")
-		switch kind {
-		case "ssh":
-			res, err := s.Agent.Exec(idParam(c), "ssh_audit", nil, 30*time.Second)
-			if err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-				return
-			}
-			if !res.OK {
-				c.JSON(http.StatusBadRequest, gin.H{"error": res.Output})
-				return
-			}
-			var payload any
-			_ = json.Unmarshal([]byte(res.Output), &payload)
-			s.audit(c, "host.check.ssh", c.Param("id"))
-			c.JSON(http.StatusOK, gin.H{"kind": kind, "result": payload})
-		default:
-			c.JSON(http.StatusBadRequest, gin.H{"error": "未知检查类型: " + kind})
+		cmds := map[string]string{
+			"ssh":         "ssh_audit",
+			"accounts":    "accounts_audit",
+			"persistence": "persistence_audit",
+			"exposure":    "exposure_audit",
+			"webshell":    "webshell_audit",
 		}
+		cmd, ok := cmds[kind]
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "未知检查类型: " + kind})
+			return
+		}
+		res, err := s.Agent.Exec(idParam(c), cmd, nil, 45*time.Second)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if !res.OK {
+			c.JSON(http.StatusBadRequest, gin.H{"error": res.Output})
+			return
+		}
+		var payload any
+		_ = json.Unmarshal([]byte(res.Output), &payload)
+		s.audit(c, "host.check."+kind, c.Param("id"))
+		c.JSON(http.StatusOK, gin.H{"kind": kind, "result": payload})
+	})
+
+	// 主机防火墙状态与封禁列表（nftables 独立表 inet zjpanel）。
+	g.GET("/:id/firewall", func(c *gin.Context) {
+		res, err := s.Agent.Exec(idParam(c), "firewall_status", nil, 30*time.Second)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if !res.OK {
+			c.JSON(http.StatusBadRequest, gin.H{"error": res.Output})
+			return
+		}
+		var payload any
+		_ = json.Unmarshal([]byte(res.Output), &payload)
+		c.JSON(http.StatusOK, payload)
+	})
+
+	// 下发封禁：仅 IPv4，带 TTL，到期自动解封。
+	g.POST("/:id/bans", func(c *gin.Context) {
+		var req struct {
+			IP      string `json:"ip"`
+			Seconds int    `json:"seconds"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			return
+		}
+		res, err := s.Agent.Exec(idParam(c), "ban_ip", map[string]any{
+			"ip": req.IP, "seconds": req.Seconds,
+		}, 30*time.Second)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if !res.OK {
+			c.JSON(http.StatusBadRequest, gin.H{"error": res.Output})
+			return
+		}
+		s.audit(c, "host.ban."+req.IP, c.Param("id"))
+		c.JSON(http.StatusOK, gin.H{"ok": true, "output": res.Output})
+	})
+
+	g.DELETE("/:id/bans/:ip", func(c *gin.Context) {
+		res, err := s.Agent.Exec(idParam(c), "unban_ip", map[string]any{
+			"ip": c.Param("ip"),
+		}, 30*time.Second)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if !res.OK {
+			c.JSON(http.StatusBadRequest, gin.H{"error": res.Output})
+			return
+		}
+		s.audit(c, "host.unban."+c.Param("ip"), c.Param("id"))
+		c.JSON(http.StatusOK, gin.H{"ok": true, "output": res.Output})
 	})
 
 	// ---- Agent 侧端点（token 鉴权，不走登录态） ----

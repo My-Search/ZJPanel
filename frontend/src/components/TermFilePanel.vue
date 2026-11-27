@@ -523,6 +523,8 @@ const fmtTime = (s: string) => {
   const hm = `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
   return d.getFullYear() === now.getFullYear() ? hm : `${d.getFullYear()}-${hm}`
 }
+// 供内嵌终端工具栏直接触发上传：打开当前目录的文件选择器
+defineExpose({ pickFiles })
 </script>
 
 <style scoped>

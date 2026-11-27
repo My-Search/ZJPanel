@@ -84,6 +84,8 @@ func main() {
 		fmt.Printf("zjagent %s (proto %s, %s/%s)\n", buildinfo.Version, agent.Proto, runtime.GOOS, runtime.GOARCH)
 	case "doctor":
 		doctor()
+	case "audit":
+		auditCLI()
 	case "update":
 		fmt.Println("请由面板下发升级指令（主机页 → 升级），或重新执行安装脚本")
 	default:
@@ -92,9 +94,34 @@ func main() {
 }
 
 func usage() {
-	fmt.Println("用法: zjagent <run|install|uninstall|version|doctor|update>")
+	fmt.Println("用法: zjagent <run|install|uninstall|version|doctor|audit|update>")
 	fmt.Println("  run        前台运行（systemd 调用）")
 	fmt.Println("  uninstall  卸载（--purge 同时清理状态目录）")
+	fmt.Println("  audit      <ssh|accounts|persistence|exposure|webshell|firewall> 本地只读检查，输出 JSON")
+}
+
+// auditCLI 让运维可在目标机直接跑只读检查（与面板下发同一套实现）。
+func auditCLI() {
+	if len(os.Args) < 3 {
+		fmt.Println("用法: zjagent audit <ssh|accounts|persistence|exposure|webshell|firewall>")
+		return
+	}
+	cmds := map[string]string{
+		"ssh": "ssh_audit", "accounts": "accounts_audit", "persistence": "persistence_audit",
+		"exposure": "exposure_audit", "webshell": "webshell_audit", "firewall": "firewall_status",
+	}
+	cmd, ok := cmds[os.Args[2]]
+	if !ok {
+		fmt.Println("未知检查类型: " + os.Args[2])
+		os.Exit(1)
+	}
+	c := &client{}
+	ok2, out := c.exec(cmd, nil)
+	if !ok2 {
+		fmt.Println(out)
+		os.Exit(1)
+	}
+	fmt.Println(out)
 }
 
 func hasFlag(args []string, f string) bool {
@@ -305,6 +332,20 @@ func (c *client) exec(kind string, p map[string]any) (bool, string) {
 		return true, string(b)
 	case "ssh_audit":
 		return sshAudit()
+	case "accounts_audit":
+		return accountsAudit()
+	case "persistence_audit":
+		return persistenceAudit()
+	case "exposure_audit":
+		return exposureAudit()
+	case "webshell_audit":
+		return webshellAudit()
+	case "firewall_status":
+		return firewallStatus()
+	case "ban_ip":
+		return banIP(p)
+	case "unban_ip":
+		return unbanIP(p)
 	case "uninstall":
 		// 先回 ack，再由脱离会话的子进程完成卸载（当前进程会被 systemctl stop 杀掉）
 		go func() {
