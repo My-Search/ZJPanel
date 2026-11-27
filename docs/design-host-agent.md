@@ -262,8 +262,9 @@ v1.0.29 起 defense 后续能力落地，仍坚持「检查只读、动作带 TT
 | 暴露面 | 0.0.0.0 监听端口、21/23/2375/3306/5432/6379/9200/11211/27017/5900 高危端口、nftables/ufw/firewalld/iptables 生效状态 | 同上 |
 | Webshell | /var/www、nginx 默认目录、/home、/opt 下 php/jsp/asp 特征扫描（eval/assert/命令执行/base64/ProcessStartInfo），20s、3 万文件上限 | 同上 |
 | 主机层封禁 | 独立表 `inet zjpanel` + timeout set + input drop；仅 IPv4、TTL 60s~7d、到期自动解封；不修改用户既有防火墙规则 | `defense.go`、`routes_hosts.go` |
-| 前端 | 防御页五张检查卡 + 结果表（按类型过滤）+ 防火墙状态 + 封禁/解封列表 | `frontend/src/views/HostsPage.vue` |
-| 接口 | `POST /api/hosts/:id/check/{ssh\|accounts\|persistence\|exposure\|webshell}`、`GET /api/hosts/:id/firewall`、`POST/DELETE /api/hosts/:id/bans[/:ip]` | `routes_hosts.go` |
+| 检查结果持久化 | `HostCheck` 表按主机 + 类型保存最近一次结果（成功/失败都保存）；页面进入防御 Tab 或刷新时读取，后台每 6 小时对在线主机串行跑五类检查 | `model.go`、`agent/audit.go` |
+| 前端 | 防御页五张检查卡 + 结果表（按类型过滤）+ 防火墙状态 + 封禁/解封列表；检查失败显示原因与时间，不再回退「未检查」 | `frontend/src/views/HostsPage.vue` |
+| 接口 | `POST /api/hosts/:id/check/{ssh\|accounts\|persistence\|exposure\|webshell}`、`GET /api/hosts/:id/checks`、`GET /api/hosts/:id/firewall`、`POST/DELETE /api/hosts/:id/bans[/:ip]` | `routes_hosts.go` |
 
 尚未做：封禁中心 `Ban{scope}` 与 WAF 共用数据源、sshd 配置自动加固/回滚、批量安装与灰度升级、`host_ports/processes` MCP 工具。Webshell 为特征匹配（非沙箱/静态解析），只用于发现线索，需人工复核。
 

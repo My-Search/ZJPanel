@@ -52,7 +52,7 @@ func (s *Server) registerHostRoutes() {
 				"id": h.ID, "name": h.Name, "host": h.Host, "port": h.Port,
 				"username": h.Username, "authType": h.AuthType, "local": h.Local,
 				"group": h.Group, "tags": h.Tags, "claimed": h.Claimed,
-				"online": online,
+				"online":      online,
 				"agentStatus": status, "agentVersion": h.AgentVersion, "agentProto": h.AgentProto,
 				"osArch": h.OSArch, "remoteIp": h.RemoteIP, "lastSeen": h.AgentLastSeen,
 				"outdated":     h.AgentStatus != "none" && h.AgentStatus != "local" && h.AgentVersion != "" && h.AgentVersion != buildinfo.Version,
@@ -161,6 +161,7 @@ func (s *Server) registerHostRoutes() {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		_ = s.db.Where("host_id = ?", id).Delete(&model.HostCheck{}).Error
 		s.audit(c, "host.delete", fmt.Sprintf("%s(%s)", h.Name, h.Host))
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
@@ -275,31 +276,18 @@ func (s *Server) registerHostRoutes() {
 
 	// 主机防御检查：只读基线审计（不改系统配置）。
 	// ssh=SSH 基线 accounts=账号 persistence=持久化 exposure=暴露面 webshell=后门特征
+	// 结果落库：页面刷新后面板仍展示上一次检查，而不是退回「未检查」。
+	g.GET("/:id/checks", func(c *gin.Context) {
+		c.JSON(http.StatusOK, s.Agent.LatestChecks(idParam(c)))
+	})
+
 	g.POST("/:id/check/:kind", func(c *gin.Context) {
 		kind := c.Param("kind")
-		cmds := map[string]string{
-			"ssh":         "ssh_audit",
-			"accounts":    "accounts_audit",
-			"persistence": "persistence_audit",
-			"exposure":    "exposure_audit",
-			"webshell":    "webshell_audit",
-		}
-		cmd, ok := cmds[kind]
-		if !ok {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "未知检查类型: " + kind})
-			return
-		}
-		res, err := s.Agent.Exec(idParam(c), cmd, nil, 45*time.Second)
+		payload, err := s.Agent.Audit(idParam(c), kind)
 		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		if !res.OK {
-			c.JSON(http.StatusBadRequest, gin.H{"error": res.Output})
-			return
-		}
-		var payload any
-		_ = json.Unmarshal([]byte(res.Output), &payload)
 		s.audit(c, "host.check."+kind, c.Param("id"))
 		c.JSON(http.StatusOK, gin.H{"kind": kind, "result": payload})
 	})

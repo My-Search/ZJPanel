@@ -130,7 +130,7 @@
               <div class="defense-head">
                 <div>
                   <div class="defense-title">主机对外防御</div>
-                  <div class="hint">只读基线审计 + nftables 主机层封禁；检查不会修改系统配置，封禁到期自动解除。</div>
+                  <div class="hint">只读基线审计 + nftables 主机层封禁；Agent 在线时每 6 小时自动检查，结果保存在面板，刷新页面不会丢。</div>
                 </div>
                 <a-space wrap>
                   <a-button :disabled="!canCheck" :loading="runningAll" @click="runAllChecks">全部检查</a-button>
@@ -143,14 +143,17 @@
                   <div class="def-card" :class="'risk-' + (riskOf(d.kind) || 'none')">
                     <div class="def-card-top">
                       <span class="def-name">{{ d.title }}</span>
-                      <a-tag v-if="checks[d.kind].at" :color="riskColor(riskOf(d.kind))">
+                      <a-tag v-if="checks[d.kind].error" color="red">检查失败</a-tag>
+                      <a-tag v-else-if="checks[d.kind].at" :color="riskColor(riskOf(d.kind))">
                         {{ riskText(riskOf(d.kind)) }}
                       </a-tag>
                       <a-tag v-else>未检查</a-tag>
                     </div>
                     <div class="def-desc">{{ d.desc }}</div>
                     <div class="def-foot">
-                      <span class="hint">{{ checks[d.kind].at ? fmtTime(checks[d.kind].at) : '尚未运行' }}</span>
+                      <span class="hint" :title="checks[d.kind].error">
+                        {{ checks[d.kind].error || (checks[d.kind].at ? fmtTime(checks[d.kind].at) : '尚未运行') }}
+                      </span>
                       <a-button
                         size="small" type="link" :disabled="!canCheck" :loading="checks[d.kind].loading"
                         @click="runCheck(d.kind)"
@@ -379,7 +382,7 @@ const checkDefs = [
   { kind: 'exposure', title: '暴露面', short: '暴露面', desc: '公网监听端口、高危端口、防火墙状态' },
   { kind: 'webshell', title: 'Webshell 扫描', short: '后门', desc: '常见一句话后门与命令执行特征' },
 ]
-const checks = reactive<any>(Object.fromEntries(checkDefs.map(d => [d.kind, { loading: false, findings: [] as any[], at: '' }])))
+const checks = reactive<any>(Object.fromEntries(checkDefs.map(d => [d.kind, { loading: false, findings: [] as any[], at: '', error: '' }])))
 const findFilter = ref('')
 const runningAll = ref(false)
 const fwLoading = ref(false)
@@ -423,10 +426,13 @@ const allFindings = computed(() => checkDefs.flatMap(d =>
 const visibleFindings = computed(() => findFilter.value ? allFindings.value.filter((f: any) => f._kind === findFilter.value) : allFindings.value)
 
 const riskOf = (kind: string) => {
-  const fs = checks[kind]?.findings || []
+  const c = checks[kind]
+  if (!c?.at || c.error) return ''
+  const fs = c.findings || []
   if (fs.some((f: any) => f.risk === 'critical')) return 'critical'
   if (fs.some((f: any) => f.risk === 'warn')) return 'warn'
-  return fs.length ? 'ok' : ''
+  // 检查成功且没有发现项 = 正常；不能因为 findings 为空就退回「未检查」
+  return 'ok'
 }
 const riskText = (r: string) => r === 'critical' ? '高危' : r === 'warn' ? '建议' : r === 'ok' ? '正常' : '未检查'
 const riskColor = (r: string) => r === 'critical' ? 'red' : r === 'warn' ? 'orange' : r === 'ok' ? 'green' : 'default'
@@ -518,10 +524,29 @@ const refreshAgentStatus = async () => {
 }
 
 const resetDefense = () => {
-  checkDefs.forEach(d => { checks[d.kind].findings = []; checks[d.kind].at = ''; checks[d.kind].loading = false })
+  checkDefs.forEach(d => {
+    checks[d.kind].findings = []; checks[d.kind].at = ''; checks[d.kind].error = ''; checks[d.kind].loading = false
+  })
   findFilter.value = ''
   fw.value = null
   banIp.value = ''
+}
+
+// 读取后端落库的最近检查结果：刷新页面/切换主机后仍显示上次状态。
+const loadChecks = async (hostId = current.value?.id) => {
+  if (!hostId || current.value?.local) return
+  try {
+    const r = await getQuiet<any>(`/api/hosts/${hostId}/checks`)
+    if (current.value?.id !== hostId) return
+    checkDefs.forEach(d => {
+      const c = r?.[d.kind]
+      checks[d.kind].at = c?.checkedAt || ''
+      checks[d.kind].error = c?.error || ''
+      checks[d.kind].findings = c?.result?.findings || []
+    })
+  } catch {
+    // 读取失败不阻塞页面；保留当前内存态，下一轮切换/刷新再试。
+  }
 }
 const select = async (h: any) => {
   current.value = h
@@ -530,6 +555,7 @@ const select = async (h: any) => {
   edit.group = h.group || ''
   resetDefense()
   await loadDetail()
+  if (!h.local) loadChecks(h.id)
 }
 
 // 概览轮询：只刷新指标/端口/在线态，不清空已有数据，避免每次刷新闪一下
@@ -568,6 +594,8 @@ const pollNow = async () => {
   try {
     try { await load() } catch { /* 网络抖动不影响下一轮 */ }
     await loadMetrics()
+    // 防御页跟随轮询拉取最近检查：后台定时检查出结果后无需手动刷新页面
+    if (tab.value === 'defense') await loadChecks()
   } finally { pollBusy = false }
 }
 
@@ -656,10 +684,17 @@ const runCheck = async (kind: string, silent = false, hostId = current.value?.id
     if (current.value?.id !== hostId) return false
     checks[kind].findings = r.result?.findings || []
     checks[kind].at = new Date().toISOString()
+    checks[kind].error = ''
     if (!silent) message.success(`${def?.title || kind}检查完成`)
     return true
   } catch (e: any) {
-    message.error(e?.response?.data?.error || `${def?.title || kind}检查失败`)
+    const msg = e?.response?.data?.error || `${def?.title || kind}检查失败`
+    if (current.value?.id === hostId) {
+      checks[kind].at = new Date().toISOString()
+      checks[kind].error = msg
+      checks[kind].findings = []
+    }
+    message.error(msg)
     return false
   } finally { if (current.value?.id === hostId) checks[kind].loading = false }
 }
@@ -782,7 +817,12 @@ onUnmounted(() => {
   mq.removeEventListener('change', syncNarrow)
 })
 watch(() => current.value?.id, () => loadDetail())
-watch(tab, (v) => { if (v === 'defense' && canCheck.value) refreshFirewall() })
+watch(tab, (v) => {
+  if (v === 'defense') {
+    loadChecks()
+    if (canCheck.value) refreshFirewall()
+  }
+})
 </script>
 
 <style scoped>
@@ -811,9 +851,17 @@ watch(tab, (v) => { if (v === 'defense' && canCheck.value) refreshFirewall() })
 .dh-title { font-size: 16px; font-weight: 600; color: var(--color-ink); }
 .dh-sub { font-size: 12px; color: var(--color-slate); margin-top: 2px; }
 .detail-tabs { flex: 1; min-height: 0; padding: 0 16px; display: flex; flex-direction: column; }
-.detail-tabs :deep(.ant-tabs-content-holder) { overflow-y: auto; }
+/* 让 tabs 内容区成为可伸缩容器，终端 tab 才能填满卡片剩余高度（而不是固定 62vh 后留白） */
+.detail-tabs :deep(.ant-tabs-content-holder) {
+  overflow-y: auto; display: flex; flex-direction: column; min-height: 0;
+}
+.detail-tabs :deep(.ant-tabs-content) { flex: 1; min-height: 0; }
+.detail-tabs :deep(.ant-tabs-tabpane) { height: 100%; }
 .pane { padding: 4px 2px 16px; }
-.term-pane { height: clamp(380px, 62vh, 760px); display: flex; padding: 2px 2px 12px; }
+.term-pane {
+  height: 100%; min-height: clamp(380px, 62vh, 760px); box-sizing: border-box;
+  display: flex; padding: 2px 2px 12px;
+}
 .term-pane > * { flex: 1; min-height: 0; min-width: 0; }
 .stat { height: 86px; }
 .stat-label { font-size: 12px; color: var(--color-slate); }
@@ -842,7 +890,7 @@ watch(tab, (v) => { if (v === 'defense' && canCheck.value) refreshFirewall() })
 .def-name { font-size: 13px; font-weight: 600; color: var(--color-ink); }
 .def-desc { font-size: 12px; line-height: 1.5; color: var(--color-slate); min-height: 36px; }
 .def-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: auto; }
-.def-foot .hint { margin-top: 0; }
+.def-foot .hint { margin-top: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .def-result { margin-top: 12px; }
 .def-fw { margin-top: 12px; }
 .fw-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--color-ink); }
@@ -870,6 +918,8 @@ watch(tab, (v) => { if (v === 'defense' && canCheck.value) refreshFirewall() })
   .dh-sub { font-size: 11px; overflow-wrap: anywhere; }
   .dh-actions { width: 100%; flex-wrap: wrap; }
   .detail-tabs { padding: 0 12px; }
+  /* 窄屏详情卡不再有固定高度：终端回落到视口高度，避免被 flex 高度链拉成长条 */
+  .term-pane { height: clamp(360px, 62vh, 640px); min-height: 0; }
   .defense-head { flex-direction: column; align-items: stretch; }
   .def-desc { min-height: 0; }
   .def-filter { margin-top: 4px; }

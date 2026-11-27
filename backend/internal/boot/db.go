@@ -35,7 +35,7 @@ func OpenDB(cfg *pkg.Config) (*gorm.DB, error) {
 	// 导致 /api/sites 等读取接口 500。
 	repairLegacyComposeIDs(db)
 	if err := db.AutoMigrate(
-		&model.User{}, &model.Setting{}, &model.ApiKey{}, &model.SshHost{}, &model.AgentCommand{},
+		&model.User{}, &model.Setting{}, &model.ApiKey{}, &model.SshHost{}, &model.AgentCommand{}, &model.HostCheck{},
 		&model.Site{}, &model.ComposeProject{},
 		&model.AcmeAccount{}, &model.DnsCredential{}, &model.CertTask{}, &model.CertInfo{}, &model.CertRun{},
 		&model.PluginRecord{}, &model.PluginSetting{}, &model.MetricSample{}, &model.AuditLog{},

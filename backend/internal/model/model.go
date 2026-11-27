@@ -71,6 +71,18 @@ type AgentCommand struct {
 	AckedAt   *time.Time `json:"ackedAt"`
 }
 
+// HostCheck 主机防御检查的最近结果（按主机 + 检查类型唯一），
+// 页面刷新/面板重启后仍能展示上一次检查，而不是退回「未检查」。
+type HostCheck struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	HostID    uint      `gorm:"uniqueIndex:idx_host_check" json:"hostId"`
+	Kind      string    `gorm:"size:32;uniqueIndex:idx_host_check" json:"kind"`
+	CheckedAt time.Time `json:"checkedAt"`
+	OK        bool      `json:"ok"`
+	Result    string    `gorm:"type:text" json:"result"` // Agent 返回的 JSON
+	Error     string    `gorm:"type:text" json:"error"`
+}
+
 // QuickCmd 终端页常用命令（点击即发送到当前 SSH 会话执行）。
 type QuickCmd struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`

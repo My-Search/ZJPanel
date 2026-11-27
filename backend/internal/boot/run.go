@@ -138,6 +138,8 @@ func Run() {
 	// 主机 Agent 控制面：反向 WS 注册表 + token + 指令队列。
 	agentSvc := agent.New(cfg, db, box, hub)
 	agentSvc.EnsureLocalHost()
+	// 防御检查定时跑并落库：即使没人打开页面，刷新后也有最近一次的审计结果。
+	agentSvc.StartAuditScheduler(6 * time.Hour)
 
 	// 证书管线（certd 式）
 	cronSvc := newCronWrap()
