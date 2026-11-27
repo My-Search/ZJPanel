@@ -125,9 +125,9 @@ func RegisterBuiltins(r *TargetRegistry, cfg *pkg.Config, reloadFn func() (strin
 	r.Register(&TargetDef{
 		Type: "ssh_upload", Title: "上传到 SSH 主机",
 		Fields: []certdns.FieldDef{
-			{Key: "hostId", Title: "SSH 主机", Type: "select", OptionsSource: "hosts", Required: true, Help: "选择「主机」中已配置 SSH 凭据的主机；证书经 SFTP 上传到该主机"},
-			{Key: "certPath", Title: "证书（公钥 fullchain）远程路径", Type: "text", Default: "/etc/nginx/ssl/fullchain.pem", Help: "远程主机上证书文件的完整路径，上级目录不存在会自动创建"},
-			{Key: "keyPath", Title: "私钥远程路径", Type: "text", Default: "/etc/nginx/ssl/privkey.pem", Help: "远程主机上私钥文件的完整路径，上传后建议权限 600"},
+			{Key: "hostId", Title: "SSH 主机", Type: "select", OptionsSource: "hosts", Required: true, Help: "仅显示「主机」页中配置了 SSH 密码/私钥的主机；证书经 SFTP 上传到该主机。内置本机请改用「部署到本机 Nginx 站点」"},
+			{Key: "certPath", Title: "证书（公钥 fullchain）远程路径", Type: "text", Default: "/etc/nginx/ssl/{domain}/fullchain.pem", Help: "远程主机上证书文件的完整路径，{domain} 自动替换为证书主域名；上级目录不存在会自动创建"},
+			{Key: "keyPath", Title: "私钥远程路径", Type: "text", Default: "/etc/nginx/ssl/{domain}/privkey.pem", Help: "远程主机上私钥文件的完整路径，{domain} 自动替换为证书主域名；上传后建议权限 600"},
 			{Key: "preScript", Title: "上传前命令（可选）", Type: "textarea", Help: "上传证书前在目标主机执行，可用环境变量 CERT_DOMAIN / CERT_PATH / CERT_KEY_PATH"},
 			{Key: "postScript", Title: "上传后命令（如 nginx -s reload）", Type: "textarea", Default: "nginx -s reload", Help: "上传完成后在目标主机执行，常用于重载 Web 服务"},
 		},
@@ -142,8 +142,10 @@ func RegisterBuiltins(r *TargetRegistry, cfg *pkg.Config, reloadFn func() (strin
 				return "", err
 			}
 			defer client.Close()
-			certPath := strOr(str2str(args.Config["certPath"]), "/etc/nginx/ssl/fullchain.pem")
-			keyPath := strOr(str2str(args.Config["keyPath"]), "/etc/nginx/ssl/privkey.pem")
+			certPath := strOr(str2str(args.Config["certPath"]), defaultCertPath(args.Domains, "fullchain.pem"))
+			keyPath := strOr(str2str(args.Config["keyPath"]), defaultCertPath(args.Domains, "privkey.pem"))
+			certPath = applyDomainPlaceholder(certPath, args.Domains)
+			keyPath = applyDomainPlaceholder(keyPath, args.Domains)
 			envs := []string{
 				"CERT_DOMAIN=" + strings.Join(args.Domains, ","),
 				"CERT_PATH=" + certPath,
@@ -261,6 +263,26 @@ func mainDomain(domains []string) string {
 		return strings.TrimPrefix(domains[0], "*.")
 	}
 	return ""
+}
+
+// defaultCertPath 远程证书/私钥的默认路径：/etc/nginx/ssl/<主域名>/<文件名>。
+// 与内置 nginx_site 的 <NginxPrefix>/ssl/<域名>/ 目录约定保持一致。
+func defaultCertPath(domains []string, name string) string {
+	domain := strings.TrimSpace(mainDomain(domains))
+	if domain == "" {
+		return "/etc/nginx/ssl/" + name
+	}
+	return "/etc/nginx/ssl/" + domain + "/" + name
+}
+
+// applyDomainPlaceholder 把前端展示用默认值里的 {domain} 替换为证书主域名。
+// 直接调用 API 建任务时也兼容该占位符，避免把字面量写进远程路径。
+func applyDomainPlaceholder(path string, domains []string) string {
+	domain := strings.TrimSpace(mainDomain(domains))
+	if domain == "" || !strings.Contains(path, "{domain}") {
+		return path
+	}
+	return strings.ReplaceAll(path, "{domain}", domain)
 }
 
 func str2str(v any) string {

@@ -46,6 +46,9 @@ func OpenDB(cfg *pkg.Config) (*gorm.DB, error) {
 	// AutoMigrate 可能把历史 TEXT 列重建为 integer（数据原样搬运），再兜底清洗一次；
 	// 同时覆盖旧库该列 NOT NULL 时前置清洗失败、迁移放宽约束后的情况。
 	repairLegacyComposeIDs(db)
+	// 旧库没有 local 列时，AutoMigrate 加列后历史主机该值为 NULL；
+	// 而 /api/ssh/hosts 用 `local = false` 过滤，会把老主机全部漏掉（主机页却能看到）。
+	migrateSSHHostLocal(db)
 	seedQuickCmds(db)
 	migrateQuickCmdColors(db)
 	slog.Info("数据库就绪", "path", cfg.DataDir+"/zjpanel.db")
@@ -109,6 +112,23 @@ func repairLegacyIDColumn(db *gorm.DB, table, column string) error {
 			"cleared", res.RowsAffected, "normalized", norm.RowsAffected)
 	}
 	return nil
+}
+
+// migrateSSHHostLocal 把历史主机的 local 归一为 0（非内置本机）。
+// 旧版本还没有 local 列，SQLite 加列后旧行是 NULL；而 SSH 清单按 local=false 过滤，
+// 这些主机在「主机」页可见、在证书部署/终端等 SSH 下拉里却消失。
+func migrateSSHHostLocal(db *gorm.DB) {
+	if !db.Migrator().HasTable("ssh_hosts") || !db.Migrator().HasColumn("ssh_hosts", "local") {
+		return
+	}
+	res := db.Exec("UPDATE ssh_hosts SET local = 0 WHERE local IS NULL")
+	if res.Error != nil {
+		slog.Warn("历史主机 local 字段修复失败", "err", res.Error)
+		return
+	}
+	if res.RowsAffected > 0 {
+		slog.Info("历史主机 local 字段已修复", "rows", res.RowsAffected)
+	}
 }
 
 // seedQuickCmds 首次启动预置一组常用命令（终端页一键执行）。

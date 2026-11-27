@@ -204,13 +204,19 @@
                   v-else-if="f.type === 'select'"
                   v-model:value="dt.config[f.key]"
                   :options="fieldOptions(f)"
-                  :placeholder="f.default || ('请选择' + f.title)"
+                  :placeholder="fieldPlaceholder(f)"
                   :show-search="f.optionsSource === 'hosts'"
                   :filter-option="filterHostOption"
+                  :disabled="f.optionsSource === 'hosts' && !sshHosts.length"
                   allow-clear
                   style="width: 100%"
                 />
                 <a-input v-else v-model:value="dt.config[f.key]" :placeholder="f.default" />
+                <div v-if="f.optionsSource === 'hosts' && !sshHosts.length" class="host-empty">
+                  <span>{{ hostsError || '暂无可用的 SSH 主机：请先到「主机」页添加主机，且必须已配置 SSH 密码或私钥。内置「本机」不在此列，本机部署请选择上方「部署到本机 Nginx 站点」。' }}</span>
+                  <a-button size="small" type="link" :loading="hostsLoading" @click="refreshHosts">刷新</a-button>
+                  <a-button size="small" type="link" @click="goHosts">去添加主机</a-button>
+                </div>
               </a-form-item>
             </a-form>
           </div>
@@ -306,11 +312,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onActivated, onDeactivated, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onActivated, onDeactivated, onUnmounted, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
+import { useRouter } from 'vue-router'
 import { get, getQuiet, post, del, wsTopic, fmtTime } from '../api'
 import { PlusOutlined } from '@ant-design/icons-vue'
 import DomainInput from '../components/DomainInput.vue'
+
+const router = useRouter()
 
 const tab = ref('tasks')
 const step = ref(0)
@@ -327,6 +336,8 @@ const providers = ref<any[]>([])
 const targets = ref<any[]>([])
 // 可 SSH 主机清单（证书 SSH 部署 / 远程脚本目标的下拉数据源，来自 /api/ssh/hosts，已排除内置本机）
 const sshHosts = ref<any[]>([])
+const hostsLoading = ref(false)
+const hostsError = ref('')
 
 const quickAcctOpen = ref(false)
 const quickAcct = ref<any>({})
@@ -395,16 +406,49 @@ const providerDef = (name: string) => providers.value.find(p => p.name === name)
 const targetDef = (type: string) => targets.value.find(t => t.type === type)
 const targetTitle = (type: string) => targets.value.find(t => t.type === type)?.title || type
 
+// 证书主域名：优先第一个非通配符域名，用于远程证书路径默认值
+const primaryDomain = computed(() => {
+  const list = (wiz.value?.domains || []).map((d: any) => String(d).trim()).filter(Boolean)
+  const normal = list.find((d: string) => !d.startsWith('*.'))
+  return (normal || list[0] || '').replace(/^\*\./, '')
+})
+
+// 后端默认值里用 {domain} 占位，新建目标时替换成当前申请的主域名；
+// 域名还没填时用 example.com 提示用户，后续修改域名会自动跟着换路径。
+const fillDomain = (s: string) => String(s).replaceAll('{domain}', primaryDomain.value || 'example.com')
+
 // 新建/切换部署目标时预填后端声明的默认值（如 SSH 证书路径、nginx -s reload），
 // 字段直接可见，不需要用户猜默认值是什么。
 const defaultTargetConfig = (type: string) => {
   const cfg: any = {}
   for (const f of targetDef(type)?.fields || []) {
-    if (f.default) cfg[f.key] = f.default
+    if (f.default) cfg[f.key] = fillDomain(f.default)
+  }
+  // 只有一台可用 SSH 主机时直接选中，避免用户以为下拉坏了
+  if (type === 'ssh_upload' && sshHosts.value.length === 1) {
+    cfg.hostId = String(sshHosts.value[0].id)
   }
   return cfg
 }
 const newTarget = (type: string) => ({ type, config: defaultTargetConfig(type) })
+
+// 修改申请域名后，同步仍停留在旧域名默认值上的远程证书路径（手动改过的不动）
+watch(primaryDomain, (newDomain, oldDomain) => {
+  if (!newDomain || newDomain === oldDomain) return
+  const oldExp = oldDomain || 'example.com'
+  for (const dt of wiz.value?.deployTargets || []) {
+    if (dt.type !== 'ssh_upload') continue
+    for (const key of ['certPath', 'keyPath']) {
+      const cur = dt.config?.[key]
+      if (typeof cur !== 'string' || !cur) continue
+      if (cur.includes('{domain}')) dt.config[key] = cur.replaceAll('{domain}', newDomain)
+      else {
+        const oldPath = `/etc/nginx/ssl/${oldExp}/`
+        if (cur.includes(oldPath)) dt.config[key] = cur.replace(oldPath, `/etc/nginx/ssl/${newDomain}/`)
+      }
+    }
+  }
+})
 
 // 动态字段下拉选项：optionsSource=hosts 时用已加载的 SSH 主机清单，否则用后端静态 options。
 // value 统一用字符串 ID，保证提交到后端的 hostId 是 string（后端 anyToUint 也兼容数字）。
@@ -416,6 +460,41 @@ const fieldOptions = (f: any) => {
     }))
   }
   return f?.options || []
+}
+const fieldPlaceholder = (f: any) => {
+  if (f?.optionsSource === 'hosts' && !sshHosts.value.length) {
+    return hostsError.value ? '主机列表加载失败' : '暂无可用的 SSH 主机'
+  }
+  return f?.default || ('请选择' + f.title)
+}
+
+const refreshHosts = async () => {
+  hostsLoading.value = true
+  try {
+    const list = await getQuiet<any[]>('/api/ssh/hosts')
+    sshHosts.value = Array.isArray(list) ? list : []
+    hostsError.value = ''
+  } catch {
+    hostsError.value = 'SSH 主机列表加载失败，点击刷新重试'
+  } finally {
+    hostsLoading.value = false
+  }
+}
+
+// 只有一台主机时帮用户补选，已有选择绝不覆盖
+const ensureHostSelection = () => {
+  if (sshHosts.value.length !== 1) return
+  const hostId = String(sshHosts.value[0].id)
+  for (const dt of wiz.value?.deployTargets || []) {
+    if (dt.type !== 'ssh_upload') continue
+    if (!dt.config) dt.config = {}
+    if (!dt.config.hostId) dt.config.hostId = hostId
+  }
+}
+
+const goHosts = () => {
+  wizOpen.value = false
+  router.push('/hosts')
 }
 // 主机下拉支持按名称 / 地址 / 用户名模糊搜索
 const filterHostOption = (input: string, option: any) =>
@@ -449,7 +528,12 @@ const loadAll = async () => {
   if (credsR.status === 'fulfilled') credentials.value = credsR.value || []
   if (provR.status === 'fulfilled') providers.value = provR.value || []
   if (targetsR.status === 'fulfilled') targets.value = targetsR.value || []
-  if (hostsR.status === 'fulfilled') sshHosts.value = hostsR.value || []
+  if (hostsR.status === 'fulfilled') {
+    sshHosts.value = hostsR.value || []
+    hostsError.value = ''
+  } else if (!sshHosts.value.length) {
+    hostsError.value = 'SSH 主机列表加载失败，点击刷新重试'
+  }
   const failed = [infosR, tasksR, runsR, acctsR, credsR, provR, targetsR].filter(r => r.status === 'rejected').length
   if (failed) message.error(`证书数据 ${failed} 项加载失败，请稍后重试`)
 }
@@ -468,6 +552,8 @@ const openWizard = (t?: any) => {
   }
   step.value = 0
   wizOpen.value = true
+  // 每次打开都刷新主机清单：用户可能刚在「主机」页加完机器，不能依赖上次加载的旧列表
+  refreshHosts().then(ensureHostSelection)
 }
 
 const nextStep = async () => {
@@ -479,6 +565,10 @@ const nextStep = async () => {
     message.warning('DNS-01 需要选择 DNS 凭证'); return
   }
   step.value++
+  if (step.value === 2) {
+    // 进入部署步骤时再刷一次主机清单，并给唯一的 SSH 主机补上默认选择
+    refreshHosts().then(ensureHostSelection)
+  }
 }
 
 const saveWizard = async () => {
@@ -624,5 +714,8 @@ onUnmounted(() => { stopRunWs?.(); stopRunPoll() })
 .provider-name { font-size: 11px; color: var(--color-slate); }
 .target-card { border: 1px dashed var(--border-input); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
 .target-head { display: flex; justify-content: space-between; margin-bottom: 10px; }
+/* 主机下拉的空状态：说明为什么为空，并给出刷新 / 去主机页的出口 */
+.host-empty { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 4px; font-size: 12px; line-height: 1.6; color: var(--color-slate); }
+.host-empty span { flex: 1 1 100%; }
 .runlog { max-height: 420px; overflow: auto; background: var(--surface-canvas); color: var(--color-ink); padding: 12px; font-size: 12px; white-space: pre-wrap; border: 1px solid var(--border-card); border-radius: 8px; font-family: ui-monospace, Consolas, monospace; }
 </style>

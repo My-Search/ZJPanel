@@ -148,3 +148,51 @@ func TestOpenDBRepairsLegacyTextColumn(t *testing.T) {
 		t.Errorf("AutoMigrate 未把 TEXT 列改回 integer，当前为 %q", colType)
 	}
 }
+
+// TestMigrateSSHHostLocalFixesLegacyNull 复现旧库升级：local 列是后加的，
+// 历史主机该值为 NULL，/api/ssh/hosts 的 local=false 过滤会把它们全部漏掉。
+func TestMigrateSSHHostLocalFixesLegacyNull(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:ssh_host_local?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("打开测试库失败: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("获取 sql.DB 失败: %v", err)
+	}
+	sqlDB.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := db.AutoMigrate(&model.SshHost{}); err != nil {
+		t.Fatalf("建表失败: %v", err)
+	}
+	for _, row := range []struct {
+		name  string
+		local any
+	}{
+		{"legacy", nil}, {"remote", 0}, {"builtin-local", 1},
+	} {
+		if err := db.Exec(
+			"INSERT INTO ssh_hosts (name, host, port, username, auth_type, local) VALUES (?, '10.0.0.1', 22, 'root', 'password', ?)",
+			row.name, row.local,
+		).Error; err != nil {
+			t.Fatalf("写入主机失败: %v", err)
+		}
+	}
+
+	migrateSSHHostLocal(db)
+
+	var hosts []model.SshHost
+	if err := db.Where("local = ? OR local IS NULL", false).Order("id").Find(&hosts).Error; err != nil {
+		t.Fatalf("读取 SSH 主机失败: %v", err)
+	}
+	if len(hosts) != 2 || hosts[0].Name != "legacy" || hosts[1].Name != "remote" {
+		t.Fatalf("历史主机未被修复: %+v", hosts)
+	}
+	var nullCount int64
+	if err := db.Raw("SELECT COUNT(*) FROM ssh_hosts WHERE local IS NULL").Scan(&nullCount).Error; err != nil {
+		t.Fatalf("统计 NULL 失败: %v", err)
+	}
+	if nullCount != 0 {
+		t.Errorf("仍有 %d 行 local 为 NULL", nullCount)
+	}
+}

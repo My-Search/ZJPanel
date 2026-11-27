@@ -502,8 +502,9 @@ func (s *Server) registerSshRoutes() {
 	g := s.r.Group("/api/ssh", s.auth.Require())
 	g.GET("/hosts", func(c *gin.Context) {
 		var list []model.SshHost
-		// 内置「本机」只服务主机页的本地 Shell，不进终端页的 SSH 清单（它没有 SSH 凭据）
-		s.db.Where("local = ?", false).Order("id").Find(&list)
+		// 内置「本机」只服务主机页的本地 Shell，不进终端页的 SSH 清单（它没有 SSH 凭据）。
+		// OR local IS NULL 兼容早于 local 列的老库：迁移前这些老主机是 NULL，不能漏掉。
+		s.db.Where("local = ? OR local IS NULL", false).Order("id").Find(&list)
 		items := []map[string]any{}
 		for _, h := range list {
 			items = append(items, map[string]any{

@@ -35,3 +35,19 @@ func TestTargetDefJSONContract(t *testing.T) {
 		t.Fatalf("字段选项来源未正确序列化: %s", raw)
 	}
 }
+
+// 远程证书路径默认值必须带当前申请的主域名；通配符取去掉 *. 后的主域名。
+func TestDefaultCertPathUsesMainDomain(t *testing.T) {
+	if got, want := defaultCertPath([]string{"*.example.com", "api.example.org"}, "fullchain.pem"), "/etc/nginx/ssl/api.example.org/fullchain.pem"; got != want {
+		t.Errorf("默认证书路径 = %q, want %q", got, want)
+	}
+	if got, want := defaultCertPath([]string{"*.example.com"}, "privkey.pem"), "/etc/nginx/ssl/example.com/privkey.pem"; got != want {
+		t.Errorf("通配符默认私钥路径 = %q, want %q", got, want)
+	}
+	if got, want := defaultCertPath(nil, "fullchain.pem"), "/etc/nginx/ssl/fullchain.pem"; got != want {
+		t.Errorf("无域名兜底路径 = %q, want %q", got, want)
+	}
+	if got := applyDomainPlaceholder("/etc/nginx/ssl/{domain}/fullchain.pem", []string{"zj.example.com"}); got != "/etc/nginx/ssl/zj.example.com/fullchain.pem" {
+		t.Errorf("{domain} 未替换: %q", got)
+	}
+}

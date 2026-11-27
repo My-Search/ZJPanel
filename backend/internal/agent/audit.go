@@ -111,7 +111,8 @@ func (s *Service) StartAuditScheduler(every time.Duration) {
 
 func (s *Service) auditAllOnline() {
 	var hosts []model.SshHost
-	if err := s.db.Where("local = ?", false).Find(&hosts).Error; err != nil {
+	// local IS NULL 兼容旧库（加列前的历史主机），否则这些主机会被防御巡检漏掉
+	if err := s.db.Where("local = ? OR local IS NULL", false).Find(&hosts).Error; err != nil {
 		slog.Warn("定时主机防御检查读取主机失败", "err", err)
 		return
 	}
