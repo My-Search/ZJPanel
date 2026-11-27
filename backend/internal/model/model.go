@@ -45,7 +45,7 @@ type SshHost struct {
 	// ---- 主机分组与 Agent 状态 ----
 	Group         string     `gorm:"size:64" json:"group"`
 	Tags          string     `gorm:"size:255" json:"tags"` // 逗号分隔
-	Local         bool       `json:"local"`                // 内置「本机」伪主机：永不卸载、无 SSH
+	Local         bool       `json:"local"`                // 内置「本机」伪主机：永不卸载、无 SSH。注意：旧库加列前的历史行此值为 NULL（启动迁移会归一为 0），新增 SQL 过滤须兼容 `OR local IS NULL`
 	AgentID       string     `gorm:"size:64;index" json:"agentId"`
 	AgentStatus   string     `gorm:"size:16" json:"agentStatus"` // none|pending|online|offline|uninstalled
 	AgentVersion  string     `gorm:"size:32" json:"agentVersion"`
