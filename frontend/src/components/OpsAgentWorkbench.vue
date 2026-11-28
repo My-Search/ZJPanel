@@ -16,6 +16,11 @@
   >
     <template #title>
       <div class="owm-title">
+        <!-- 左栏折叠开关：状态记忆在 localStorage，移动端屏窄默认收起 -->
+        <a-button type="text" class="owm-fold" :title="sideOpen ? '收起会话列表' : '展开会话列表'" @click="toggleSide">
+          <MenuUnfoldOutlined v-if="!sideOpen" />
+          <MenuFoldOutlined v-else />
+        </a-button>
         <span class="owm-logo"><RobotOutlined /></span>
         <span class="owm-name">
           <b>运维Agent</b>
@@ -26,37 +31,43 @@
     </template>
 
     <div class="om-body">
-      <!-- 左栏：会话列表 -->
-      <aside class="om-side">
-        <a-button type="primary" block class="om-new" @click="startNew">
-          <PlusOutlined /> 新会话
-        </a-button>
-        <div class="om-sessions">
-          <div
-            v-for="s in ops.sessions"
-            :key="s.id"
-            class="om-sess"
-            :class="{ on: s.id === ops.currentId, ['st-' + s.status]: true }"
-            @click="ops.selectSession(s.id)"
-          >
-            <div class="om-sess-top">
-              <span class="om-dot" :class="dotClass(s)">
-                <LoadingOutlined v-if="s.status === 'running'" spin />
-              </span>
-              <span class="om-sess-title">{{ s.title || '（无标题）' }}</span>
-              <a-popconfirm title="删除该会话及消息？" @confirm="ops.removeSession(s.id)">
-                <span class="om-sess-del" title="删除会话" @click.stop><DeleteOutlined /></span>
-              </a-popconfirm>
+      <!-- 左栏：会话列表（可折叠；移动端以浮层展开，不挤压聊天列） -->
+      <transition name="om-side">
+        <aside v-if="sideOpen" class="om-side">
+          <a-button type="primary" block class="om-new" @click="startNew">
+            <PlusOutlined /> 新会话
+          </a-button>
+          <div class="om-sessions">
+            <div
+              v-for="s in ops.sessions"
+              :key="s.id"
+              class="om-sess"
+              :class="{ on: s.id === ops.currentId, ['st-' + s.status]: true }"
+              @click="pickSession(s.id)"
+            >
+              <div class="om-sess-top">
+                <span class="om-dot" :class="dotClass(s)">
+                  <LoadingOutlined v-if="s.status === 'running'" spin />
+                </span>
+                <span class="om-sess-title">{{ s.title || '（无标题）' }}</span>
+                <a-popconfirm title="删除该会话及消息？" @confirm="ops.removeSession(s.id)">
+                  <span class="om-sess-del" title="删除会话" @click.stop><DeleteOutlined /></span>
+                </a-popconfirm>
+              </div>
+              <div class="om-sess-meta">
+                <span v-if="sourceLabel(s)" class="om-sess-src">{{ sourceLabel(s) }}</span>
+                <span class="om-sess-st" :class="'tx-' + s.status">{{ statusLabel(s.status) }}</span>
+                <span class="om-sess-time">{{ fmtTime(s.updatedAt) }}</span>
+              </div>
             </div>
-            <div class="om-sess-meta">
-              <span v-if="sourceLabel(s)" class="om-sess-src">{{ sourceLabel(s) }}</span>
-              <span class="om-sess-st" :class="'tx-' + s.status">{{ statusLabel(s.status) }}</span>
-              <span class="om-sess-time">{{ fmtTime(s.updatedAt) }}</span>
-            </div>
+            <div v-if="!ops.sessions.length" class="om-empty">暂无会话</div>
           </div>
-          <div v-if="!ops.sessions.length" class="om-empty">暂无会话</div>
-        </div>
-      </aside>
+        </aside>
+      </transition>
+      <!-- 移动端左栏展开时的遮罩（桌面 display:none），点击收起 -->
+      <transition name="om-mask">
+        <div v-if="sideOpen" class="om-side-mask" @click="sideOpen = false"></div>
+      </transition>
 
       <!-- 右栏：消息流 + 输入（扁平时间线：助手全宽、用户气泡、工具轨迹折叠） -->
       <section class="om-main">
@@ -156,10 +167,10 @@
               </a-select>
             </a-tooltip>
             <a-select
-              v-model:value="hostId"
+              v-model:value="hostSel"
               class="om-host"
               size="small"
-              :placeholder="curSession ? '绑定主机' : '绑定主机（可选）'"
+              :placeholder="curSession ? '未绑定主机' : '绑定主机（可选）'"
               :disabled="!!curSession"
               allow-clear
               :bordered="false"
@@ -194,6 +205,7 @@ import {
   LoadingOutlined, ExclamationCircleOutlined,
   CloseCircleOutlined, DashboardOutlined,
   SafetyOutlined, CloudServerOutlined, CompressOutlined, ArrowDownOutlined,
+  MenuFoldOutlined, MenuUnfoldOutlined,
 } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import { useOpsAgent, OPS_MODE_OPTIONS, opsModeLabel, type OpsSession, type OpsMode } from '../store/opsagent'
@@ -206,18 +218,47 @@ import { isPending, summaryCount, fmtArgs, prettyArgs } from './opsagent/meta'
 
 const ops = useOpsAgent()
 const input = ref('')
-const hostId = ref<number | undefined>(undefined)
-const newMode = ref<OpsMode>('observe') // 新会话的防御模式（发送时随会话创建落库）
+// 新会话的草稿选择（防御模式/绑定主机）：localStorage 持久化，页面刷新后重开仍能回显上次所选
+const DRAFT_KEY = 'zj.opsagent.composer'
+const draft = (() => {
+  try { return JSON.parse(localStorage.getItem(DRAFT_KEY) || '{}') as { mode?: OpsMode; host?: number } } catch { return {} }
+})()
+const hostId = ref<number | undefined>(draft.host && draft.host > 0 ? draft.host : undefined)
+const newMode = ref<OpsMode>(OPS_MODE_OPTIONS.some(o => o.value === draft.mode) ? (draft.mode as OpsMode) : 'observe') // 新会话的防御模式（发送时随会话创建落库）
+watch([newMode, hostId], () => {
+  localStorage.setItem(DRAFT_KEY, JSON.stringify({ mode: newMode.value, host: hostId.value ?? 0 }))
+})
 const hosts = ref<{ id: number; name: string }[]>([])
 const sending = ref(false)
 const taRef = ref<HTMLTextAreaElement | null>(null)
 const isMobile = ref(window.innerWidth < 768)
 const composerFocus = ref(false)
 
+// 左栏会话列表折叠：桌面记忆用户选择（localStorage），无记录时默认展开；
+// 移动端展开即浮层遮罩挡住聊天，不随记忆自动展开，每次打开默认收起
+const SIDE_KEY = 'zj.opsagent.side'
+const savedSide = localStorage.getItem(SIDE_KEY)
+const sideOpen = ref(!isMobile.value && (savedSide == null || savedSide === '1'))
+const toggleSide = () => {
+  sideOpen.value = !sideOpen.value
+  localStorage.setItem(SIDE_KEY, sideOpen.value ? '1' : '0')
+}
+// 移动端左栏是浮层：选中/新建会话后自动收起，把整幅留给聊天列
+const pickSession = (id: number) => {
+  ops.selectSession(id)
+  if (isMobile.value) sideOpen.value = false
+}
+
 // 时间线滚动（底部锚定状态机）与回合投影
 const { setScrollEl, showBackToBottom, onContentChanged, resetToBottom } = useTimelineScroll()
 
 const curSession = computed(() => ops.sessions.find(s => s.id === ops.currentId) || null)
+// 绑定主机回显：选中会话时只读展示该会话绑定的主机（数据在会话上，此前的草稿 ref 看不到它）；
+// 未选会话时是待创建会话的草稿选择
+const hostSel = computed<number | undefined>({
+  get: () => (curSession.value ? curSession.value.hostId ?? undefined : hostId.value),
+  set: v => { hostId.value = v },
+})
 const curMessages = computed(() => (ops.currentId != null ? ops.messages[ops.currentId] || [] : []))
 const curError = computed(() => curSession.value?.error || '')
 const projection = useConversationTurns(
@@ -283,6 +324,7 @@ const fillExample = (t: string) => {
 // 新会话：回到空态引导页并聚焦输入框（输入区常驻，发送即创建会话）
 const startNew = () => {
   ops.selectSession(null)
+  if (isMobile.value) sideOpen.value = false
   nextTick(() => taRef.value?.focus())
 }
 
@@ -345,7 +387,7 @@ onUnmounted(() => { stopWs(); window.removeEventListener('resize', onResize) })
 .ops-btn { padding: 0 8px; font-size: 15px; }
 
 /* ---- 主体布局 ---- */
-.om-body { display: flex; height: min(70vh, 640px); background: var(--surface-card, transparent); }
+.om-body { display: flex; height: min(70vh, 640px); background: var(--surface-card, transparent); position: relative; }
 
 /* ---- 左栏会话列表 ---- */
 .om-side {
@@ -387,6 +429,8 @@ onUnmounted(() => { stopWs(); window.removeEventListener('resize', onResize) })
 .om-sess-src { font-size: 10.5px; color: var(--color-slate); background: rgba(128,128,128,.14); border-radius: 4px; padding: 0 5px; }
 .om-sess-time { font-size: 11px; color: var(--color-slate); }
 .om-empty { text-align: center; color: var(--color-slate); font-size: 12px; padding: 28px 0; }
+/* 左栏折叠遮罩：仅移动端浮层模式下显示（桌面隐藏） */
+.om-side-mask { display: none; }
 
 /* ---- 右栏 ---- */
 .om-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -497,7 +541,23 @@ html[data-theme='dark'] .om-confirm-title { color: #fbbf24; }
   .om-msgs { padding: 12px 10px 6px; }
   .om-hint { display: none; }
   .om-host { min-width: 140px; }
+  /* 移动端左栏改为浮层：展开时不挤压聊天列，遮罩点击收起；铺不透明底防止聊天文字透出 */
+  .om-body > .om-side {
+    position: absolute; left: 0; top: 0; bottom: 0; z-index: 11;
+    background: var(--surface-card, #1f1f1f);
+    box-shadow: 8px 0 24px rgba(0, 0, 0, .28);
+  }
+  .om-side-mask { display: block; position: absolute; inset: 0; z-index: 10; background: rgba(0, 0, 0, .4); }
 }
+
+/* 左栏展开/收起过渡：宽度收缩 + 左移淡出（须置于 media 块之后，收起态宽度才能盖过默认宽度） */
+.om-side-enter-active, .om-side-leave-active {
+  transition: width .18s ease, transform .18s ease, opacity .18s ease;
+  overflow: hidden;
+}
+.om-side-enter-from, .om-side-leave-to { width: 0; opacity: 0; transform: translateX(-16px); }
+.om-mask-enter-active, .om-mask-leave-active { transition: opacity .18s ease; }
+.om-mask-enter-from, .om-mask-leave-to { opacity: 0; }
 </style>
 
 <style>
@@ -512,13 +572,16 @@ html[data-theme='dark'] .om-confirm-title { color: #fbbf24; }
 }
 .ops-workbench .ant-modal-close { top: 14px; right: 16px; }
 .owm-title { display: flex; align-items: center; gap: 11px; padding-right: 34px; }
+/* 左栏折叠开关（标题栏最左）：常驻可见，收起后靠它展开 */
+.owm-fold { flex-shrink: 0; padding: 0 6px; font-size: 15px; color: var(--color-slate, #999); }
 .owm-logo {
+  flex-shrink: 0;
   width: 36px; height: 36px; border-radius: 10px; display: inline-grid; place-items: center;
   font-size: 18px; color: #fff; background: linear-gradient(135deg, #1677ff, #6a5cff);
   box-shadow: 0 6px 16px rgba(22,119,255,.3);
 }
-.owm-name { display: flex; flex-direction: column; gap: 1px; line-height: 1.3; }
+.owm-name { display: flex; flex-direction: column; gap: 1px; line-height: 1.3; min-width: 0; }
 .owm-name b { font-size: 15px; color: var(--color-ink, #fff); }
-.owm-name small { font-size: 11px; font-weight: 400; color: var(--color-slate, #999); }
-.owm-mode { margin-left: auto !important; }
+.owm-name small { font-size: 11px; font-weight: 400; color: var(--color-slate, #999); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.owm-mode { margin-left: auto !important; flex-shrink: 0; }
 </style>

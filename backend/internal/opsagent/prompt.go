@@ -151,17 +151,23 @@ func eventTitle(topic string, payload map[string]any) string {
 // renderInspect 把巡检任务渲染成首条会话指令。
 func renderInspect(task InspectTask) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "【定时巡检】%s\n请按以下巡检项逐项检查（括号内为建议工具）：\n", task.Name)
-	catalog := map[string]InspectItem{}
-	for _, it := range InspectCatalog {
-		catalog[it.Key] = it
-	}
-	for _, key := range task.Items {
-		it, ok := catalog[key]
-		if !ok {
-			continue
+	fmt.Fprintf(&b, "【定时巡检】%s\n", task.Name)
+	if len(task.Items) > 0 {
+		b.WriteString("请按以下巡检项逐项检查（括号内为建议工具）：\n")
+		catalog := map[string]InspectItem{}
+		for _, it := range InspectCatalog {
+			catalog[it.Key] = it
 		}
-		fmt.Fprintf(&b, "- %s（%s）\n", it.Title, it.Hint)
+		for _, key := range task.Items {
+			it, ok := catalog[key]
+			if !ok {
+				continue
+			}
+			fmt.Fprintf(&b, "- %s（%s）\n", it.Title, it.Hint)
+		}
+	}
+	if custom := strings.TrimSpace(task.CustomPrompt); custom != "" {
+		fmt.Fprintf(&b, "\n自定义巡检指令（额外巡检要求，与巡检项同样执行并给出结论）：\n%s\n", custom)
 	}
 	if task.HostID != nil && *task.HostID > 0 {
 		fmt.Fprintf(&b, "\n本任务绑定主机 #%d：主机类检查项（防御基线/资源水位）只检查这台主机，其他巡检项照常。\n", *task.HostID)

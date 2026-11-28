@@ -58,14 +58,12 @@ watch(pending, (p, old) => {
 
 <style scoped>
 .om-tc {
-  margin: 6px 0 6px 10px; border-left: 3px solid #67c23a; border-radius: 8px;
-  border-top: 1px solid var(--border-card, rgba(128, 128, 128, 0.16));
-  border-right: 1px solid var(--border-card, rgba(128, 128, 128, 0.16));
-  border-bottom: 1px solid var(--border-card, rgba(128, 128, 128, 0.16));
+  margin: 6px 0 6px 10px; border-radius: 8px;
+  border: 1px solid var(--border-card, rgba(128, 128, 128, 0.16));
   background: var(--surface-card, rgba(128, 128, 128, 0.04));
   font-size: 12px; max-width: 720px;
 }
-.om-tc.pending { border-left-color: #f59e0b; }
+.om-tc.pending { border-color: rgba(245, 158, 11, 0.4); }
 .om-tc-head {
   display: flex; align-items: center; gap: 8px; width: 100%; border: none;
   background: transparent; cursor: pointer; padding: 7px 10px; text-align: left; min-width: 0;

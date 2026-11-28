@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/robfig/cron/v3"
 
@@ -34,15 +35,19 @@ type InspectItem struct {
 	Hint  string `json:"hint"`
 }
 
+// maxInspectCustomPrompt 自定义巡检指令长度上限（字数），防止指令膨胀挤占模型上下文。
+const maxInspectCustomPrompt = 2000
+
 // InspectTask 一个巡检任务。
 type InspectTask struct {
-	ID          string   `json:"id"`
-	Name        string   `json:"name"`
-	Cron        string   `json:"cron"`        // 标准 5 段 crontab
-	Items       []string `json:"items"`       // InspectCatalog key 子集
-	HostID      *uint    `json:"hostId"`      // 可选：绑定主机（主机类检查项只巡这一台）
-	DefenseMode string   `json:"defenseMode"` // 巡检会话的防御模式：observe | confirm | auto（空=全局默认）
-	Enabled     bool     `json:"enabled"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Cron         string   `json:"cron"`         // 标准 5 段 crontab
+	Items        []string `json:"items"`        // InspectCatalog key 子集
+	CustomPrompt string   `json:"customPrompt"` // 可选：自定义巡检指令，追加进会话指令（与 Items 至少其一）
+	HostID       *uint    `json:"hostId"`       // 可选：绑定主机（主机类检查项只巡这一台）
+	DefenseMode  string   `json:"defenseMode"`  // 巡检会话的防御模式：observe | confirm | auto（空=全局默认）
+	Enabled      bool     `json:"enabled"`
 }
 
 // InspectView 列表视图：附带下次执行时间。
@@ -99,14 +104,19 @@ func (s *Service) InspectViews() []InspectView {
 func (s *Service) SaveInspect(t InspectTask) error {
 	t.Name = strings.TrimSpace(t.Name)
 	t.Cron = strings.TrimSpace(t.Cron)
+	t.CustomPrompt = strings.TrimSpace(t.CustomPrompt)
 	if t.Name == "" {
 		return fmt.Errorf("任务名称必填")
 	}
 	if _, err := cron.ParseStandard(t.Cron); err != nil {
 		return fmt.Errorf("cron 表达式非法: %v", err)
 	}
-	if len(t.Items) == 0 {
-		return fmt.Errorf("至少勾选一个巡检项")
+	// 固定巡检项与自定义指令满足其一即可（支持纯自定义巡检任务）
+	if len(t.Items) == 0 && t.CustomPrompt == "" {
+		return fmt.Errorf("至少勾选一个巡检项或填写自定义巡检指令")
+	}
+	if utf8.RuneCountInString(t.CustomPrompt) > maxInspectCustomPrompt {
+		return fmt.Errorf("自定义巡检指令过长（最多 %d 字）", maxInspectCustomPrompt)
 	}
 	valid := map[string]bool{}
 	for _, it := range InspectCatalog {

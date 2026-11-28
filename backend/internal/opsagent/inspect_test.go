@@ -1,6 +1,7 @@
 package opsagent
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -43,6 +44,8 @@ func TestSaveInspectValidation(t *testing.T) {
 		{"缺名称", InspectTask{Name: " ", Cron: "0 9 * * *", Items: []string{"security"}, Enabled: true}, true},
 		{"坏 cron", InspectTask{Name: "日常巡检", Cron: "bad", Items: []string{"security"}, Enabled: true}, true},
 		{"空巡检项", InspectTask{Name: "日常巡检", Cron: "0 9 * * *", Items: nil, Enabled: true}, true},
+		{"仅自定义指令", InspectTask{Name: "日常巡检", Cron: "0 9 * * *", Items: nil, CustomPrompt: "检查 nginx 5xx 占比", Enabled: true}, false},
+		{"指令过长", InspectTask{Name: "日常巡检", Cron: "0 9 * * *", Items: []string{"security"}, CustomPrompt: strings.Repeat("长", 2001), Enabled: true}, true},
 		{"未知巡检项", InspectTask{Name: "日常巡检", Cron: "0 9 * * *", Items: []string{"nope"}, Enabled: true}, true},
 		{"坏防御模式", InspectTask{Name: "日常巡检", Cron: "0 9 * * *", Items: []string{"security"}, DefenseMode: "bad", Enabled: true}, true},
 		{"合法", InspectTask{Name: "日常巡检", Cron: "0 9 * * *", Items: []string{"security", "certs"}, Enabled: true}, false},
@@ -54,7 +57,7 @@ func TestSaveInspectValidation(t *testing.T) {
 		}
 	}
 	list := s.loadInspects()
-	if len(list) != 1 || list[0].Name != "日常巡检" {
+	if len(list) != 2 || list[0].Name != "日常巡检" {
 		t.Fatalf("合法任务未保存: %+v", list)
 	}
 	if list[0].ID == "" {
@@ -62,6 +65,9 @@ func TestSaveInspectValidation(t *testing.T) {
 	}
 	if list[0].DefenseMode != ModeObserve {
 		t.Fatalf("未指定防御模式的任务应落到默认 observe，实际 %q", list[0].DefenseMode)
+	}
+	if list[0].CustomPrompt != "检查 nginx 5xx 占比" {
+		t.Fatalf("自定义巡检指令未随任务保存: %q", list[0].CustomPrompt)
 	}
 }
 
@@ -115,6 +121,21 @@ func TestRenderInspect(t *testing.T) {
 	}
 	if !contains(out, "panel_notify") {
 		t.Fatal("巡检指令缺少汇报通知要求")
+	}
+}
+
+func TestRenderInspectCustom(t *testing.T) {
+	out := renderInspect(InspectTask{Name: "自定义巡检", CustomPrompt: "检查 nginx 5xx 占比"})
+	if !contains(out, "自定义巡检指令") || !contains(out, "检查 nginx 5xx 占比") {
+		t.Fatalf("巡检指令缺少自定义指令段: %s", out)
+	}
+	if contains(out, "逐项检查") {
+		t.Fatal("无固定巡检项时不应出现逐项检查头")
+	}
+	// 未填自定义指令的任务不应出现该段
+	out2 := renderInspect(InspectTask{Name: "常规巡检", Items: []string{"security"}})
+	if contains(out2, "自定义巡检指令") || contains(out2, "检查 nginx 5xx 占比") {
+		t.Fatalf("未填自定义指令时不应出现该段: %s", out2)
 	}
 }
 

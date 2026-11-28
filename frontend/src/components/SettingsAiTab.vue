@@ -181,7 +181,7 @@
         <a-input v-model:value="inspectForm.cron" placeholder="0 9 * * *" />
         <p class="ai-hint">5 段标准 crontab。示例：0 9 * * *（每天 9 点）· 0 */6 * * *（每 6 小时）· 30 8 * * 1-5（工作日 8:30）</p>
       </a-form-item>
-      <a-form-item label="巡检项" required>
+      <a-form-item label="巡检项">
         <div class="ai-ev-list">
           <a-checkbox
             v-for="it in inspectCatalog"
@@ -190,6 +190,10 @@
             @change="(ev: any) => toggleItem(it.key, !!ev.target.checked)"
           >{{ it.title }}<span class="ai-ev-topic">{{ it.hint }}</span></a-checkbox>
         </div>
+      </a-form-item>
+      <a-form-item label="自定义巡检指令（可选）">
+        <a-textarea v-model:value="inspectForm.customPrompt" :rows="4" placeholder="如：检查 nginx 日志中 5xx 状态码占比，超过 10% 标记风险" />
+        <p class="ai-hint">作为额外巡检要求写进 Agent 指令，可与固定巡检项搭配；只填此项也能创建纯自定义巡检任务</p>
       </a-form-item>
       <a-form-item label="防御模式">
         <a-select v-model:value="inspectForm.defenseMode" style="width: 100%">
@@ -269,7 +273,7 @@ const saveKB = async () => {
 const hosts = ref<{ id: number; name: string }[]>([])
 const inspectOpen = ref(false)
 const runningId = ref('')
-const inspectForm = ref<InspectTask>({ id: '', name: '', cron: '', items: [], hostId: null, defenseMode: 'observe', enabled: true })
+const inspectForm = ref<InspectTask>({ id: '', name: '', cron: '', items: [], customPrompt: '', hostId: null, defenseMode: 'observe', enabled: true })
 
 const itemTitle = (key: string) => inspectCatalog.value.find(i => i.key === key)?.title || key
 const modeColor = (mode: string) => (({ observe: 'blue', confirm: 'orange', auto: 'red' }) as Record<string, string>)[mode] || 'default'
@@ -280,8 +284,8 @@ const fmtNext = (next: string) => {
 }
 const openInspect = (t: InspectTask | null) => {
   inspectForm.value = t
-    ? { id: t.id, name: t.name, cron: t.cron, items: [...t.items], hostId: t.hostId, defenseMode: t.defenseMode || 'observe', enabled: t.enabled }
-    : { id: '', name: '', cron: '', items: ['security'], hostId: null, defenseMode: 'observe', enabled: true }
+    ? { id: t.id, name: t.name, cron: t.cron, items: [...t.items], customPrompt: t.customPrompt || '', hostId: t.hostId, defenseMode: t.defenseMode || 'observe', enabled: t.enabled }
+    : { id: '', name: '', cron: '', items: ['security'], customPrompt: '', hostId: null, defenseMode: 'observe', enabled: true }
   inspectOpen.value = true
 }
 const toggleItem = (key: string, on: boolean) => {
@@ -293,7 +297,7 @@ const saveInspect = async () => {
   const f = inspectForm.value
   if (!f.name.trim()) { message.warning('任务名称必填'); return }
   if (!f.cron.trim()) { message.warning('cron 表达式必填'); return }
-  if (!f.items.length) { message.warning('至少勾选一个巡检项'); return }
+  if (!f.items.length && !f.customPrompt.trim()) { message.warning('至少勾选一个巡检项或填写自定义巡检指令'); return }
   try {
     await api.saveInspect({ ...f })
     inspectOpen.value = false

@@ -36,7 +36,6 @@ const (
 	wsTopic              = "opsagent"
 	settingLLMKey        = "opsagent.llm"
 	settingAgentKey      = "opsagent.config"
-	maxRounds            = 15     // 单次任务最大 LLM 轮数
 	maxConcurrent        = 5      // 并发 runner 上限
 	maxCtxMessages       = 400    // 送入模型的最大消息条数（安全兜底；常规控制靠上下文压缩）
 	defaultContextTokens = 300000 // 模型上下文窗口默认值（设置页可改）
@@ -440,7 +439,9 @@ func (s *Service) runLoop(id uint, ctx context.Context, run *sessionRun) {
 		delete(s.runs, id)
 		s.mu.Unlock()
 	}()
-	for round := 0; round < maxRounds; round++ {
+	// 不设轮数上限：循环由自然条件终止（模型不再调用工具 / 手动停止 / 出错），
+	// 上下文增长靠阈值压缩 + maxCtxMessages 兜底。
+	for {
 		if ctx.Err() != nil {
 			s.finish(id, "interrupted", "已手动停止")
 			return
@@ -512,10 +513,6 @@ func (s *Service) runLoop(id uint, ctx context.Context, run *sessionRun) {
 			}
 		}
 	}
-	// 轮数耗尽：留痕并结束，用户可继续提问
-	s.addMessage(id, "assistant",
-		fmt.Sprintf("已达单次任务最大工具调用轮数（%d）。以上是目前的进展与结果，请继续提问或拆分任务。", maxRounds), "", "", "")
-	s.finish(id, "idle", "")
 }
 
 // sessionRows 会话的消息行（时间正序，尾部安全截断；压缩与估算共用）。

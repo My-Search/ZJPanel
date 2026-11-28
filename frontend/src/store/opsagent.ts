@@ -51,7 +51,7 @@ export interface OpsMemory { id: number; scope: string; refId: string; key: stri
 export interface OpsKnowledge { id: number; title: string; tags: string; content: string; persistent: boolean; updatedAt: string }
 
 export interface InspectItem { key: string; title: string; hint: string }
-export interface InspectTask { id: string; name: string; cron: string; items: string[]; hostId: number | null; defenseMode: OpsMode; enabled: boolean }
+export interface InspectTask { id: string; name: string; cron: string; items: string[]; customPrompt: string; hostId: number | null; defenseMode: OpsMode; enabled: boolean }
 export interface InspectTaskView extends InspectTask {
   next: string // Go time.Time：零值 = "0001-01-01T00:00:00Z"（未排程）
 }
