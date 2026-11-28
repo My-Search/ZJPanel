@@ -28,7 +28,7 @@
     <div class="om-body">
       <!-- 左栏：会话列表 -->
       <aside class="om-side">
-        <a-button type="primary" block class="om-new" @click="ops.selectSession(null)">
+        <a-button type="primary" block class="om-new" @click="startNew">
           <PlusOutlined /> 新会话
         </a-button>
         <div class="om-sessions">
@@ -60,9 +60,18 @@
 
       <!-- 右栏：消息流 + 输入 -->
       <section class="om-main">
-        <template v-if="ops.currentId == null">
-          <!-- 空态：欢迎页 -->
-          <div class="om-guide">
+        <a-alert
+          v-if="ops.settings && !ops.settings.llm.ready"
+          type="warning"
+          show-icon
+          message="尚未配置模型：请前往「设置 → 智能助手」填写 LLM 地址、API Key 与模型名后再开始对话。"
+          style="margin: 12px 16px 0"
+        />
+        <div v-if="curError" class="om-error"><CloseCircleOutlined /> {{ curError }}</div>
+
+        <div ref="scrollRef" class="om-msgs">
+          <!-- 空态：欢迎页（新会话发送首条消息前显示；输入区始终在下方，发送即创建会话） -->
+          <div v-if="ops.currentId == null" class="om-guide">
             <div class="om-guide-icon"><RobotOutlined /></div>
             <h3>AI 运维智能体</h3>
             <p class="om-guide-sub">描述任务，Agent 会调用面板工具查询与操作，并在授权模式下执行防御动作</p>
@@ -81,19 +90,8 @@
               </div>
             </div>
           </div>
-        </template>
 
-        <template v-else>
-          <a-alert
-            v-if="ops.settings && !ops.settings.llm.ready"
-            type="warning"
-            show-icon
-            message="尚未配置模型：请前往「设置 → 智能助手」填写 LLM 地址、API Key 与模型名后再开始对话。"
-            style="margin: 12px 16px 0"
-          />
-          <div v-if="curError" class="om-error"><CloseCircleOutlined /> {{ curError }}</div>
-
-          <div ref="scrollRef" class="om-msgs">
+          <template v-else>
             <template v-for="m in curMessages" :key="m.id">
               <!-- 事件横幅 -->
               <div v-if="m.role === 'event'" class="om-ev">
@@ -131,57 +129,58 @@
                 </div>
               </div>
             </template>
-          </div>
+          </template>
+        </div>
 
-          <!-- confirm 模式：待确认操作卡片 -->
-          <div v-if="pendingMsg && curSession?.status === 'waiting_confirm'" class="om-confirm">
-            <div class="om-confirm-title"><ExclamationCircleOutlined /> 待确认操作 · 「执行前确认」模式下处置操作需人工放行</div>
-            <div class="om-confirm-tool"><span class="om-tool-name">{{ pendingMsg.toolName }}</span> <span class="om-tool-args">{{ fmtArgs(pendingMsg.toolArgs) }}</span></div>
-            <pre class="om-confirm-args">{{ prettyArgs(pendingMsg.toolArgs) }}</pre>
-            <div class="om-confirm-actions">
-              <a-button size="small" @click="ops.confirm(curSession!.id, false)">拒绝</a-button>
-              <a-button size="small" type="primary" danger @click="ops.confirm(curSession!.id, true)">确认执行</a-button>
-            </div>
+        <!-- confirm 模式：待确认操作卡片 -->
+        <div v-if="pendingMsg && curSession?.status === 'waiting_confirm'" class="om-confirm">
+          <div class="om-confirm-title"><ExclamationCircleOutlined /> 待确认操作 · 「执行前确认」模式下处置操作需人工放行</div>
+          <div class="om-confirm-tool"><span class="om-tool-name">{{ pendingMsg.toolName }}</span> <span class="om-tool-args">{{ fmtArgs(pendingMsg.toolArgs) }}</span></div>
+          <pre class="om-confirm-args">{{ prettyArgs(pendingMsg.toolArgs) }}</pre>
+          <div class="om-confirm-actions">
+            <a-button size="small" @click="ops.confirm(curSession!.id, false)">拒绝</a-button>
+            <a-button size="small" type="primary" danger @click="ops.confirm(curSession!.id, true)">确认执行</a-button>
           </div>
+        </div>
 
-          <!-- 输入区：统一 composer -->
-          <div class="om-composer" :class="{ focused: composerFocus }">
-            <textarea
-              v-model="input"
-              class="om-input"
-              rows="1"
-              placeholder="描述任务，Ctrl+Enter 发送…"
-              @keydown.ctrl.enter.prevent="send"
-              @keydown.meta.enter.prevent="send"
-              @focus="composerFocus = true"
-              @blur="composerFocus = false"
-            ></textarea>
-            <div class="om-composer-bar">
-              <a-select
-                v-model:value="hostId"
-                class="om-host"
-                size="small"
-                :placeholder="curSession ? '绑定主机' : '绑定主机（可选）'"
-                :disabled="!!curSession"
-                allow-clear
-                :bordered="false"
-                :popup-match-select-width="false"
-              >
-                <a-select-option v-for="h in hosts" :key="h.id" :value="h.id">{{ h.name }}</a-select-option>
-              </a-select>
-              <span class="om-kbd">Ctrl + Enter 发送</span>
-              <a-button
-                v-if="curSession && curSession.status === 'running'"
-                size="small" danger
-                @click="ops.stop(curSession.id)"
-              ><PoweroffOutlined /> 停止</a-button>
-              <a-button v-else size="small" type="primary" class="om-send" :loading="sending" :disabled="!input.trim()" @click="send">
-                <template #icon><SendOutlined /></template>
-                发送
-              </a-button>
-            </div>
+        <!-- 输入区：统一 composer（常驻；未选会话时发送即新建会话） -->
+        <div class="om-composer" :class="{ focused: composerFocus }">
+          <textarea
+            ref="taRef"
+            v-model="input"
+            class="om-input"
+            rows="1"
+            placeholder="描述任务，Ctrl+Enter 发送…"
+            @keydown.ctrl.enter.prevent="send"
+            @keydown.meta.enter.prevent="send"
+            @focus="composerFocus = true"
+            @blur="composerFocus = false"
+          ></textarea>
+          <div class="om-composer-bar">
+            <a-select
+              v-model:value="hostId"
+              class="om-host"
+              size="small"
+              :placeholder="curSession ? '绑定主机' : '绑定主机（可选）'"
+              :disabled="!!curSession"
+              allow-clear
+              :bordered="false"
+              :popup-match-select-width="false"
+            >
+              <a-select-option v-for="h in hosts" :key="h.id" :value="h.id">{{ h.name }}</a-select-option>
+            </a-select>
+            <span class="om-kbd">Ctrl + Enter 发送</span>
+            <a-button
+              v-if="curSession && curSession.status === 'running'"
+              size="small" danger
+              @click="ops.stop(curSession.id)"
+            ><PoweroffOutlined /> 停止</a-button>
+            <a-button v-else size="small" type="primary" class="om-send" :loading="sending" :disabled="!input.trim()" @click="send">
+              <template #icon><SendOutlined /></template>
+              发送
+            </a-button>
           </div>
-        </template>
+        </div>
       </section>
     </div>
   </a-modal>
@@ -206,6 +205,7 @@ const hostId = ref<number | undefined>(undefined)
 const hosts = ref<{ id: number; name: string }[]>([])
 const sending = ref(false)
 const scrollRef = ref<HTMLElement | null>(null)
+const taRef = ref<HTMLTextAreaElement | null>(null)
 const isMobile = ref(window.innerWidth < 768)
 const composerFocus = ref(false)
 
@@ -246,7 +246,15 @@ const fmtTime = (t: string) => {
   return `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
-const fillExample = (t: string) => { input.value = t }
+const fillExample = (t: string) => {
+  input.value = t
+  nextTick(() => taRef.value?.focus())
+}
+// 新会话：回到空态引导页并聚焦输入框（输入区常驻，发送即创建会话）
+const startNew = () => {
+  ops.selectSession(null)
+  nextTick(() => taRef.value?.focus())
+}
 
 async function send() {
   const msg = input.value.trim()
