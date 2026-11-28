@@ -167,6 +167,30 @@ func (s *Server) registerBackupRoutes() {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
+	// 备份包加密配置（age；密码 SecretBox 加密落库，回显仅 passwordSet）
+	g.GET("/crypt", func(c *gin.Context) {
+		c.JSON(http.StatusOK, s.Backup.CryptView())
+	})
+
+	g.PUT("/crypt", func(c *gin.Context) {
+		var req backup.CryptConfig
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			return
+		}
+		// 启用加密必须具备可用密码：本次未填则要求此前已设置过。
+		if req.Enabled && strings.TrimSpace(req.Password) == "" && !s.Backup.CryptView().PasswordSet {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "请填写加密密码"})
+			return
+		}
+		if err := s.Backup.SaveCrypt(req); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		s.audit(c, "backup.crypt", fmt.Sprintf("enabled=%v", req.Enabled))
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
 	// 上传本地备份到远程（异步任务）
 	g.POST("/:name/upload-remote", func(c *gin.Context) {
 		name := c.Param("name")

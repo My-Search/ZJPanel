@@ -213,7 +213,7 @@ func (s *Service) jobDone(j *BackupJob) {
 	})
 }
 
-// StartBuild 异步创建备份包。定时触发时串联自动上传与保留清理（见 afterScheduledBuild）。
+// StartBuild 异步创建备份包；打包完成后统一走 afterBuild（自动上传 + 双保留清理）。
 func (s *Service) StartBuild(items []string, trigger string) (*BackupJob, error) {
 	items = NormalizeItems(items)
 	return s.startJob(JobCreate, strings.Join(items, ","), trigger, func(j *BackupJob) error {
@@ -222,10 +222,7 @@ func (s *Service) StartBuild(items []string, trigger string) (*BackupJob, error)
 			return err
 		}
 		j.push(s, fmt.Sprintf("备份完成：%s（%s）", rec.Name, humanBytes(rec.Size)))
-		if trigger == TriggerSchedule {
-			return s.afterScheduledBuild(j, rec)
-		}
-		return nil
+		return s.afterBuild(j, rec, trigger)
 	})
 }
 

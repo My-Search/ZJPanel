@@ -2,10 +2,12 @@ package backup
 
 import (
 	"archive/tar"
+	"bufio"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -240,35 +242,63 @@ func (s *Service) Build(items []string, step func(string)) (*BackupRecord, error
 	_ = gw.Close()
 	out.Close()
 
-	// 计算整包 SHA256 与最终大小。
+	// 启用加密：整包流式加密为 .enc（age 格式）并删除明文，云端只落加密包。
+	cc := s.loadCrypt()
+	finalName := name
+	if cc.Enabled {
+		if cc.Password == "" {
+			_ = os.Remove(path)
+			return nil, errors.New("已启用备份包加密但未配置密码：请到备份设置填写加密密码")
+		}
+		emitStep(step, "备份包加密（age 流式）…")
+		if err := func() error {
+			src, err := os.Open(path)
+			if err != nil {
+				return err
+			}
+			defer src.Close()
+			return encryptTo(path+".enc", src, cc.Password)
+		}(); err != nil {
+			_ = os.Remove(path)
+			_ = os.Remove(path + ".enc")
+			return nil, err
+		}
+		_ = os.Remove(path)
+		finalName = name + ".enc"
+	}
+	manifest.Encrypted = cc.Enabled
+	finalPath := filepath.Join(s.backupsDir, finalName)
+
+	// 计算整包 SHA256 与最终大小（加密包按最终产物计算）。
 	emitStep(step, "计算整包 SHA256…")
-	if hf, err := os.Open(path); err == nil {
+	if hf, err := os.Open(finalPath); err == nil {
 		if _, err := io.Copy(hash, hf); err == nil {
 			_ = hf.Close()
 		}
 	}
-	finalStat, _ := os.Stat(path)
+	finalStat, _ := os.Stat(finalPath)
 	rec := &BackupRecord{
-		Name:         name,
-		Path:         path,
+		Name:         finalName,
+		Path:         finalPath,
 		Size:         0,
 		CreatedAt:    now,
 		Items:        items,
 		FileCount:    len(manifestFiles),
 		Uncompressed: total,
 		SHA256:       hex.EncodeToString(hash.Sum(nil)),
+		Encrypted:    cc.Enabled,
 	}
 	if finalStat != nil {
 		rec.Size = finalStat.Size()
 	}
 	// 旁落清单 json，便于列表不拆包展示。
-	_ = writeManifest(s.backupsDir, name, manifest)
+	_ = writeManifest(s.backupsDir, finalName, manifest)
 	return rec, nil
 }
 
 // Restore 从备份包恢复所选项目（数据库/配置/声明写回对应位置）。
 // 返回恢复的文件清单与跳过项；调用方应在低峰期执行，必要时重启面板/重载 nginx。
-// step 可为 nil：恢复进度定期上报。
+// step 可为 nil：恢复进度定期上报。按内容头自动识别 age 加密包并解密（明文包透传兼容）。
 func (s *Service) Restore(path string, items []string, step func(string)) (*RestoreResult, error) {
 	items = NormalizeItems(items)
 	f, err := os.Open(path)
@@ -277,7 +307,12 @@ func (s *Service) Restore(path string, items []string, step func(string)) (*Rest
 	}
 	defer f.Close()
 
-	gr, err := gzip.NewReader(f)
+	br := bufio.NewReader(f)
+	src, err := s.decryptReader(br)
+	if err != nil {
+		return nil, err
+	}
+	gr, err := gzip.NewReader(src)
 	if err != nil {
 		return nil, fmt.Errorf("非有效的 gzip 备份包: %w", err)
 	}

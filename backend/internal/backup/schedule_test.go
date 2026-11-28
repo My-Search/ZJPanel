@@ -73,7 +73,7 @@ func TestSaveScheduleValidationAndReschedule(t *testing.T) {
 	}
 
 	// 重新保存（改为禁用）：旧条目被移除，不新增。
-	v, err = s.SaveSchedule(ScheduleConfig{Enabled: false, Cron: "0 4 * * *", Keep: 0})
+	v, err = s.SaveSchedule(ScheduleConfig{Enabled: false, Cron: "0 4 * * *", Keep: 3})
 	if err != nil {
 		t.Fatalf("二次保存失败: %v", err)
 	}
@@ -86,13 +86,13 @@ func TestSaveScheduleValidationAndReschedule(t *testing.T) {
 
 	// 持久化回读：cron/items/keep 与保存值一致，未启用时回默认值。
 	got := s.loadSchedule()
-	if got.Cron != "0 4 * * *" || got.Keep != 0 {
+	if got.Cron != "0 4 * * *" || got.Keep != 3 {
 		t.Fatalf("配置未按保存值回读: %+v", got)
 	}
 
 	// 未注入调度器时保存仍生效（仅不调度）。
 	s2 := New(testConfig(t.TempDir()), testScheduleDB(t), nil, nil, nil)
-	if _, err := s2.SaveSchedule(ScheduleConfig{Enabled: true, Cron: "0 3 * * *"}); err != nil {
+	if _, err := s2.SaveSchedule(ScheduleConfig{Enabled: true, Cron: "0 3 * * *", Keep: 3}); err != nil {
 		t.Fatalf("无调度器时保存失败: %v", err)
 	}
 	if s2.ScheduleView().Enabled != true {
@@ -106,6 +106,54 @@ func TestScheduleDefaults(t *testing.T) {
 	v := s.loadSchedule()
 	if v.Cron != defaultScheduleCron || v.Keep != defaultScheduleKeep || len(v.Items) != len(AllItems) {
 		t.Fatalf("默认配置异常: %+v", v)
+	}
+}
+
+// TestSaveScheduleRejectsLocalZeroWithoutUpload 本地保留 0 份必须配合自动上传。
+func TestSaveScheduleRejectsLocalZeroWithoutUpload(t *testing.T) {
+	s := New(testConfig(t.TempDir()), testScheduleDB(t), nil, nil, nil)
+	if _, err := s.SaveSchedule(ScheduleConfig{Enabled: true, Cron: "0 3 * * *", Keep: 0, UploadRemote: false}); err == nil {
+		t.Fatal("keep=0 且未开启自动上传应被拒绝")
+	}
+	if _, err := s.SaveSchedule(ScheduleConfig{Enabled: true, Cron: "0 3 * * *", Keep: 0, UploadRemote: true, RemoteKeep: 5}); err != nil {
+		t.Fatalf("keep=0 且开启自动上传应放行: %v", err)
+	}
+	if got := s.loadSchedule(); got.RemoteKeep != 5 {
+		t.Fatalf("remoteKeep 未按保存值回读: %+v", got)
+	}
+}
+
+// TestPruneRemoteNames 云端清理：字典序倒序保留最近 keep 份，忽略非备份对象；keep=0 清空。
+func TestPruneRemoteNames(t *testing.T) {
+	names := []string{
+		"zjpanel-backup-20260101-000000.tar.gz",
+		"zjpanel-backup-20260103-000000.tar.gz.enc",
+		"zjpanel-backup-20260104-000000.tar.gz.enc",
+		"zjpanel-backup-20260102-000000.tar.gz",
+		"other-file.tar.gz",
+	}
+	var deleted []string
+	del := func(n string) error { deleted = append(deleted, n); return nil }
+
+	if got := pruneRemoteNames(del, names, 2); got != 2 || len(deleted) != 2 {
+		t.Fatalf("keep=2 应清理 2 个，实际 removed=%d deleted=%v", got, deleted)
+	}
+	// 保留最新的两份（0104/0103），最旧的 0101/0102 被删，other-file 不动。
+	for _, n := range deleted {
+		if n == "zjpanel-backup-20260104-000000.tar.gz.enc" || n == "zjpanel-backup-20260103-000000.tar.gz.enc" || n == "other-file.tar.gz" {
+			t.Fatalf("不应删除 %s: %v", n, deleted)
+		}
+	}
+	if len(deleted) != 2 || deleted[0] != "zjpanel-backup-20260102-000000.tar.gz" || deleted[1] != "zjpanel-backup-20260101-000000.tar.gz" {
+		t.Fatalf("删除顺序异常: %v", deleted)
+	}
+
+	deleted = nil
+	if got := pruneRemoteNames(del, names, 0); got != 4 {
+		t.Fatalf("keep=0 应清空全部备份对象，实际 removed=%d", got)
+	}
+	if got := pruneRemoteNames(del, names, 99); got != 0 || len(deleted) != 4 {
+		t.Fatalf("keep 大于数量时不删除，实际 removed=%d deleted=%v", got, deleted)
 	}
 }
 

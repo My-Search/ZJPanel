@@ -62,6 +62,7 @@ type Manifest struct {
 	PanelVer  string         `json:"panelVersion"`
 	Items     []string       `json:"items"`
 	Files     []ManifestFile `json:"files"`
+	Encrypted bool           `json:"encrypted,omitempty"`
 }
 
 // ManifestFile 包内单个文件的来源与归档路径。
@@ -165,12 +166,17 @@ func backupName(now time.Time) string {
 	return fmt.Sprintf("zjpanel-backup-%s.tar.gz", now.Format("20060102-150405"))
 }
 
-// writeManifest 写清单到备份目录旁的 .json（便于不拆包即可查看内容）。
+// backupBaseName 剥掉 .enc/.tar.gz 后缀得到备份的基础名（清单 json、删除与清理统一用它寻址）。
+func backupBaseName(name string) string {
+	return strings.TrimSuffix(strings.TrimSuffix(name, ".enc"), ".tar.gz")
+}
+
+// writeManifest 写清单到备份目录旁的 .json（便于不拆包即可查看内容；加密与否共用同一命名）。
 func writeManifest(dir, name string, m *Manifest) error {
 	b, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return err
 	}
-	meta := strings.TrimSuffix(name, ".tar.gz") + ".json"
+	meta := backupBaseName(name) + ".json"
 	return os.WriteFile(filepath.Join(dir, meta), b, 0o644)
 }

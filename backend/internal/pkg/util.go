@@ -82,6 +82,7 @@ const (
 	// 云盘 OAuth：客户端密钥与刷新令牌分别绑定上下文，密文不可互换。
 	CtxBackupRemoteSecret = "settings.backup.remote.client_secret"
 	CtxBackupRemoteToken  = "settings.backup.remote.refresh_token"
+	CtxBackupCrypt        = "settings.backup.crypt.pass" // 备份包加密密码
 )
 
 // CtxPluginSetting 插件 password 类型设置项的 AAD 上下文。

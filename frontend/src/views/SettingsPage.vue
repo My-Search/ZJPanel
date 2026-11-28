@@ -119,10 +119,16 @@
                         <span v-if="!remoteReady" class="dim">需先在下方配置并连接远程存储</span>
                       </a-space>
                     </a-form-item>
-                    <a-form-item label="保留份数">
+                    <a-form-item label="本地保留份数">
                       <a-space>
                         <a-input-number v-model:value="schedule.keep" :min="0" :max="999" style="width: 100px" />
-                        <span class="dim">0 = 不清理；超出后自动删除最旧的自动备份</span>
+                        <span class="dim">0 = 上传成功后立即删除本地（需开启自动上传）；超出自动删最旧</span>
+                      </a-space>
+                    </a-form-item>
+                    <a-form-item label="云端保留份数">
+                      <a-space>
+                        <a-input-number v-model:value="schedule.remoteKeep" :min="0" :max="999" style="width: 100px" />
+                        <span class="dim">0 = 不清理云端；超出自动删除云端最旧备份</span>
                       </a-space>
                     </a-form-item>
                   </template>
@@ -131,6 +137,25 @@
                     {{ schedule.lastRun.ok ? '成功' : '失败' + (schedule.lastRun.error ? '：' + schedule.lastRun.error : '') }}
                   </div>
                   <a-button type="primary" :loading="schedSaving" @click="saveSchedule">保存定时备份</a-button>
+                </a-form>
+              </a-card>
+
+              <a-card size="small" title="备份包加密" class="backup-card">
+                <a-form layout="vertical">
+                  <a-form-item>
+                    <a-space>
+                      <a-switch v-model:checked="crypt.enabled" />
+                      <span>上传云端前加密备份包（age 格式）</span>
+                    </a-space>
+                    <div class="dim" style="margin-top: 6px">
+                      避免云盘侧泄露明文数据；恢复时面板自动解密。灾难恢复可在无面板环境用 age 命令行 + 该密码离线解包：
+                      <code>age -d -o 备份.tar.gz 备份.tar.gz.enc</code>
+                    </div>
+                  </a-form-item>
+                  <a-form-item v-if="crypt.enabled" label="加密密码">
+                    <a-input-password v-model:value="crypt.password" :placeholder="crypt.passwordSet ? '已设置，留空沿用' : ''" />
+                  </a-form-item>
+                  <a-button :loading="cryptSaving" @click="saveCrypt">保存加密设置</a-button>
                 </a-form>
               </a-card>
 
@@ -267,7 +292,7 @@
                   <template #bodyCell="{ column, record }">
                     <template v-if="column.key === 'createdAt'">{{ fmtTime(record.createdAt) }}</template>
                     <template v-if="column.key === 'size'">{{ fmtBytes(record.size) }}</template>
-                    <template v-if="column.key === 'items'">{{ (record.items || []).length }} 项</template>
+                    <template v-if="column.key === 'items'">{{ (record.items || []).length }} 项{{ record.encrypted ? ' 🔒' : '' }}</template>
                     <template v-if="column.key === 'action'">
                       <a-space :size="4">
                         <a-button size="small" @click="downloadBackup(record)">下载</a-button>
@@ -385,11 +410,12 @@ const allItemsChecked = computed(() => backupItemMetas.value.length > 0 && backu
 
 const loadBackup = async () => {
   computeRedirect()
-  const [itemsR, listR, remoteR, schedR] = await Promise.allSettled([
+  const [itemsR, listR, remoteR, schedR, cryptR] = await Promise.allSettled([
     getQuiet('/api/backup/items'),
     getQuiet('/api/backup/list'),
     getQuiet('/api/backup/remote'),
     getQuiet('/api/backup/schedule'),
+    getQuiet('/api/backup/crypt'),
   ])
   if (itemsR.status === 'fulfilled') backupItemMetas.value = itemsR.value?.items || []
   if (listR.status === 'fulfilled') backupList.value = listR.value?.list || []
@@ -399,6 +425,9 @@ const loadBackup = async () => {
   if (schedR.status === 'fulfilled' && schedR.value) {
     schedule.value = { ...schedule.value, ...schedR.value }
     syncCronPreset()
+  }
+  if (cryptR.status === 'fulfilled' && cryptR.value) {
+    crypt.value = { ...crypt.value, ...cryptR.value, password: '' }
   }
   if (backupItems.value.length === 0 && backupItemMetas.value.length > 0) {
     backupItems.value = backupItemMetas.value.map((i: any) => i.key)
@@ -537,7 +566,7 @@ const uploadRemote = async (record: any) => {
 
 // ---- 定时备份 ----
 const schedule = ref<any>({
-  enabled: false, cron: '0 3 * * *', items: [], uploadRemote: false, keep: 10, lastRun: null, nextRun: '',
+  enabled: false, cron: '0 3 * * *', items: [], uploadRemote: false, keep: 10, remoteKeep: 0, lastRun: null, nextRun: '',
 })
 const schedSaving = ref(false)
 const cronPresets = [
@@ -561,9 +590,31 @@ const syncCronPreset = () => {
   const hit = cronPresets.find((p: any) => p.value === schedule.value.cron)
   cronPreset.value = hit ? hit.value : 'custom'
 }
+// ---- 备份包加密 ----
+const crypt = ref<any>({ enabled: false, password: '', passwordSet: false })
+const cryptSaving = ref(false)
+const saveCrypt = async () => {
+  cryptSaving.value = true
+  try {
+    const r = await put('/api/backup/crypt', crypt.value)
+    if (r.ok) {
+      // 回拉脱敏视图，避免把明文密码留在前端状态里。
+      const v = await getQuiet('/api/backup/crypt')
+      crypt.value = { ...crypt.value, ...(v || {}), password: '' }
+      message.success('备份加密设置已保存')
+    } else {
+      message.error(r.error || '保存失败')
+    }
+  } finally { cryptSaving.value = false }
+}
+
 const saveSchedule = async () => {
   if (!String(schedule.value.cron || '').trim()) {
     message.warning('请填写 cron 表达式')
+    return
+  }
+  if (Number(schedule.value.keep) === 0 && !schedule.value.uploadRemote) {
+    message.warning('本地保留 0 份必须开启「自动上传到远程存储」，否则面板将没有任何本地备份')
     return
   }
   schedSaving.value = true

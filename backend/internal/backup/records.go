@@ -19,6 +19,7 @@ type BackupRecord struct {
 	Items        []string  `json:"items"`
 	FileCount    int       `json:"fileCount"`
 	SHA256       string    `json:"sha256"`
+	Encrypted    bool      `json:"encrypted"` // age 加密包（.tar.gz.enc）
 	// Remote 标记该包是否已上传到远程存储。
 	Remote bool `json:"remote"`
 }
@@ -42,16 +43,22 @@ func (s *Service) List() ([]BackupRecord, error) {
 	}
 	var records []BackupRecord
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".tar.gz") {
+		name := e.Name()
+		if e.IsDir() {
 			continue
 		}
-		rec := BackupRecord{Name: e.Name(), Path: filepath.Join(s.backupsDir, e.Name())}
+		// 兼容两种产物：明文 .tar.gz 与 age 加密 .tar.gz.enc
+		if !strings.HasSuffix(name, ".tar.gz") && !strings.HasSuffix(name, ".tar.gz.enc") {
+			continue
+		}
+		rec := BackupRecord{Name: name, Path: filepath.Join(s.backupsDir, name)}
 		if st, err := e.Info(); err == nil {
 			rec.Size = st.Size()
 			rec.CreatedAt = st.ModTime()
 		}
-		// 旁落清单 json 补充项目/文件数/哈希。
-		meta := strings.TrimSuffix(e.Name(), ".tar.gz") + ".json"
+		rec.Encrypted = strings.HasSuffix(name, ".enc")
+		// 旁落清单 json 补充项目/文件数/哈希（加密与否共用基础名）。
+		meta := backupBaseName(name) + ".json"
 		if mb, err := os.ReadFile(filepath.Join(s.backupsDir, meta)); err == nil {
 			var m Manifest
 			if json.Unmarshal(mb, &m) == nil {
@@ -71,13 +78,17 @@ func (s *Service) List() ([]BackupRecord, error) {
 	return records, nil
 }
 
-// Delete 删除本地备份包及其清单 json。
+// Delete 删除本地备份包（明文/加密）及其清单 json。
 func (s *Service) Delete(name string) error {
 	if !isSafeName(name) {
 		return os.ErrInvalid
 	}
-	for _, suffix := range []string{".tar.gz", ".json"} {
-		p := filepath.Join(s.backupsDir, strings.TrimSuffix(name, ".tar.gz")+suffix)
+	base := backupBaseName(name)
+	for _, p := range []string{
+		filepath.Join(s.backupsDir, base+".tar.gz"),
+		filepath.Join(s.backupsDir, base+".tar.gz.enc"),
+		filepath.Join(s.backupsDir, base+".json"),
+	} {
 		_ = os.Remove(p)
 	}
 	return nil
