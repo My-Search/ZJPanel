@@ -153,6 +153,42 @@ func hasComposeFile(dir string) bool {
 	return false
 }
 
+// copyTarEntry 按开始打包时 Stat 的快照大小定长写入一个 tar 条目。
+// 大目录打包动辄数分钟，目录里有正在被写的活文件（容器日志、站点数据库等）是常态：
+//   - 文件变大：只写快照大小，超出部分截断。不设上限的 io.Copy 会写入超过头声明的字节数，
+//     触发 archive/tar: write too long 令整个备份失败；
+//   - 文件变小/被替换：不足部分补零，保持 tar 流结构完整（否则后续 WriteHeader 报
+//     missed writing N bytes，或 Close 错误被吞后产出损坏的包）。
+//
+// 返回 changed 表示文件写入期间大小发生了变化（按快照截断/补零，内容可能不完整）。
+func copyTarEntry(tw *tar.Writer, fh *os.File, size int64) (changed bool, err error) {
+	n, err := io.Copy(tw, io.LimitReader(fh, size))
+	if err != nil {
+		return false, err
+	}
+	if n < size {
+		// 变小：补零填满声明的 tar 大小
+		var zero [32 * 1024]byte
+		for rest := size - n; rest > 0; {
+			w := rest
+			if w > int64(len(zero)) {
+				w = int64(len(zero))
+			}
+			if _, werr := tw.Write(zero[:w]); werr != nil {
+				return true, werr
+			}
+			rest -= w
+		}
+		return true, nil
+	}
+	// 变大探测：LimitReader 在快照大小处截断，多读 1 字节判断文件仍在增长
+	var probe [1]byte
+	if m, _ := fh.Read(probe[:]); m > 0 {
+		return true, nil
+	}
+	return false, nil
+}
+
 // emitStep 进度回调安全触发（nil 回调直接跳过：单测/无推送场景）。
 func emitStep(step func(string), format string, args ...any) {
 	if step != nil {
@@ -162,7 +198,7 @@ func emitStep(step func(string), format string, args ...any) {
 
 // Build 按所选项目生成备份包，返回包信息（文件名、大小、清单、SHA256）。
 // step 可为 nil：收集/打包/哈希各阶段会带进度说明，供任务日志实时展示。
-func (s *Service) Build(items []string, step func(string)) (*BackupRecord, error) {
+func (s *Service) Build(items []string, step func(string)) (rec *BackupRecord, retErr error) {
 	items = NormalizeItems(items)
 	files, err := s.collect(items)
 	if err != nil {
@@ -171,7 +207,7 @@ func (s *Service) Build(items []string, step func(string)) (*BackupRecord, error
 	if err := os.MkdirAll(s.backupsDir, 0o755); err != nil {
 		return nil, err
 	}
-	emitStep(step, "已收集 %d 个文件，开始打包", len(files))
+	emitStep(step, "已收集 %d 个文件，开始打包（磁盘剩余 %s）", len(files), humanFreeBytes(diskFreeBytes(s.backupsDir)))
 
 	now := time.Now()
 	name := backupName(now)
@@ -180,16 +216,30 @@ func (s *Service) Build(items []string, step func(string)) (*BackupRecord, error
 	if err != nil {
 		return nil, err
 	}
-	defer out.Close()
+	// 失败不留半截包：List() 会把备份目录里的 *.tar.gz 当记录展示，
+	// 残包既占空间又会显示成「0 项」的坏记录。
+	defer func() {
+		out.Close()
+		if retErr != nil {
+			_ = os.Remove(path)
+		}
+	}()
 
 	gw := gzip.NewWriter(out)
 	tw := tar.NewWriter(gw)
 
 	var manifestFiles []ManifestFile
+	var changedFiles []string // 打包期间发生大小变化的活文件
 	hash := sha256.New()
 	total := int64(0)
 
 	for i, f := range files {
+		// 磁盘水位检查：剩余空间跌破最低水位立即失败，半截包由 retErr 清理删除，
+		// 避免打包把宿主机磁盘占满（查询失败按未知处理，不阻断打包）。
+		free := diskFreeBytes(s.backupsDir)
+		if free >= 0 && free < minFreeBytes {
+			return nil, fmt.Errorf("磁盘剩余空间不足（仅 %s，低于 %s 水位），已中止打包", humanBytes(free), humanBytes(minFreeBytes))
+		}
 		st, err := os.Stat(f.src)
 		if err != nil || st.IsDir() {
 			continue
@@ -206,21 +256,36 @@ func (s *Service) Build(items []string, step func(string)) (*BackupRecord, error
 		}
 		if err := tw.WriteHeader(hdr); err != nil {
 			fh.Close()
-			return nil, err
+			return nil, fmt.Errorf("写入 %s 头失败: %w", f.src, err)
 		}
-		if _, err := io.Copy(tw, fh); err != nil {
-			fh.Close()
-			return nil, err
-		}
+		changed, err := copyTarEntry(tw, fh, st.Size())
 		fh.Close()
+		if err != nil {
+			return nil, fmt.Errorf("写入 %s 失败: %w", f.src, err)
+		}
+		if changed {
+			changedFiles = append(changedFiles, f.src)
+		}
 		manifestFiles = append(manifestFiles, ManifestFile{
 			Source: f.src, Archive: f.archive, Size: st.Size(),
 		})
 		total += st.Size()
 		// 大目录打包可能持续数分钟，定期报进度避免前台看起来无响应。
 		if len(files) > 400 && (i+1)%200 == 0 {
-			emitStep(step, "打包进度 %d/%d 文件（累计 %s）", i+1, len(files), humanBytes(total))
+			emitStep(step, "打包进度 %d/%d 文件（累计 %s，磁盘剩余 %s）", i+1, len(files), humanBytes(total), humanFreeBytes(free))
 		}
+	}
+
+	// 活文件提示：截断/补零不影响包结构，恢复端拿到的是开始打包那一刻的快照。
+	if len(changedFiles) > 0 {
+		sample := changedFiles
+		more := ""
+		if len(sample) > 3 {
+			sample = sample[:3]
+			more = " 等"
+		}
+		emitStep(step, "%d 个文件在打包期间发生变化，已按快照大小写入（日志/数据库等活文件属正常现象）：%s%s",
+			len(changedFiles), strings.Join(sample, "、"), more)
 	}
 
 	// 清单写入包内 _manifest.json
@@ -238,9 +303,16 @@ func (s *Service) Build(items []string, step func(string)) (*BackupRecord, error
 		_, _ = tw.Write(mb)
 	}
 
-	_ = tw.Close()
-	_ = gw.Close()
-	out.Close()
+	// Close 负责 flush gzip 尾部与 tar 填充，出错说明包损坏，交由失败清理删除。
+	if err := tw.Close(); err != nil {
+		return nil, fmt.Errorf("收尾 tar 流失败: %w", err)
+	}
+	if err := gw.Close(); err != nil {
+		return nil, fmt.Errorf("收尾 gzip 流失败: %w", err)
+	}
+	if err := out.Close(); err != nil {
+		return nil, fmt.Errorf("关闭备份包失败: %w", err)
+	}
 
 	// 启用加密：整包流式加密为 .enc（age 格式）并删除明文，云端只落加密包。
 	cc := s.loadCrypt()
@@ -249,6 +321,12 @@ func (s *Service) Build(items []string, step func(string)) (*BackupRecord, error
 		if cc.Password == "" {
 			_ = os.Remove(path)
 			return nil, errors.New("已启用备份包加密但未配置密码：请到备份设置填写加密密码")
+		}
+		// 加密要再写一份约等大的 .enc：空间不够提前失败，避免加密中途 ENOSPC 留下满盘。
+		if pst, err := os.Stat(path); err == nil {
+			if free := diskFreeBytes(s.backupsDir); free >= 0 && free-pst.Size() < minFreeBytes {
+				return nil, fmt.Errorf("磁盘剩余空间不足以生成加密包（需约 %s，仅剩 %s）", humanBytes(pst.Size()), humanFreeBytes(free))
+			}
 		}
 		emitStep(step, "备份包加密（age 流式）…")
 		if err := func() error {
@@ -277,7 +355,7 @@ func (s *Service) Build(items []string, step func(string)) (*BackupRecord, error
 		}
 	}
 	finalStat, _ := os.Stat(finalPath)
-	rec := &BackupRecord{
+	rec = &BackupRecord{
 		Name:         finalName,
 		Path:         finalPath,
 		Size:         0,
