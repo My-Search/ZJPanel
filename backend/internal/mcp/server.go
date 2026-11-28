@@ -19,6 +19,9 @@ type Tool struct {
 	InputSchema map[string]any
 	Handler     func(args map[string]any) (string, error)
 	Owner       string // core | pluginId
+	// Mutating 标记处置类（改变系统状态）的工具：AI 运维智能体在「仅观察」模式下
+	// 从工具表剔除、在「执行前确认」模式下拦截挂起（确认后才执行）。普通 MCP 调用不受影响。
+	Mutating bool
 }
 
 type Registry struct {

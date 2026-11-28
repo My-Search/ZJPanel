@@ -7,13 +7,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/gin-gonic/gin"
 
+	"zjpanel/backend/internal/agent"
+	"zjpanel/backend/internal/backup"
 	"zjpanel/backend/internal/buildinfo"
 	"zjpanel/backend/internal/mcp"
 	"zjpanel/backend/internal/model"
@@ -22,6 +24,7 @@ import (
 	"zjpanel/backend/internal/plugin"
 	sitePkg "zjpanel/backend/internal/site"
 	"zjpanel/backend/internal/update"
+	"zjpanel/backend/internal/waf"
 	sdk "zjpanel/backend/sdk/plugin"
 )
 
@@ -31,6 +34,36 @@ const pluginPasswordMask = "********"
 
 func (s *Server) registerMCPRoutes() {
 	// /mcp：唯一对外 MCP 端点（API Key 鉴权；核心工具 + 插件工具聚合）
+	// API Key 校验缓存：agent 客户端高频轮询时避免每请求全表扫；
+	// last_used_at 至多每分钟同步一次。TTL 60 秒，删除 Key 时主动清空缓存保证即时吊销。
+	type keyEntry struct{ validUntil, lastSync time.Time }
+	var keyMu sync.Mutex
+	keyCache := map[string]*keyEntry{}
+	keyCacheCheck := func(hash string) (valid, needSync bool) {
+		keyMu.Lock()
+		defer keyMu.Unlock()
+		now := pkg.Now()
+		e, ok := keyCache[hash]
+		if !ok || now.After(e.validUntil) {
+			delete(keyCache, hash)
+			return false, false
+		}
+		if now.Sub(e.lastSync) >= time.Minute {
+			e.lastSync = now
+			return true, true
+		}
+		return true, false
+	}
+	keyCachePut := func(hash string) {
+		keyMu.Lock()
+		defer keyMu.Unlock()
+		keyCache[hash] = &keyEntry{validUntil: pkg.Now().Add(time.Minute), lastSync: pkg.Now()}
+	}
+	keyCacheClear := func() {
+		keyMu.Lock()
+		defer keyMu.Unlock()
+		keyCache = map[string]*keyEntry{}
+	}
 	mcpAuth := func(c *gin.Context) {
 		rateKey := "mcp:" + c.ClientIP()
 		if !loginAllow(rateKey) {
@@ -45,19 +78,33 @@ func (s *Server) registerMCPRoutes() {
 			return
 		}
 		keyHash := pkg.SHA256Hex(key)
-		var keys []model.ApiKey
-		s.db.Find(&keys)
-		for _, k := range keys {
-			if subtle.ConstantTimeCompare([]byte(keyHash), []byte(k.Hash)) == 1 {
-				now := pkg.Now()
-				s.db.Model(&k).Update("last_used_at", &now)
-				c.Next()
+		needSync := false
+		if valid, sync := keyCacheCheck(keyHash); valid {
+			needSync = sync
+		} else {
+			var keys []model.ApiKey
+			s.db.Find(&keys)
+			hit := false
+			for _, k := range keys {
+				if subtle.ConstantTimeCompare([]byte(keyHash), []byte(k.Hash)) == 1 {
+					hit = true
+					break
+				}
+			}
+			if !hit {
+				loginRecordFail(rateKey)
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "API Key 无效"})
+				c.Abort()
 				return
 			}
+			keyCachePut(keyHash)
+			needSync = true
 		}
-		loginRecordFail(rateKey)
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "API Key 无效"})
-		c.Abort()
+		if needSync {
+			now := pkg.Now()
+			s.db.Model(&model.ApiKey{}).Where("hash = ?", keyHash).Update("last_used_at", &now)
+		}
+		c.Next()
 	}
 	s.r.POST("/mcp", mcpAuth, gin.WrapH(s.MCPSrv.Handler()))
 	s.r.GET("/mcp", mcpAuth, func(c *gin.Context) {
@@ -87,6 +134,7 @@ func (s *Server) registerMCPRoutes() {
 	})
 	g.DELETE("/keys/:id", func(c *gin.Context) {
 		s.db.Delete(&model.ApiKey{}, idParam(c))
+		keyCacheClear() // 吊销即时生效：清空校验缓存，后续请求全量回库比对
 		s.audit(c, "mcp.key.delete", c.Param("id"))
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
@@ -307,9 +355,6 @@ func (s *Server) registerPluginRoutes() {
 	})
 }
 
-var _ = os.Getenv
-var _ = time.Now
-
 // registerMCPTools 注册核心 MCP 工具（与插件工具聚合在同一注册表，经唯一 /mcp 对外暴露）。
 func (s *Server) registerMCPTools() {
 	jstr := func(v any) string {
@@ -318,6 +363,10 @@ func (s *Server) registerMCPTools() {
 	}
 	reg := func(name, desc string, schema map[string]any, h func(args map[string]any) (string, error)) {
 		_ = s.MCPReg.Register(&mcp.Tool{Name: name, Description: desc, InputSchema: schema, Handler: h, Owner: "core"})
+	}
+	// regMut 处置类工具：AI 运维智能体的「仅观察/执行前确认」模式依赖此标注做过滤与拦截
+	regMut := func(name, desc string, schema map[string]any, h func(args map[string]any) (string, error)) {
+		_ = s.MCPReg.Register(&mcp.Tool{Name: name, Description: desc, InputSchema: schema, Handler: h, Owner: "core", Mutating: true})
 	}
 	reg("panel_notify", "发送一条面板统一通知（站内信必发；邮件按类型订阅设置发送）",
 		map[string]any{"type": "object", "properties": map[string]any{
@@ -340,13 +389,36 @@ func (s *Server) registerMCPTools() {
 			s.Notify.Send("mcp", notify.Input{Type: nType, Level: level, Title: title, Body: body})
 			return jstr(map[string]any{"ok": true}), nil
 		})
-	reg("panel_info", "获取面板信息（版本/站点数/容器数）",
+	reg("panel_info", "获取面板概览（版本/站点数/容器数/证书临期/安全态势/最近备份任务）。排查问题的首查工具",
 		map[string]any{"type": "object", "properties": map[string]any{}},
 		func(args map[string]any) (string, error) {
 			var siteCnt int64
 			s.db.Model(&model.Site{}).Count(&siteCnt)
 			containers, _ := s.Docker.ContainersList()
-			return jstr(map[string]any{"version": update.CurrentVersion(), "sites": siteCnt, "containers": len(containers)}), nil
+			out := map[string]any{
+				"version":    update.CurrentVersion(),
+				"sites":      siteCnt,
+				"containers": len(containers),
+			}
+			// 证书临期：30 天内到期的任务数（与 list_cert_tasks 的 daysLeft 口径一致）
+			var tasks []model.CertTask
+			s.db.Find(&tasks)
+			expiring := 0
+			for _, t := range tasks {
+				if info := s.Cert.LatestCert(t.ID); info != nil && time.Until(info.NotAfter).Hours() < 30*24 {
+					expiring++
+				}
+			}
+			out["certTasks"], out["certExpiringIn30d"] = len(tasks), expiring
+			// 安全态势：健康级别与当前活跃的严重事件数（快照实时生成，无 DB 开销）
+			snap := s.Security.Latest()
+			out["securityLevel"], out["securityCriticalActive"] = snap.Level, snap.Active
+			// 最近一次备份任务（可能为空 = 从未备份）
+			if jb := s.Backup.LatestJob(); jb != nil {
+				v := jb.View(0)
+				out["lastBackup"] = map[string]any{"kind": v.Kind, "status": v.Status, "startedAt": v.StartedAt}
+			}
+			return jstr(out), nil
 		})
 	reg("list_sites", "列出全部站点（状态/延迟/维护开关）",
 		map[string]any{"type": "object", "properties": map[string]any{}},
@@ -366,7 +438,7 @@ func (s *Server) registerMCPTools() {
 			}
 			return jstr(out), nil
 		})
-	reg("create_proxy_site", "创建反向代理站点（写入 nginx conf 并启用）",
+	regMut("create_proxy_site", "创建反向代理站点（写入 nginx conf 并启用）",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -384,7 +456,7 @@ func (s *Server) registerMCPTools() {
 			}
 			return "站点已创建: " + siteRec.Domain + " → " + upstream, nil
 		})
-	reg("toggle_site", "切换站点状态（enable|disable|maintenance）",
+	regMut("toggle_site", "切换站点状态（enable|disable|maintenance）",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -418,7 +490,7 @@ func (s *Server) registerMCPTools() {
 			}
 			return jstr(list), nil
 		})
-	reg("container_action", "容器操作（start|stop|restart|remove）",
+	regMut("container_action", "容器操作（start|stop|restart|remove）",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -484,7 +556,7 @@ func (s *Server) registerMCPTools() {
 			}
 			return jstr(out), nil
 		})
-	reg("run_cert_task", "立即执行证书任务（申请+部署）",
+	regMut("run_cert_task", "立即执行证书任务（申请+部署）",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -509,7 +581,7 @@ func (s *Server) registerMCPTools() {
 			}
 			return jstr(list), nil
 		})
-	reg("compose_action", "compose 项目操作（up|down|restart）",
+	regMut("compose_action", "compose 项目操作（up|down|restart）",
 		map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -575,17 +647,257 @@ func (s *Server) registerMCPTools() {
 			}
 			return jstr(s.Agent.RecentEvents(uint(numOf(args["hostId"])), limit)), nil
 		})
-	reg("host_check_ssh", "对某台主机做 SSH 基线审计（只读，不改配置）",
+	reg("host_check", "对某台主机执行一次防御基线检查（只读审计，不改系统配置，结果落库）。kind: ssh=SSH 基线 accounts=账号 persistence=持久化 exposure=暴露面 webshell=后门特征",
 		map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"hostId": map[string]any{"type": "integer"}},
-			"required":   []string{"hostId"},
+			"type": "object",
+			"properties": map[string]any{
+				"hostId": map[string]any{"type": "integer", "description": "主机 ID"},
+				"kind":   map[string]any{"type": "string", "enum": agent.AuditKinds, "description": "检查类型，默认 ssh"},
+			},
+			"required": []string{"hostId"},
 		},
 		func(args map[string]any) (string, error) {
-			res, err := s.Agent.Exec(uint(numOf(args["hostId"])), "ssh_audit", nil, 30*time.Second)
+			kind, _ := args["kind"].(string)
+			if kind == "" {
+				kind = "ssh"
+			}
+			payload, err := s.Agent.Audit(uint(numOf(args["hostId"])), kind)
 			if err != nil {
 				return "", err
 			}
+			return jstr(payload), nil
+		})
+	reg("host_firewall_status", "获取某台主机的防火墙状态与封禁列表（nftables 独立表 inet zjpanel）",
+		map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"hostId": map[string]any{"type": "integer", "description": "主机 ID"}},
+			"required":   []string{"hostId"},
+		},
+		func(args map[string]any) (string, error) {
+			res, err := s.Agent.Exec(uint(numOf(args["hostId"])), "firewall_status", nil, 30*time.Second)
+			if err != nil {
+				return "", err
+			}
+			if !res.OK {
+				return "", fmt.Errorf("%s", res.Output)
+			}
 			return res.Output, nil
 		})
+	regMut("host_ban_ip", "在某台主机的防火墙上封禁一个 IPv4（带 TTL，到期自动解封）",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"hostId":  map[string]any{"type": "integer", "description": "主机 ID"},
+				"ip":      map[string]any{"type": "string", "description": "要封禁的 IPv4 地址"},
+				"seconds": map[string]any{"type": "integer", "description": "封禁时长秒数，默认 3600"},
+			},
+			"required": []string{"hostId", "ip"},
+		},
+		func(args map[string]any) (string, error) {
+			id := uint(numOf(args["hostId"]))
+			ip, _ := args["ip"].(string)
+			seconds := int(numOf(args["seconds"]))
+			if seconds <= 0 {
+				seconds = 3600
+			}
+			res, err := s.Agent.Exec(id, "ban_ip", map[string]any{"ip": ip, "seconds": seconds}, 30*time.Second)
+			if err != nil {
+				return "", err
+			}
+			if !res.OK {
+				return "", fmt.Errorf("%s", res.Output)
+			}
+			s.auditMCP("host.ban."+ip, fmt.Sprintf("host=%d seconds=%d", id, seconds))
+			return "已封禁 " + ip + "（" + fmt.Sprintf("%d", seconds) + " 秒后自动解封）", nil
+		})
+	regMut("host_unban_ip", "解除某台主机防火墙上的 IPv4 封禁",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"hostId": map[string]any{"type": "integer", "description": "主机 ID"},
+				"ip":     map[string]any{"type": "string", "description": "要解封的 IPv4 地址"},
+			},
+			"required": []string{"hostId", "ip"},
+		},
+		func(args map[string]any) (string, error) {
+			id := uint(numOf(args["hostId"]))
+			ip, _ := args["ip"].(string)
+			res, err := s.Agent.Exec(id, "unban_ip", map[string]any{"ip": ip}, 30*time.Second)
+			if err != nil {
+				return "", err
+			}
+			if !res.OK {
+				return "", fmt.Errorf("%s", res.Output)
+			}
+			s.auditMCP("host.unban."+ip, fmt.Sprintf("host=%d", id))
+			return "已解封 " + ip, nil
+		})
+
+	// ---- 安全中心（与 HTTP API 共用同一套 service 与数据；处置类操作留审计） ----
+	reg("security_overview", "获取安全中心态势快照（RPS/错误率/健康分/Top IP 与国家/路径/活跃严重事件/生效策略）",
+		map[string]any{"type": "object", "properties": map[string]any{}},
+		func(args map[string]any) (string, error) {
+			return jstr(s.Security.Latest()), nil
+		})
+	reg("security_events", "获取最近安全事件流（告警/自动封禁/严重命中等，新→旧）",
+		map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"limit": map[string]any{"type": "integer", "description": "条数，默认 50，上限 200"}},
+		},
+		func(args map[string]any) (string, error) {
+			limit := int(numOf(args["limit"]))
+			if limit <= 0 {
+				limit = 50
+			}
+			if limit > 200 {
+				limit = 200
+			}
+			return jstr(s.Security.RecentEvents(limit)), nil
+		})
+	regMut("security_block_ip", "在面板安全策略中封禁一个 IP 或 CIDR（下发 nginx，TTL 到期自动解封）。minutes 缺省 60，0 表示永久",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"value":   map[string]any{"type": "string", "description": "IP 或 CIDR"},
+				"minutes": map[string]any{"type": "integer", "description": "封禁时长（分钟），缺省 60；0=永久封禁"},
+				"reason":  map[string]any{"type": "string", "description": "封禁原因（进审计与策略备注）"},
+			},
+			"required": []string{"value"},
+		},
+		func(args map[string]any) (string, error) {
+			value, _ := args["value"].(string)
+			minutes := int(numOf(args["minutes"]))
+			if minutes < 0 {
+				minutes = 60
+			}
+			reason, _ := args["reason"].(string)
+			if err := s.Security.BlockIP(value, minutes, reason, false); err != nil {
+				return "", err
+			}
+			s.auditMCP("security.block.ip", fmt.Sprintf("%s minutes=%d reason=%s", value, minutes, reason))
+			if minutes > 0 {
+				return "已封禁 " + value + "（" + fmt.Sprintf("%d 分钟", minutes) + "）", nil
+			}
+			return "已永久封禁 " + value, nil
+		})
+	regMut("security_unblock_ip", "解除面板安全策略中的 IP/CIDR 封禁",
+		map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"value": map[string]any{"type": "string", "description": "IP 或 CIDR"}},
+			"required":   []string{"value"},
+		},
+		func(args map[string]any) (string, error) {
+			value, _ := args["value"].(string)
+			if err := s.Security.UnblockIP(value); err != nil {
+				return "", err
+			}
+			s.auditMCP("security.unblock.ip", value)
+			return "已解封 " + value, nil
+		})
+
+	// ---- WAF（规则引擎只读视图；规则增改不暴露给 MCP） ----
+	if s.WAF != nil {
+		reg("waf_stats", "获取 WAF 统计（开关/模式/规则数/最近命中与近一小时 Top 命中 IP、规则）",
+			map[string]any{"type": "object", "properties": map[string]any{}},
+			func(args map[string]any) (string, error) {
+				return jstr(s.WAF.Stat()), nil
+			})
+		reg("waf_recent_hits", "查询 WAF 最近命中日志（可按 IP/分类/规则/站点过滤）",
+			map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"limit":    map[string]any{"type": "integer", "description": "条数，默认 100，上限 500"},
+					"ip":       map[string]any{"type": "string", "description": "按来源 IP 过滤"},
+					"category": map[string]any{"type": "string", "description": "按攻击分类过滤（如 sqli/xss/rce）"},
+					"ruleId":   map[string]any{"type": "string", "description": "按规则 ID 过滤"},
+					"site":     map[string]any{"type": "string", "description": "按站点过滤"},
+				},
+			},
+			func(args map[string]any) (string, error) {
+				limit := int(numOf(args["limit"]))
+				ip, _ := args["ip"].(string)
+				category, _ := args["category"].(string)
+				ruleID, _ := args["ruleId"].(string)
+				siteName, _ := args["site"].(string)
+				return jstr(s.WAF.Hits(waf.HitFilter{
+					IP: ip, Category: category, RuleID: ruleID, Site: siteName, Limit: limit,
+				})), nil
+			})
+	}
+
+	// ---- 备份与云同步（查询与生成；恢复/删除不做 MCP 入口，危险写操作留给面板） ----
+	reg("backup_items", "列出可备份项清单（backup_create 的 items 合法取值及说明）",
+		map[string]any{"type": "object", "properties": map[string]any{}},
+		func(args map[string]any) (string, error) {
+			return jstr(map[string]any{"items": backup.ItemMetas()}), nil
+		})
+	reg("backup_list", "列出本地备份包（名称/大小/包含项/是否加密/是否已同步远程）",
+		map[string]any{"type": "object", "properties": map[string]any{}},
+		func(args map[string]any) (string, error) {
+			list, err := s.Backup.List()
+			if err != nil {
+				return "", err
+			}
+			return jstr(map[string]any{"list": list}), nil
+		})
+	reg("backup_create", "生成一份备份包（异步任务，立即返回 jobId；items 为空表示完整配置迁移）。用 backup_status 查进度",
+		map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"items": map[string]any{
+					"type":  "array",
+					"items": map[string]any{"type": "string"},
+					"description": "要备份的项（合法取值见 backup_items）；缺省=完整备份",
+				},
+			},
+		},
+		func(args map[string]any) (string, error) {
+			raw, _ := args["items"].([]any)
+			items := make([]string, 0, len(raw))
+			for _, v := range raw {
+				if str, ok := v.(string); ok && str != "" {
+					items = append(items, str)
+				}
+			}
+			job, err := s.Backup.StartBuild(items, backup.TriggerManual)
+			if err != nil {
+				return "", err
+			}
+			s.auditMCP("backup.create", job.Target+" (via MCP)")
+			return jstr(map[string]any{"ok": true, "jobId": job.ID, "hint": "调用 backup_status 查询进度"}), nil
+		})
+	reg("backup_status", "查询最近一次备份/上传/下载任务的状态与最后若干行日志",
+		map[string]any{"type": "object", "properties": map[string]any{}},
+		func(args map[string]any) (string, error) {
+			jb := s.Backup.LatestJob()
+			if jb == nil {
+				return jstr(map[string]any{"job": nil}), nil
+			}
+			v := jb.View(0)
+			if len(v.Lines) > 10 {
+				v.Lines = v.Lines[len(v.Lines)-10:] // 只回最后 10 行，避免长日志撑爆上下文
+			}
+			return jstr(map[string]any{"job": v}), nil
+		})
+	reg("backup_schedule", "查看定时备份配置与远程云存储状态（只读；远程凭据不回显）",
+		map[string]any{"type": "object", "properties": map[string]any{}},
+		func(args map[string]any) (string, error) {
+			return jstr(map[string]any{"schedule": s.Backup.ScheduleView(), "remote": s.Backup.RemoteConfigView()}), nil
+		})
+
+	// ---- 版本更新（只读检查；apply 会中断面板与 MCP 会话，不暴露给 MCP） ----
+	reg("update_check", "检查面板是否有新版本（只读；不执行更新）",
+		map[string]any{"type": "object", "properties": map[string]any{}},
+		func(args map[string]any) (string, error) {
+			res, err := s.Updater.Check()
+			if err != nil {
+				return "", err
+			}
+			return jstr(res), nil
+		})
+}
+
+// auditMCP MCP 工具的写操作留痕（无 HTTP 上下文，IP 记为 mcp 以区分来源）。
+func (s *Server) auditMCP(action, detail string) {
+	s.db.Create(&model.AuditLog{Time: timeNow(), Action: action, Detail: detail, IP: "mcp"})
 }

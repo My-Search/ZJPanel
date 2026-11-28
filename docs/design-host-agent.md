@@ -233,7 +233,7 @@ Agent 侧：`GET /api/agent/time|install.sh|bin/:arch`、`WS /api/agent/ws`、`P
 | 安装 | 脚本由面板生成：幂等收敛、root/systemd/架构检测、sha256 校验、双槽目录 + symlink、systemd unit；SSH 注入前先 `uname -m` 探测 arch | `backend/internal/agent/install.go`、`http/routes_hosts.go` |
 | Agent 端 | `zjagent` 单二进制：run/install/uninstall/upgrade/doctor/version；15s 心跳；采集负载/内存/磁盘/CPU/连接/SSH 会话/端口；SSH 基线只读审计；双槽升级自替换；断网 spool | `backend/cmd/zjagent/`（`sys_unix.go`/`sys_other.go` 分平台） |
 | API | hosts CRUD、test/claim、agent install/uninstall/upgrade、metrics/events/commands、check/ssh；Agent 侧 `time`/`install.sh`/`bin/:arch`/`ws`/`register` | `backend/internal/http/routes_hosts.go` |
-| MCP | `host_list`、`host_metrics`、`host_events`、`host_check_ssh`（均只读） | `backend/internal/http/routes_mcp.go` |
+| MCP | `host_list`、`host_metrics`、`host_events`、`host_check(kind)`、`host_firewall_status`、`host_ban_ip`/`host_unban_ip`（检查类只读；封禁类写操作走 Agent 既有通道并留审计） | `backend/internal/http/routes_mcp.go` |
 | 前端 | 新增主机页（左列表右详情，Tab：概览/防御/事件/终端/设置；两种添加入口；安装输出弹窗；升级/卸载/删除）；终端页支持 `?host=`/`?local=1` 与「装 Agent」；菜单去终端、加主机、安全→WAF | `frontend/src/views/HostsPage.vue`、`TerminalPage.vue`、`SideMenu.vue`、`router/index.ts` |
 | 终端内嵌 | 主机页「终端」Tab 不再跳转：内嵌单会话终端（复用 `/api/ws/terminal`、create/attach、二进制帧、5s stats），底部 `StatusStrip` 显示资源，右侧 `TermFilePanel` 负责上传/下载/在线编辑/压缩解压；「多标签终端」仍跳 `/terminal?host=` | `frontend/src/components/HostTerminal.vue`、`TermFilePanel.vue` |
 | 分发 | Dockerfile 构建 `zjagent` 并按 TARGETARCH 落到 `/app/agent/zjagent-linux-*`；`BinaryPath` 兼容 `AppDir/agent`、`DataDir/agent` | `Dockerfile`、`internal/agent/install.go` |
