@@ -8,25 +8,27 @@
 
   <a-modal
     v-model:open="ops.open"
-    :width="isMobile ? '94%' : 1040"
+    :width="isMobile ? '96%' : 1080"
     :footer="null"
     centered
-    class="ops-modal"
-    :body-style="{ padding: 0 }"
+    wrap-class-name="ops-workbench"
+    :mask-closable="true"
   >
     <template #title>
-      <div class="om-title">
-        <RobotOutlined />
-        <b>管理 Agent</b>
-        <a-tag v-if="modeLabel" color="blue" style="margin-right: 0">{{ modeLabel }}</a-tag>
-        <span class="om-hint">会话在服务器后台运行，关闭/刷新页面不中断</span>
+      <div class="owm-title">
+        <span class="owm-logo"><RobotOutlined /></span>
+        <span class="owm-name">
+          <b>管理 Agent</b>
+          <small>会话在服务器后台运行 · 关闭/刷新页面不中断</small>
+        </span>
+        <a-tag v-if="modeLabel" class="owm-mode" :color="modeColor" style="margin-right: 0">{{ modeLabel }}</a-tag>
       </div>
     </template>
 
     <div class="om-body">
       <!-- 左栏：会话列表 -->
       <aside class="om-side">
-        <a-button type="primary" block @click="ops.selectSession(null)">
+        <a-button type="primary" block class="om-new" @click="ops.selectSession(null)">
           <PlusOutlined /> 新会话
         </a-button>
         <div class="om-sessions">
@@ -34,19 +36,22 @@
             v-for="s in ops.sessions"
             :key="s.id"
             class="om-sess"
-            :class="{ on: s.id === ops.currentId }"
+            :class="{ on: s.id === ops.currentId, ['st-' + s.status]: true }"
             @click="ops.selectSession(s.id)"
           >
-            <span class="om-dot" :class="dotClass(s)">
-              <LoadingOutlined v-if="s.status === 'running'" spin />
-            </span>
-            <div class="om-sess-main">
-              <div class="om-sess-title">{{ s.title || '（无标题）' }}</div>
-              <div class="om-sess-meta">{{ statusLabel(s.status) }} · {{ fmtTime(s.updatedAt) }}</div>
+            <div class="om-sess-top">
+              <span class="om-dot" :class="dotClass(s)">
+                <LoadingOutlined v-if="s.status === 'running'" spin />
+              </span>
+              <span class="om-sess-title">{{ s.title || '（无标题）' }}</span>
+              <a-popconfirm title="删除该会话及消息？" @confirm="ops.removeSession(s.id)">
+                <span class="om-sess-del" title="删除会话" @click.stop><DeleteOutlined /></span>
+              </a-popconfirm>
             </div>
-            <a-popconfirm title="删除该会话及消息？" @confirm="ops.removeSession(s.id)">
-              <a class="om-sess-del" @click.stop><DeleteOutlined /></a>
-            </a-popconfirm>
+            <div class="om-sess-meta">
+              <span class="om-sess-st" :class="'tx-' + s.status">{{ statusLabel(s.status) }}</span>
+              <span class="om-sess-time">{{ fmtTime(s.updatedAt) }}</span>
+            </div>
           </div>
           <div v-if="!ops.sessions.length" class="om-empty">暂无会话</div>
         </div>
@@ -54,98 +59,128 @@
 
       <!-- 右栏：消息流 + 输入 -->
       <section class="om-main">
-        <a-alert
-          v-if="ops.settings && !ops.settings.llm.ready"
-          type="warning"
-          show-icon
-          message="尚未配置模型：请前往「设置 → 智能助手」填写 LLM 地址、API Key 与模型名后再开始对话。"
-          style="margin: 12px 14px 0"
-        />
-        <div v-if="curError" class="om-error">{{ curError }}</div>
+        <template v-if="ops.currentId == null">
+          <!-- 空态：欢迎页 -->
+          <div class="om-guide">
+            <div class="om-guide-icon"><RobotOutlined /></div>
+            <h3>AI 运维智能体</h3>
+            <p class="om-guide-sub">描述任务，Agent 会调用面板工具查询与操作，并在授权模式下执行防御动作</p>
+            <div class="om-guide-cards">
+              <div class="om-guide-card" @click="fillExample('查看面板整体状态，检查证书临期与站点异常')">
+                <DashboardOutlined class="om-gc-icon" />
+                <span>查看面板整体状态<br /><small>证书临期 · 站点异常</small></span>
+              </div>
+              <div class="om-guide-card" @click="fillExample('分析最近的安全事件，如有攻击来源请给出处置建议')">
+                <SafetyOutlined class="om-gc-icon" />
+                <span>分析安全事件<br /><small>攻击来源 · 处置建议</small></span>
+              </div>
+              <div class="om-guide-card" @click="fillExample('检查所有主机的磁盘与内存占用，汇总成表格')">
+                <CloudServerOutlined class="om-gc-icon" />
+                <span>巡检所有主机<br /><small>磁盘 · 内存 · 负载</small></span>
+              </div>
+            </div>
+          </div>
+        </template>
 
-        <div ref="scrollRef" class="om-msgs">
-          <div v-if="ops.currentId == null" class="om-guide">
-            <RobotOutlined class="om-guide-icon" />
-            <p>描述你的运维任务，例如：</p>
-            <p class="om-guide-eg" @click="fillExample('查看面板整体状态，检查有没有证书即将到期或站点异常')">「查看面板整体状态，检查证书临期与站点异常」</p>
-            <p class="om-guide-eg" @click="fillExample('分析最近的安全事件，如有攻击来源请给出处置建议')">「分析最近的安全事件并给出处置建议」</p>
-            <p class="om-guide-eg" @click="fillExample('检查所有主机的磁盘与内存占用，汇总成表格')">「检查所有主机的磁盘与内存占用」</p>
+        <template v-else>
+          <a-alert
+            v-if="ops.settings && !ops.settings.llm.ready"
+            type="warning"
+            show-icon
+            message="尚未配置模型：请前往「设置 → 智能助手」填写 LLM 地址、API Key 与模型名后再开始对话。"
+            style="margin: 12px 16px 0"
+          />
+          <div v-if="curError" class="om-error"><CloseCircleOutlined /> {{ curError }}</div>
+
+          <div ref="scrollRef" class="om-msgs">
+            <template v-for="m in curMessages" :key="m.id">
+              <!-- 事件横幅 -->
+              <div v-if="m.role === 'event'" class="om-ev">
+                <ThunderboltOutlined class="om-ev-icon" />
+                <pre class="om-ev-text">{{ m.content }}</pre>
+              </div>
+              <!-- 用户气泡 -->
+              <div v-else-if="m.role === 'user'" class="om-row right">
+                <div class="om-bubble om-user">{{ m.content }}</div>
+                <span class="om-avatar me"><UserOutlined /></span>
+              </div>
+              <!-- 助手 -->
+              <div v-else-if="m.role === 'assistant'" class="om-row">
+                <span class="om-avatar ai"><RobotOutlined /></span>
+                <div class="om-bubble om-assist">
+                  <div v-if="m.content" class="om-text" :class="{ 'om-err-text': isErrText(m) }">{{ m.content }}</div>
+                  <div v-if="toolCallsOf(m).length" class="om-calls">
+                    <span v-for="tc in toolCallsOf(m)" :key="tc.id" class="om-call-chip" :title="tc.name + ' ' + fmtArgs(tc.arguments)">
+                      <ApiOutlined /> {{ tc.name }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <!-- 工具执行 -->
+              <div v-else-if="m.role === 'tool'" class="om-row">
+                <span class="om-avatar ai tool"><ApiOutlined /></span>
+                <div class="om-tool" :class="{ pending: isPending(m) }">
+                  <div class="om-tool-head">
+                    <LoadingOutlined v-if="isPending(m)" spin />
+                    <ToolOutlined v-else />
+                    <span class="om-tool-name">{{ m.toolName }}</span>
+                    <span class="om-tool-args">{{ fmtArgs(m.toolArgs) }}</span>
+                  </div>
+                  <pre v-if="m.content" class="om-tool-out">{{ m.content }}</pre>
+                </div>
+              </div>
+            </template>
           </div>
 
-          <template v-for="m in curMessages" :key="m.id">
-            <!-- 事件横幅 -->
-            <div v-if="m.role === 'event'" class="om-ev">{{ m.content }}</div>
-            <!-- 用户气泡 -->
-            <div v-else-if="m.role === 'user'" class="om-row om-row-user">
-              <div class="om-bubble om-bubble-user">{{ m.content }}</div>
-            </div>
-            <!-- 助手 -->
-            <div v-else-if="m.role === 'assistant'" class="om-row">
-              <div class="om-bubble om-bubble-assist">
-                <div v-if="m.content" class="om-text">{{ m.content }}</div>
-                <div v-if="toolCallsOf(m).length" class="om-calls">
-                  <span v-for="tc in toolCallsOf(m)" :key="tc.id" class="om-call-chip">🔧 {{ tc.name }}</span>
-                </div>
-              </div>
-            </div>
-            <!-- 工具执行 -->
-            <div v-else-if="m.role === 'tool'" class="om-row">
-              <div class="om-tool" :class="{ pending: isPending(m) }">
-                <div class="om-tool-head">
-                  <LoadingOutlined v-if="isPending(m)" spin />
-                  <span class="om-tool-name">{{ m.toolName }}</span>
-                  <span class="om-tool-args">{{ fmtArgs(m.toolArgs) }}</span>
-                </div>
-                <pre v-if="m.content" class="om-tool-out">{{ m.content }}</pre>
-              </div>
-            </div>
-          </template>
-        </div>
-
-        <!-- confirm 模式：待确认操作卡片 -->
-        <div v-if="pendingMsg && curSession?.status === 'waiting_confirm'" class="om-confirm">
-          <div class="om-confirm-title"><ExclamationCircleOutlined /> 待确认操作（「执行前确认」模式）</div>
-          <div class="om-confirm-body">
-            <div><b>{{ pendingMsg.toolName }}</b></div>
+          <!-- confirm 模式：待确认操作卡片 -->
+          <div v-if="pendingMsg && curSession?.status === 'waiting_confirm'" class="om-confirm">
+            <div class="om-confirm-title"><ExclamationCircleOutlined /> 待确认操作 · 「执行前确认」模式下处置操作需人工放行</div>
+            <div class="om-confirm-tool"><span class="om-tool-name">{{ pendingMsg.toolName }}</span> <span class="om-tool-args">{{ fmtArgs(pendingMsg.toolArgs) }}</span></div>
             <pre class="om-confirm-args">{{ prettyArgs(pendingMsg.toolArgs) }}</pre>
+            <div class="om-confirm-actions">
+              <a-button size="small" @click="ops.confirm(curSession!.id, false)">拒绝</a-button>
+              <a-button size="small" type="primary" danger @click="ops.confirm(curSession!.id, true)">确认执行</a-button>
+            </div>
           </div>
-          <a-space>
-            <a-button type="primary" danger @click="ops.confirm(curSession!.id, true)">确认执行</a-button>
-            <a-button @click="ops.confirm(curSession!.id, false)">拒绝</a-button>
-          </a-space>
-        </div>
 
-        <!-- 输入区 -->
-        <div class="om-input">
-          <a-select
-            v-model:value="hostId"
-            class="om-host"
-            size="small"
-            :placeholder="curSession ? '绑定主机' : '绑定主机（可选）'"
-            :disabled="!!curSession"
-            allow-clear
-          >
-            <a-select-option v-for="h in hosts" :key="h.id" :value="h.id">{{ h.name }}</a-select-option>
-          </a-select>
-          <div class="om-input-row">
-            <a-textarea
-              v-model:value="input"
-              placeholder="描述任务，Ctrl+Enter 发送。Agent 可查询/操作面板，并在授权模式下执行防御动作。"
-              :auto-size="{ minRows: 1, maxRows: 4 }"
-              :disabled="!!curSession && curSession.status === 'waiting_confirm'"
-              @keydown.ctrl.enter="send"
-              @keydown.meta.enter="send"
-            />
-            <a-button
-              v-if="curSession && curSession.status === 'running'"
-              danger
-              @click="ops.stop(curSession.id)"
-            ><StopOutlined /> 停止</a-button>
-            <a-button v-else type="primary" :loading="sending" :disabled="!input.trim()" @click="send">
-              <SendOutlined /> 发送
-            </a-button>
+          <!-- 输入区：统一 composer -->
+          <div class="om-composer" :class="{ focused: composerFocus }">
+            <textarea
+              v-model="input"
+              class="om-input"
+              rows="1"
+              placeholder="描述任务，Ctrl+Enter 发送…"
+              @keydown.ctrl.enter.prevent="send"
+              @keydown.meta.enter.prevent="send"
+              @focus="composerFocus = true"
+              @blur="composerFocus = false"
+            ></textarea>
+            <div class="om-composer-bar">
+              <a-select
+                v-model:value="hostId"
+                class="om-host"
+                size="small"
+                :placeholder="curSession ? '绑定主机' : '绑定主机（可选）'"
+                :disabled="!!curSession"
+                allow-clear
+                :bordered="false"
+                :popup-match-select-width="false"
+              >
+                <a-select-option v-for="h in hosts" :key="h.id" :value="h.id">{{ h.name }}</a-select-option>
+              </a-select>
+              <span class="om-kbd">Ctrl + Enter 发送</span>
+              <a-button
+                v-if="curSession && curSession.status === 'running'"
+                size="small" danger
+                @click="ops.stop(curSession.id)"
+              ><PoweroffOutlined /> 停止</a-button>
+              <a-button v-else size="small" type="primary" class="om-send" :loading="sending" :disabled="!input.trim()" @click="send">
+                <template #icon><SendOutlined /></template>
+                发送
+              </a-button>
+            </div>
           </div>
-        </div>
+        </template>
       </section>
     </div>
   </a-modal>
@@ -154,8 +189,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
-  RobotOutlined, PlusOutlined, DeleteOutlined, SendOutlined, StopOutlined,
-  LoadingOutlined, ExclamationCircleOutlined,
+  RobotOutlined, PlusOutlined, DeleteOutlined, SendOutlined, PoweroffOutlined,
+  LoadingOutlined, ExclamationCircleOutlined, ThunderboltOutlined, ApiOutlined,
+  UserOutlined, ToolOutlined, CloseCircleOutlined, DashboardOutlined,
+  SafetyOutlined, CloudServerOutlined,
 } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import { useOpsAgent, type OpsMessage, type OpsSession } from '../store/opsagent'
@@ -169,12 +206,15 @@ const hosts = ref<{ id: number; name: string }[]>([])
 const sending = ref(false)
 const scrollRef = ref<HTMLElement | null>(null)
 const isMobile = ref(window.innerWidth < 768)
+const composerFocus = ref(false)
 
 const curSession = computed(() => ops.sessions.find(s => s.id === ops.currentId) || null)
 const curMessages = computed(() => (ops.currentId != null ? ops.messages[ops.currentId] || [] : []))
 const curError = computed(() => curSession.value?.error || '')
 const modeLabel = computed(() =>
   ({ observe: '仅观察', confirm: '执行前确认', auto: '自动处置' }[ops.settings?.agent.defenseMode || ''] || ''))
+const modeColor = computed(() =>
+  ({ observe: 'blue', confirm: 'orange', auto: 'red' }[ops.settings?.agent.defenseMode || ''] || 'default'))
 const pendingMsg = computed(() => curMessages.value.find(m => m.role === 'tool' && isPending(m)) || null)
 
 const statusLabel = (s: string) =>
@@ -182,17 +222,18 @@ const statusLabel = (s: string) =>
 const dotClass = (s: OpsSession) =>
   (({ running: 'run', waiting_confirm: 'confirm', error: 'err' }) as Record<string, string>)[s.status] || ''
 
-const toolCallsOf = (m: OpsMessage): { id: string; name: string }[] => {
+const toolCallsOf = (m: OpsMessage): { id: string; name: string; arguments?: string }[] => {
   try {
     const meta = m.meta ? JSON.parse(m.meta) : null
     return meta?.toolCalls || []
   } catch { return [] }
 }
 const isPending = (m: OpsMessage) => !!m.meta && m.meta.includes('"pending":true')
+const isErrText = (m: OpsMessage) => !!m.meta && m.meta.includes('"error":true') || m.content.startsWith('⚠')
 const fmtArgs = (a?: string) => {
   if (!a) return ''
   const s = a.replace(/\s+/g, ' ')
-  return s.length > 60 ? s.slice(0, 60) + '…' : s
+  return s.length > 72 ? s.slice(0, 72) + '…' : s
 }
 const prettyArgs = (a?: string) => {
   try { return JSON.stringify(JSON.parse(a || '{}'), null, 2) } catch { return a || '' }
@@ -261,62 +302,195 @@ onUnmounted(() => { stopWs(); window.removeEventListener('resize', onResize) })
 
 <style scoped>
 .ops-btn { padding: 0 8px; font-size: 15px; }
-.om-title { display: flex; align-items: center; gap: 8px; }
-.om-hint { margin-left: auto; font-size: 11.5px; font-weight: 400; color: var(--color-slate); }
 
-.om-body { display: flex; height: min(68vh, 620px); }
-.om-side { width: 230px; flex-shrink: 0; border-right: 1px solid rgba(128,128,128,.18); padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-.om-sessions { flex: 1; overflow: auto; }
-.om-sess { display: flex; align-items: center; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; }
+/* ---- 主体布局 ---- */
+.om-body { display: flex; height: min(70vh, 640px); background: var(--surface-card, transparent); }
+
+/* ---- 左栏会话列表 ---- */
+.om-side {
+  width: 248px; flex-shrink: 0; display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 12px; border-right: 1px solid var(--border-card, rgba(128,128,128,.18));
+  background: rgba(128,128,128,.04);
+}
+.om-new { border-radius: 8px; font-weight: 600; }
+.om-sessions { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+.om-sess {
+  padding: 9px 11px; border-radius: 10px; cursor: pointer; position: relative;
+  border: 1px solid transparent; transition: background .15s, border-color .15s;
+}
 .om-sess:hover { background: rgba(128,128,128,.1); }
-.om-sess.on { background: rgba(22,119,255,.12); }
-.om-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; background: #999; display: grid; place-items: center; font-size: 10px; }
-.om-dot.run { background: #1677ff; }
-.om-dot.confirm { background: #f59e0b; }
+.om-sess.on { background: rgba(22,119,255,.1); border-color: rgba(22,119,255,.45); }
+.om-sess-top { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.om-dot {
+  width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: #8c8c8c;
+  display: inline-grid; place-items: center; font-size: 9px; color: #fff;
+}
+.om-dot.run { background: #1677ff; box-shadow: 0 0 0 3px rgba(22,119,255,.18); }
+.om-dot.confirm { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,.18); }
 .om-dot.err { background: #ef4444; }
-.om-sess-main { flex: 1; min-width: 0; }
-.om-sess-title { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.om-sess-meta { font-size: 11px; color: var(--color-slate); }
-.om-sess-del { font-size: 12px; color: var(--color-slate); }
+.om-sess-title {
+  flex: 1; min-width: 0; font-size: 12.5px; color: var(--color-ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.om-sess-del {
+  flex-shrink: 0; font-size: 12px; color: var(--color-slate); opacity: 0; transition: opacity .15s;
+}
+.om-sess:hover .om-sess-del { opacity: 1; }
 .om-sess-del:hover { color: #ef4444; }
-.om-empty { text-align: center; color: var(--color-slate); font-size: 12px; padding: 24px 0; }
+.om-sess-meta { display: flex; align-items: center; gap: 8px; margin-top: 5px; padding-left: 15px; }
+.om-sess-st { font-size: 11px; }
+.om-sess-st.tx-running { color: #1677ff; }
+.om-sess-st.tx-waiting_confirm { color: #f59e0b; }
+.om-sess-st.tx-error { color: #ef4444; }
+.om-sess-st.tx-idle, .om-sess-st.tx-interrupted { color: var(--color-slate); }
+.om-sess-time { font-size: 11px; color: var(--color-slate); }
+.om-empty { text-align: center; color: var(--color-slate); font-size: 12px; padding: 28px 0; }
 
+/* ---- 右栏 ---- */
 .om-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.om-error { margin: 10px 14px 0; padding: 6px 10px; border-radius: 8px; background: rgba(239,68,68,.12); color: #ef4444; font-size: 12px; }
-.om-msgs { flex: 1; overflow: auto; padding: 14px; }
-.om-guide { text-align: center; color: var(--color-slate); font-size: 13px; padding-top: 12vh; }
-.om-guide-icon { font-size: 42px; margin-bottom: 12px; }
-.om-guide-eg { cursor: pointer; color: var(--color-corporate-blue); margin: 6px 0; font-size: 12.5px; }
-.om-ev { white-space: pre-wrap; font-size: 12px; background: rgba(245,158,11,.1); border: 1px solid rgba(245,158,11,.35); color: #b45309; border-radius: 8px; padding: 8px 12px; margin: 8px 0; }
-html[data-theme='dark'] .om-ev { color: #fbbf24; }
+.om-error {
+  margin: 12px 16px 0; padding: 8px 12px; border-radius: 8px; font-size: 12.5px;
+  background: rgba(239,68,68,.1); border: 1px solid rgba(239,68,68,.35); color: #ef4444;
+}
 
-.om-row { display: flex; margin: 8px 0; }
-.om-row-user { justify-content: flex-end; }
-.om-bubble { max-width: 82%; border-radius: 10px; padding: 8px 12px; font-size: 13px; }
-.om-bubble-user { background: var(--color-corporate-blue); color: #fff; white-space: pre-wrap; word-break: break-word; }
-.om-bubble-assist { background: rgba(128,128,128,.1); white-space: pre-wrap; word-break: break-word; }
-.om-text { white-space: pre-wrap; }
-.om-calls { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
-.om-call-chip { font-size: 11px; font-family: ui-monospace, Consolas, monospace; background: rgba(22,119,255,.14); color: var(--color-corporate-blue); border-radius: 6px; padding: 2px 8px; }
+/* ---- 空态 ---- */
+.om-guide { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px; }
+.om-guide-icon {
+  width: 64px; height: 64px; border-radius: 18px; display: grid; place-items: center;
+  font-size: 30px; color: #fff; background: linear-gradient(135deg, #1677ff, #6a5cff);
+  box-shadow: 0 12px 28px rgba(22,119,255,.28);
+}
+.om-guide h3 { margin: 16px 0 6px; font-size: 17px; color: var(--color-ink); }
+.om-guide-sub { margin: 0 0 22px; font-size: 12.5px; color: var(--color-slate); }
+.om-guide-cards { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; }
+.om-guide-card {
+  width: 190px; padding: 14px 16px; border-radius: 12px; cursor: pointer; text-align: left;
+  border: 1px solid var(--border-card, rgba(128,128,128,.2)); background: var(--surface-card, transparent);
+  display: flex; align-items: center; gap: 10px; font-size: 12.5px; color: var(--color-ink); line-height: 1.5;
+  transition: border-color .15s, transform .15s, box-shadow .15s;
+}
+.om-guide-card:hover { border-color: rgba(22,119,255,.5); transform: translateY(-2px); box-shadow: 0 8px 20px rgba(0,0,0,.12); }
+.om-guide-card small { color: var(--color-slate); font-size: 11px; }
+.om-gc-icon { font-size: 18px; color: #1677ff; flex-shrink: 0; }
 
-.om-tool { border: 1px solid rgba(128,128,128,.2); border-radius: 8px; padding: 6px 10px; font-size: 12px; max-width: 88%; background: rgba(128,128,128,.06); }
-.om-tool.pending { border-color: rgba(245,158,11,.5); }
-.om-tool-head { display: flex; align-items: center; gap: 6px; font-family: ui-monospace, Consolas, monospace; }
-.om-tool-name { color: var(--color-corporate-blue); font-weight: 600; }
-.om-tool-args { color: var(--color-slate); word-break: break-all; }
-.om-tool-out { margin: 6px 0 0; max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 12px; color: var(--color-slate); }
+/* ---- 消息流 ---- */
+.om-msgs { flex: 1; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 4px; }
+.om-row { display: flex; gap: 8px; margin-top: 10px; align-items: flex-start; }
+.om-row.right { justify-content: flex-end; }
+.om-avatar {
+  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center; font-size: 13px;
+  background: rgba(22,119,255,.14); color: #1677ff;
+}
+.om-avatar.me { background: rgba(128,128,128,.16); color: var(--color-slate); }
+.om-avatar.tool { background: rgba(103,194,58,.16); color: #67c23a; }
+.om-bubble {
+  max-width: 76%; border-radius: 14px; padding: 9px 13px; font-size: 13px; line-height: 1.65;
+  white-space: pre-wrap; word-break: break-word;
+}
+.om-user {
+  background: linear-gradient(135deg, #1677ff, #4c8dff); color: #fff;
+  border-bottom-right-radius: 5px; box-shadow: 0 4px 12px rgba(22,119,255,.22);
+}
+.om-assist {
+  background: var(--surface-card, rgba(128,128,128,.08));
+  border: 1px solid var(--border-card, rgba(128,128,128,.16));
+  border-top-left-radius: 5px; color: var(--color-ink);
+}
+.om-err-text { color: #ef4444; }
+.om-calls { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.om-call-chip {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-family: ui-monospace, Consolas, monospace;
+  background: rgba(22,119,255,.1); color: #1677ff; border: 1px solid rgba(22,119,255,.25);
+  border-radius: 999px; padding: 2px 10px;
+}
 
-.om-confirm { margin: 0 14px; border: 1px solid rgba(245,158,11,.5); background: rgba(245,158,11,.08); border-radius: 10px; padding: 10px 12px; }
-.om-confirm-title { font-size: 12.5px; font-weight: 600; color: #b45309; margin-bottom: 6px; }
+/* 事件横幅 */
+.om-ev {
+  display: flex; gap: 9px; margin: 10px 0; padding: 10px 13px; border-radius: 10px;
+  background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.4); border-left-width: 3px;
+}
+.om-ev-icon { color: #f59e0b; font-size: 14px; margin-top: 2px; }
+.om-ev-text { margin: 0; flex: 1; white-space: pre-wrap; word-break: break-all; font-size: 12px; line-height: 1.6; color: #b45309; font-family: inherit; }
+html[data-theme='dark'] .om-ev-text { color: #fbbf24; }
+
+/* 工具卡 */
+.om-tool {
+  border: 1px solid var(--border-card, rgba(128,128,128,.18)); border-left: 3px solid #67c23a;
+  border-radius: 10px; padding: 8px 12px; font-size: 12px; max-width: 82%;
+  background: var(--surface-card, rgba(128,128,128,.05));
+}
+.om-tool.pending { border-left-color: #f59e0b; }
+.om-tool-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.om-tool-name { color: #1677ff; font-weight: 600; font-family: ui-monospace, Consolas, monospace; flex-shrink: 0; }
+.om-tool-args {
+  color: var(--color-slate); font-family: ui-monospace, Consolas, monospace;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
+.om-tool-out {
+  margin: 7px 0 0; padding: 8px 10px; max-height: 200px; overflow: auto;
+  background: rgba(128,128,128,.07); border-radius: 6px;
+  white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.55;
+  color: var(--color-slate); font-family: ui-monospace, Consolas, monospace;
+}
+
+/* 确认卡 */
+.om-confirm {
+  margin: 0 16px 10px; border: 1px solid rgba(245,158,11,.5); border-radius: 12px;
+  background: rgba(245,158,11,.07); padding: 12px 14px;
+  box-shadow: 0 6px 18px rgba(245,158,11,.12);
+}
+.om-confirm-title { font-size: 12.5px; font-weight: 600; color: #b45309; display: flex; align-items: center; gap: 6px; }
 html[data-theme='dark'] .om-confirm-title { color: #fbbf24; }
-.om-confirm-args { font-size: 12px; font-family: ui-monospace, Consolas, monospace; max-height: 120px; overflow: auto; margin: 6px 0; white-space: pre-wrap; word-break: break-all; }
+.om-confirm-tool { display: flex; gap: 8px; margin-top: 8px; align-items: baseline; min-width: 0; }
+.om-confirm-args {
+  margin: 8px 0 10px; padding: 9px 11px; border-radius: 8px; background: rgba(128,128,128,.08);
+  font-size: 12px; font-family: ui-monospace, Consolas, monospace; max-height: 130px; overflow: auto;
+  white-space: pre-wrap; word-break: break-all;
+}
+.om-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
-.om-input { border-top: 1px solid rgba(128,128,128,.18); padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
-.om-host { width: 200px; }
-.om-input-row { display: flex; gap: 8px; align-items: flex-end; }
+/* ---- 输入区 composer ---- */
+.om-composer {
+  margin: 10px 16px 14px; border: 1px solid var(--border-card, rgba(128,128,128,.25));
+  border-radius: 14px; background: var(--surface-card, rgba(128,128,128,.04));
+  transition: border-color .15s, box-shadow .15s;
+}
+.om-composer.focused { border-color: #1677ff; box-shadow: 0 0 0 2px rgba(22,119,255,.14); }
+.om-input {
+  display: block; width: 100%; border: none; outline: none; resize: none;
+  background: transparent; color: var(--color-ink);
+  padding: 11px 14px 4px; font-size: 13px; line-height: 1.6; font-family: inherit;
+}
+.om-input::placeholder { color: var(--color-slate); }
+.om-composer-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px 8px 4px; }
+.om-host { min-width: 170px; flex-shrink: 0; }
+.om-kbd { margin-left: auto; font-size: 11px; color: var(--color-slate); }
+.om-send { border-radius: 8px; font-weight: 600; }
 
 @media (max-width: 768px) {
-  .om-side { width: 150px; padding: 8px; }
-  .om-hint { display: none; }
+  .om-side { width: 168px; padding: 10px 8px; }
+  .om-guide-cards { flex-direction: column; }
+  .om-guide-card { width: 100%; }
 }
+</style>
+
+<style>
+/* 弹框框架样式（teleport 到 body，需全局作用域，用 wrap-class 限定） */
+.ops-workbench .ant-modal-content { padding: 0; overflow: hidden; border-radius: 14px; }
+.ops-workbench .ant-modal-header {
+  padding: 14px 20px; margin-bottom: 0;
+  border-bottom: 1px solid var(--border-card, rgba(128,128,128,.16));
+  background: linear-gradient(180deg, rgba(22,119,255,.06), transparent);
+}
+.ops-workbench .ant-modal-close { top: 14px; right: 16px; }
+.owm-title { display: flex; align-items: center; gap: 11px; padding-right: 34px; }
+.owm-logo {
+  width: 36px; height: 36px; border-radius: 10px; display: inline-grid; place-items: center;
+  font-size: 18px; color: #fff; background: linear-gradient(135deg, #1677ff, #6a5cff);
+  box-shadow: 0 6px 16px rgba(22,119,255,.3);
+}
+.owm-name { display: flex; flex-direction: column; gap: 1px; line-height: 1.3; }
+.owm-name b { font-size: 15px; color: var(--color-ink, #fff); }
+.owm-name small { font-size: 11px; font-weight: 400; color: var(--color-slate, #999); }
+.owm-mode { margin-left: auto !important; }
 </style>
