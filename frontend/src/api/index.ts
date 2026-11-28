@@ -112,3 +112,9 @@ export function fmtTime(t: string | number | Date): string {
   const d = new Date(t)
   return d.toLocaleString('zh-CN', { hour12: false })
 }
+
+// 版本号统一带 v 前缀展示（一眼可辨是版本号）；已有前缀不重复，空值原样返回交由调用方兜底
+export function fmtVer(v?: string | null): string {
+  if (!v) return ''
+  return /^v/i.test(v) ? v : `v${v}`
+}

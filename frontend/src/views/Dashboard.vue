@@ -146,7 +146,7 @@
             <a-descriptions-item label="负载">{{ snap.load1?.toFixed(2) }} / {{ snap.load5?.toFixed(2) }} / {{ snap.load15?.toFixed(2) }}</a-descriptions-item>
             <a-descriptions-item label="磁盘">{{ disksSummary || '-' }}</a-descriptions-item>
             <a-descriptions-item label="运行时间">{{ uptimeText }}</a-descriptions-item>
-            <a-descriptions-item label="面板版本">{{ version }}</a-descriptions-item>
+            <a-descriptions-item label="面板版本">{{ fmtVer(version) || '-' }}</a-descriptions-item>
           </a-descriptions>
         </a-card>
         <a-card title="快捷入口" size="small" class="quick-card">
@@ -163,7 +163,7 @@
 
 <script setup lang="ts">
 import { computed, inject, onActivated, onDeactivated, onUnmounted, ref } from 'vue'
-import { getQuiet, wsTopic, fmtBytes } from '../api'
+import { getQuiet, wsTopic, fmtBytes, fmtVer } from '../api'
 import { sortSites } from '../utils/siteOrder'
 import { usePolling } from '../composables/usePolling'
 import RequestMap from '../components/RequestMap.vue'

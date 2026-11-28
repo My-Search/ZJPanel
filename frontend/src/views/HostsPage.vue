@@ -33,7 +33,7 @@
           </div>
           <div class="host-right">
             <a-tag v-if="h.outdated" color="orange" class="mini-tag">可升级</a-tag>
-            <span v-else-if="h.agentVersion && !h.local" class="ver">{{ h.agentVersion }}</span>
+            <span v-else-if="h.agentVersion && !h.local" class="ver">{{ fmtVer(h.agentVersion) }}</span>
           </div>
         </div>
         <a-empty v-if="!filtered.length" :image="simpleImage" description="暂无主机" />
@@ -48,7 +48,7 @@
             <div class="dh-title">
               {{ current.name }}
               <a-tag :color="statusColor(current)">{{ statusText(current) }}</a-tag>
-              <a-tag v-if="current.outdated" color="orange">Agent 落后：{{ current.agentVersion }} → {{ current.panelVersion }}</a-tag>
+              <a-tag v-if="current.outdated" color="orange">Agent 落后：{{ fmtVer(current.agentVersion) }} → {{ fmtVer(current.panelVersion) }}</a-tag>
             </div>
             <div class="dh-sub mono">
               {{ current.local ? '127.0.0.1（面板容器）' : (current.host ? `${current.username}@${current.host}:${current.port}` : '等待 Agent 回连后上报地址') }}
@@ -95,7 +95,7 @@
                   <a-card size="small" title="Agent" style="height: 100%">
                     <a-descriptions :column="1" size="small">
                       <a-descriptions-item label="状态">{{ statusText(current) }}</a-descriptions-item>
-                      <a-descriptions-item label="版本">{{ current.agentVersion || '-' }}（面板 {{ current.panelVersion }}）</a-descriptions-item>
+                      <a-descriptions-item label="版本">{{ fmtVer(current.agentVersion) || '-' }}（面板 {{ fmtVer(current.panelVersion) || '-' }}）</a-descriptions-item>
                       <a-descriptions-item label="协议">{{ current.agentProto || '-' }}</a-descriptions-item>
                       <a-descriptions-item label="系统">{{ current.osArch || '-' }}</a-descriptions-item>
                       <a-descriptions-item label="分组">{{ current.group || '-' }}</a-descriptions-item>
@@ -119,7 +119,7 @@
               </a-alert>
               <a-alert
                 v-else-if="current.outdated" type="warning" show-icon
-                :message="`Agent 版本落后（${current.agentVersion || '-'} → ${current.panelVersion}），回连时会自动升级；也可点右侧立即升级。`"
+                :message="`Agent 版本落后（${fmtVer(current.agentVersion) || '-'} → ${fmtVer(current.panelVersion)}），回连时会自动升级；也可点右侧立即升级。`"
                 style="margin-bottom: 12px"
               >
                 <template #action>
@@ -357,7 +357,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { Empty, message } from 'ant-design-vue'
 import { PlusOutlined, ApiOutlined, CodeSandboxOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import HostTerminal from '../components/HostTerminal.vue'
-import { get, getQuiet, post, del, wsTopic, fmtBytes, fmtTime } from '../api'
+import { get, getQuiet, post, del, wsTopic, fmtBytes, fmtTime, fmtVer } from '../api'
 
 const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE
 

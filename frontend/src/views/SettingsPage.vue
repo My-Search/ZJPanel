@@ -19,7 +19,7 @@
           </div>
         </a-card>
         <a-descriptions :column="2" bordered size="small">
-          <a-descriptions-item label="面板版本">{{ version }}</a-descriptions-item>
+          <a-descriptions-item label="面板版本">{{ fmtVer(version) || '-' }}</a-descriptions-item>
           <a-descriptions-item label="面板端口">{{ settings.port }}</a-descriptions-item>
           <a-descriptions-item label="数据目录">{{ settings.dataDir }}</a-descriptions-item>
           <a-descriptions-item label="Nginx 配置目录">{{ settings.nginxPrefix }}</a-descriptions-item>
@@ -44,7 +44,7 @@
               ? '已固定 compose 镜像版本并清理本地旧镜像，正在重建容器并拉取新镜像（站点会短暂中断），等待恢复后自动刷新页面 ...'
               : '新版本已就位，面板正在重启，等待恢复后自动刷新页面 ...'" />
           <a-alert v-if="info" :type="info.updateAvailable ? 'warning' : 'success'" show-icon
-            :message="info.updateAvailable ? `发现新版本 ${info.latest}（当前 ${info.current}）` : `已是最新版本 ${info.current}`" />
+            :message="info.updateAvailable ? `发现新版本 ${fmtVer(info.latest)}（当前 ${fmtVer(info.current)}）` : `已是最新版本 ${fmtVer(info.current)}`" />
           <a-alert v-if="isDevBuild" type="warning" show-icon
             message="当前为开发构建（本地直接运行）：一键更新不可用，本地升级请重新构建二进制；服务器部署可在面板一键更新或宿主机执行 ./update.sh。" />
           <p v-if="info?.notes" class="dim">{{ info.notes }}</p>
@@ -332,7 +332,7 @@
 import { computed, nextTick, onActivated, onDeactivated, onUnmounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { DownOutlined } from '@ant-design/icons-vue'
-import { getQuiet, put, post, del, fmtTime, fmtBytes, http, wsTopic } from '../api'
+import { getQuiet, put, post, del, fmtTime, fmtBytes, fmtVer, http, wsTopic } from '../api'
 import { useAuth } from '../store/auth'
 import AceEditor from '../components/AceEditor.vue'
 import SettingsAiTab from '../components/SettingsAiTab.vue'

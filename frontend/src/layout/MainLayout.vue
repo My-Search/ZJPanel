@@ -30,7 +30,7 @@
           <a-button v-if="isMobile" type="text" class="menu-btn" @click="drawerOpen = true">
             <MenuOutlined />
           </a-button>
-          <span class="ver">ZJPanel {{ version }}</span>
+          <span class="ver">ZJPanel {{ fmtVer(version) }}</span>
         </div>
         <a-space :size="4">
           <OpsAgentWorkbench />
@@ -78,7 +78,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, provide, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { get } from '../api'
+import { get, fmtVer } from '../api'
 import { useAuth } from '../store/auth'
 import { useTheme, type ThemeMode } from '../store/theme'
 import { usePluginMenu } from '../store/pluginMenu'
