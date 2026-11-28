@@ -5,6 +5,7 @@ import (
 	"html"
 	"net/http"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -31,19 +32,59 @@ func (s *Server) registerBackupRoutes() {
 		c.JSON(http.StatusOK, gin.H{"list": list})
 	})
 
-	// 生成备份包：{items:[...]}，空/全选即完整配置迁移
+	// 生成备份包（异步任务）：{items:[...]}，空/全选即完整配置迁移。立即返回 jobId，
+	// 进度经 WS 主题 backup-job / GET /api/backup/job 展示。
 	g.POST("/create", func(c *gin.Context) {
 		var req struct {
 			Items []string `json:"items"`
 		}
 		_ = c.ShouldBindJSON(&req)
-		rec, err := s.Backup.Build(req.Items)
+		job, err := s.Backup.StartBuild(req.Items, backup.TriggerManual)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		s.audit(c, "backup.create", rec.Name)
-		c.JSON(http.StatusOK, gin.H{"ok": true, "backup": rec})
+		s.audit(c, "backup.create", job.Target)
+		c.JSON(http.StatusOK, gin.H{"ok": true, "jobId": job.ID})
+	})
+
+	// 任务进度快照：最新任务 + 自全局行号 since 起的日志（WS 断线/页面刷新补帧用）
+	g.GET("/job", func(c *gin.Context) {
+		since := 0
+		if n, err := strconv.Atoi(c.Query("since")); err == nil {
+			since = n
+		}
+		j := s.Backup.LatestJob()
+		if j == nil {
+			c.JSON(http.StatusOK, gin.H{"ok": true, "job": nil})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "job": j.View(since)})
+	})
+
+	// 历史任务列表（新→旧，不含日志行）
+	g.GET("/jobs", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "jobs": s.Backup.JobSummaries()})
+	})
+
+	// 定时备份配置
+	g.GET("/schedule", func(c *gin.Context) {
+		c.JSON(http.StatusOK, s.Backup.ScheduleView())
+	})
+
+	g.PUT("/schedule", func(c *gin.Context) {
+		var req backup.ScheduleConfig
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			return
+		}
+		v, err := s.Backup.SaveSchedule(req)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		s.audit(c, "backup.schedule", fmt.Sprintf("enabled=%v cron=%s", v.Enabled, v.Cron))
+		c.JSON(http.StatusOK, gin.H{"ok": true, "schedule": v})
 	})
 
 	// 下载本地备份包
@@ -68,7 +109,8 @@ func (s *Server) registerBackupRoutes() {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
-	// 恢复：上传备份包后按所选项目还原（本接口接收 multipart 文件）
+	// 恢复：接收 multipart 备份包落临时文件后转异步任务（恢复耗时且需提醒重启，
+	// 结果与错误在任务日志中展示；临时包由任务结束删除）
 	g.POST("/restore", func(c *gin.Context) {
 		file, err := c.FormFile("file")
 		if err != nil {
@@ -82,14 +124,14 @@ func (s *Server) registerBackupRoutes() {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		defer s.Backup.RemoveTemp(tmp)
-		res, err := s.Backup.Restore(tmp, items)
+		job, err := s.Backup.StartRestore(tmp, items)
 		if err != nil {
+			s.Backup.RemoveTemp(tmp)
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		s.audit(c, "backup.restore", file.Filename)
-		c.JSON(http.StatusOK, gin.H{"ok": true, "result": res})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "jobId": job.ID})
 	})
 
 	// 远程存储配置
@@ -125,25 +167,28 @@ func (s *Server) registerBackupRoutes() {
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 
-	// 上传本地备份到远程
+	// 上传本地备份到远程（异步任务）
 	g.POST("/:name/upload-remote", func(c *gin.Context) {
 		name := c.Param("name")
-		if err := s.Backup.UploadToRemote(name); err != nil {
+		job, err := s.Backup.StartUpload(name, backup.TriggerManual)
+		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 		s.audit(c, "backup.upload-remote", name)
-		c.JSON(http.StatusOK, gin.H{"ok": true})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "jobId": job.ID})
 	})
 
-	// 从远程拉取到本地
+	// 从远程拉取到本地（异步任务）
 	g.POST("/:name/download-remote", func(c *gin.Context) {
 		name := c.Param("name")
-		if err := s.Backup.DownloadFromRemote(name); err != nil {
+		job, err := s.Backup.StartDownload(name)
+		if err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"ok": true})
+		s.audit(c, "backup.download-remote", name)
+		c.JSON(http.StatusOK, gin.H{"ok": true, "jobId": job.ID})
 	})
 
 	// ---- 云盘 OAuth（Google Drive / OneDrive）----

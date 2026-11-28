@@ -151,8 +151,16 @@ func hasComposeFile(dir string) bool {
 	return false
 }
 
+// emitStep 进度回调安全触发（nil 回调直接跳过：单测/无推送场景）。
+func emitStep(step func(string), format string, args ...any) {
+	if step != nil {
+		step(fmt.Sprintf(format, args...))
+	}
+}
+
 // Build 按所选项目生成备份包，返回包信息（文件名、大小、清单、SHA256）。
-func (s *Service) Build(items []string) (*BackupRecord, error) {
+// step 可为 nil：收集/打包/哈希各阶段会带进度说明，供任务日志实时展示。
+func (s *Service) Build(items []string, step func(string)) (*BackupRecord, error) {
 	items = NormalizeItems(items)
 	files, err := s.collect(items)
 	if err != nil {
@@ -161,6 +169,7 @@ func (s *Service) Build(items []string) (*BackupRecord, error) {
 	if err := os.MkdirAll(s.backupsDir, 0o755); err != nil {
 		return nil, err
 	}
+	emitStep(step, "已收集 %d 个文件，开始打包", len(files))
 
 	now := time.Now()
 	name := backupName(now)
@@ -178,7 +187,7 @@ func (s *Service) Build(items []string) (*BackupRecord, error) {
 	hash := sha256.New()
 	total := int64(0)
 
-	for _, f := range files {
+	for i, f := range files {
 		st, err := os.Stat(f.src)
 		if err != nil || st.IsDir() {
 			continue
@@ -206,6 +215,10 @@ func (s *Service) Build(items []string) (*BackupRecord, error) {
 			Source: f.src, Archive: f.archive, Size: st.Size(),
 		})
 		total += st.Size()
+		// 大目录打包可能持续数分钟，定期报进度避免前台看起来无响应。
+		if len(files) > 400 && (i+1)%200 == 0 {
+			emitStep(step, "打包进度 %d/%d 文件（累计 %s）", i+1, len(files), humanBytes(total))
+		}
 	}
 
 	// 清单写入包内 _manifest.json
@@ -228,6 +241,7 @@ func (s *Service) Build(items []string) (*BackupRecord, error) {
 	out.Close()
 
 	// 计算整包 SHA256 与最终大小。
+	emitStep(step, "计算整包 SHA256…")
 	if hf, err := os.Open(path); err == nil {
 		if _, err := io.Copy(hash, hf); err == nil {
 			_ = hf.Close()
@@ -254,7 +268,8 @@ func (s *Service) Build(items []string) (*BackupRecord, error) {
 
 // Restore 从备份包恢复所选项目（数据库/配置/声明写回对应位置）。
 // 返回恢复的文件清单与跳过项；调用方应在低峰期执行，必要时重启面板/重载 nginx。
-func (s *Service) Restore(path string, items []string) (*RestoreResult, error) {
+// step 可为 nil：恢复进度定期上报。
+func (s *Service) Restore(path string, items []string, step func(string)) (*RestoreResult, error) {
 	items = NormalizeItems(items)
 	f, err := os.Open(path)
 	if err != nil {
@@ -312,6 +327,9 @@ func (s *Service) Restore(path string, items []string) (*RestoreResult, error) {
 		}
 		out.Close()
 		res.Restored = append(res.Restored, hdr.Name)
+		if len(res.Restored)%100 == 0 {
+			emitStep(step, "已写回 %d 个文件…", len(res.Restored))
+		}
 	}
 	return res, nil
 }

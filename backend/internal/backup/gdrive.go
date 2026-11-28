@@ -166,7 +166,7 @@ func (g *gdrive) Test() error {
 	return nil
 }
 
-func (g *gdrive) Upload(localPath, remoteName string) error {
+func (g *gdrive) Upload(localPath, remoteName string, step func(string)) error {
 	fid, err := g.ensureFolder()
 	if err != nil {
 		return err
@@ -218,6 +218,7 @@ func (g *gdrive) Upload(localPath, remoteName string) error {
 		// 分片续传：单请求整包在超大备份上会被限流/中断，按 16MiB 切片（256KiB 整数倍）。
 		const chunkSize = 16 * 1024 * 1024
 		buf := make([]byte, chunkSize)
+		totalChunks := (st.Size() + chunkSize - 1) / chunkSize
 		for offset := int64(0); offset < st.Size(); offset += chunkSize {
 			n, rerr := io.ReadFull(f, buf)
 			if rerr != nil && rerr != io.ErrUnexpectedEOF && rerr != io.EOF {
@@ -226,6 +227,7 @@ func (g *gdrive) Upload(localPath, remoteName string) error {
 			if n == 0 {
 				break
 			}
+			emitStep(step, "Drive 上传分片 %d/%d（%s/%s）", offset/chunkSize+1, totalChunks, humanBytes(offset+int64(n)), humanBytes(st.Size()))
 			put, err := http.NewRequest(http.MethodPut, location, bytes.NewReader(buf[:n]))
 			if err != nil {
 				return err
@@ -255,7 +257,7 @@ func (g *gdrive) Upload(localPath, remoteName string) error {
 	return fmt.Errorf("上传失败：授权失效")
 }
 
-func (g *gdrive) Download(remoteName, localPath string) error {
+func (g *gdrive) Download(remoteName, localPath string, step func(string)) error {
 	f, err := g.findFile(remoteName)
 	if err != nil {
 		return err
@@ -282,8 +284,39 @@ func (g *gdrive) Download(remoteName, localPath string) error {
 		return err
 	}
 	defer out.Close()
-	_, err = io.Copy(out, resp.Body)
+	n, err := copyWithProgress(out, resp.Body, step, "Drive 下载")
+	if err == nil {
+		emitStep(step, "Drive 下载完成 %s", humanBytes(n))
+	}
 	return err
+}
+
+// copyWithProgress 每 64MiB 上报一次下载进度（step 可为 nil）。
+func copyWithProgress(w io.Writer, r io.Reader, step func(string), label string) (int64, error) {
+	if step == nil {
+		return io.Copy(w, r)
+	}
+	var done int64
+	const reportEvery = int64(64 << 20)
+	buf := make([]byte, 1<<20)
+	for {
+		n, rerr := r.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return done, werr
+			}
+			done += int64(n)
+			if done/reportEvery > (done-int64(n))/reportEvery {
+				emitStep(step, "%s 已拉取 %s…", label, humanBytes(done))
+			}
+		}
+		if rerr == io.EOF {
+			return done, nil
+		}
+		if rerr != nil {
+			return done, rerr
+		}
+	}
 }
 
 func (g *gdrive) Delete(remoteName string) error {

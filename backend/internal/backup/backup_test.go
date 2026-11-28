@@ -19,7 +19,7 @@ func testConfig(data string) *pkg.Config {
 
 func TestComposeWholeDirBackup(t *testing.T) {
 	data := t.TempDir()
-	s := New(testConfig(data), nil, nil)
+	s := New(testConfig(data), nil, nil, nil, nil)
 
 	// 一个含 compose 的应用目录（带嵌套数据），一个不含 compose 的普通目录。
 	app := filepath.Join(data, "compose", "blog")
@@ -107,7 +107,7 @@ func TestBuildAndRestoreRoundTrip(t *testing.T) {
 	// 临时数据目录，构造少量可备份文件。
 	data := t.TempDir()
 	cfg := testConfig(data)
-	s := New(cfg, nil, nil)
+	s := New(cfg, nil, nil, nil, nil)
 
 	// 写一个证书文件与一个 nginx 站点配置。
 	mk := func(dir, name, body string) {
@@ -121,7 +121,7 @@ func TestBuildAndRestoreRoundTrip(t *testing.T) {
 	mk("certs/1", "fullchain.pem", "cert-body")
 	mk("nginx/sites-available", "a.example.com.conf", "server { listen 80; }")
 
-	rec, err := s.Build([]string{ItemCerts, ItemNginx})
+	rec, err := s.Build([]string{ItemCerts, ItemNginx}, nil)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestBuildAndRestoreRoundTrip(t *testing.T) {
 	_ = os.RemoveAll(filepath.Join(data, "certs"))
 	_ = os.RemoveAll(filepath.Join(data, "nginx"))
 
-	res, err := s.Restore(rec.Path, []string{ItemCerts, ItemNginx})
+	res, err := s.Restore(rec.Path, []string{ItemCerts, ItemNginx}, nil)
 	if err != nil {
 		t.Fatalf("restore: %v", err)
 	}

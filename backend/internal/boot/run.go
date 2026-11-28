@@ -226,7 +226,9 @@ func Run() {
 	srv.Updater = updater
 	srv.Plugins = pluginMgr
 	srv.Notify = notifySvc
-	srv.Backup = backup.New(cfg, db, box)
+	backupSvc := backup.New(cfg, db, box, hub, eventBus)
+	backupSvc.StartScheduler(cronSvc) // 定时备份挂共享 cron，设置页可改频率并即时重排
+	srv.Backup = backupSvc
 	srv.MCPReg = mcpReg
 	srv.MCPSrv = mcpSrv
 	srv.RegisterStatic(srv.Engine())

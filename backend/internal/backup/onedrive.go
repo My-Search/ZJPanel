@@ -165,7 +165,7 @@ func (o *onedrive) Test() error {
 
 // Upload 用上传会话分片写入（Graph 简单上传限制 250MB，分片可支持大包）。
 // 分片大小必须是 320KiB 的整数倍。
-func (o *onedrive) Upload(localPath, remoteName string) error {
+func (o *onedrive) Upload(localPath, remoteName string, step func(string)) error {
 	segs, err := o.ensureFolder()
 	if err != nil {
 		return err
@@ -194,6 +194,7 @@ func (o *onedrive) Upload(localPath, remoteName string) error {
 	}
 	const chunkSize = 10 * 1024 * 1024 // 10MiB，320KiB 整数倍
 	buf := make([]byte, chunkSize)
+	totalChunks := (st.Size() + chunkSize - 1) / chunkSize
 	for offset := int64(0); offset < st.Size(); offset += chunkSize {
 		n, rerr := io.ReadFull(f, buf)
 		if rerr != nil && rerr != io.ErrUnexpectedEOF && rerr != io.EOF {
@@ -202,6 +203,7 @@ func (o *onedrive) Upload(localPath, remoteName string) error {
 		if n == 0 {
 			break
 		}
+		emitStep(step, "OneDrive 上传分片 %d/%d（%s/%s）", offset/chunkSize+1, totalChunks, humanBytes(offset+int64(n)), humanBytes(st.Size()))
 		req, err := http.NewRequest(http.MethodPut, sess.UploadURL, bytes.NewReader(buf[:n]))
 		if err != nil {
 			return err
@@ -222,7 +224,7 @@ func (o *onedrive) Upload(localPath, remoteName string) error {
 	return nil
 }
 
-func (o *onedrive) Download(remoteName, localPath string) error {
+func (o *onedrive) Download(remoteName, localPath string, step func(string)) error {
 	item, err := o.findItem(remoteName)
 	if err != nil {
 		return err
@@ -250,7 +252,10 @@ func (o *onedrive) Download(remoteName, localPath string) error {
 		return err
 	}
 	defer out.Close()
-	_, err = io.Copy(out, resp.Body)
+	n, err := copyWithProgress(out, resp.Body, step, "OneDrive 下载")
+	if err == nil {
+		emitStep(step, "OneDrive 下载完成 %s", humanBytes(n))
+	}
 	return err
 }
 

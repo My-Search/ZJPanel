@@ -9,9 +9,10 @@ import (
 // 实现：WebDAV、Google Drive、OneDrive（后两者走 OAuth，见 oauth.go）。
 type Provider interface {
 	// Upload 把本地文件上传到远程目录，返回远程对象名。
-	Upload(localPath, remoteName string) error
-	// Download 把远程对象写入本地目标路径。
-	Download(remoteName, localPath string) error
+	// step 可为 nil：分片上传按片上报进度。
+	Upload(localPath, remoteName string, step func(string)) error
+	// Download 把远程对象写入本地目标路径（step 可为 nil）。
+	Download(remoteName, localPath string, step func(string)) error
 	// Delete 删除远程对象。
 	Delete(remoteName string) error
 	// List 列举远程已存在的备份对象名。
@@ -59,11 +60,11 @@ type nopProvider struct{}
 
 var _ Provider = nopProvider{}
 
-func (nopProvider) Upload(string, string) error   { return nil }
-func (nopProvider) Download(string, string) error { return nil }
-func (nopProvider) Delete(string) error           { return nil }
-func (nopProvider) List() ([]string, error)       { return nil, nil }
-func (nopProvider) Test() error                   { return nil }
+func (nopProvider) Upload(string, string, func(string)) error   { return nil }
+func (nopProvider) Download(string, string, func(string)) error { return nil }
+func (nopProvider) Delete(string) error                         { return nil }
+func (nopProvider) List() ([]string, error)                     { return nil, nil }
+func (nopProvider) Test() error                                 { return nil }
 
 // String 便于日志输出通道类型。
 func (rc RemoteConfig) String() string {

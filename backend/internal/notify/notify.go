@@ -148,6 +148,21 @@ func (s *Service) Start() {
 	s.bus.Subscribe("sitecheck.down", func(p map[string]any) {
 		wrap("sitecheck.down", "error", fmt.Sprintf("站点探测异常：%v", p["domain"]), fmt.Sprintf("%v", p["error"]))
 	})
+	// 备份任务结果：失败必报；定时备份成功也报（触发时管理员不在看进度页），手动成功不报（噪音）。
+	s.bus.Subscribe("backup.done", func(p map[string]any) {
+		ok, _ := p["ok"].(bool)
+		trigger, _ := p["trigger"].(string)
+		kind, _ := p["kind"].(string)
+		name, _ := p["name"].(string)
+		errStr, _ := p["error"].(string)
+		if !ok {
+			wrap("backup.done", "error", fmt.Sprintf("备份任务失败（%s）", kind), fmt.Sprintf("%s：%s", name, errStr))
+			return
+		}
+		if trigger == "schedule" {
+			wrap("backup.done", "info", "定时备份完成", fmt.Sprintf("%s（%s）", name, kind))
+		}
+	})
 	// sitecheck.up 不再发站内信：恢复属噪音（用户只关心声明时在运行的站点掉线）。
 	// 事件仍由 bus 发布，插件（如 notify-webhook）可自行订阅。
 	// plugin.enabled/disabled 不进站内信：由管理员自己在面板内触发，属噪音（事件仍供插件订阅）

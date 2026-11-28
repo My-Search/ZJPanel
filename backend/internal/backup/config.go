@@ -126,8 +126,8 @@ func (s *Service) SaveRemote(rc RemoteConfig) error {
 	return s.saveRemote(rc)
 }
 
-// UploadToRemote 把本地备份包上传到当前配置的远程存储。
-func (s *Service) UploadToRemote(name string) error {
+// UploadToRemote 把本地备份包上传到当前配置的远程存储（step 可为 nil）。
+func (s *Service) UploadToRemote(name string, step func(string)) error {
 	rc := s.loadRemote()
 	if !rc.Enabled || rc.Kind == StorageLocal || rc.Kind == "" {
 		return errors.New("未启用远程存储")
@@ -143,11 +143,11 @@ func (s *Service) UploadToRemote(name string) error {
 	if prov == nil {
 		return errors.New("远程存储通道不可用")
 	}
-	return prov.Upload(p, name)
+	return prov.Upload(p, name, step)
 }
 
-// DownloadFromRemote 从远程存储把备份包拉到本地备份目录。
-func (s *Service) DownloadFromRemote(name string) error {
+// DownloadFromRemote 从远程存储把备份包拉到本地备份目录（step 可为 nil）。
+func (s *Service) DownloadFromRemote(name string, step func(string)) error {
 	rc := s.loadRemote()
 	prov, err := NewProvider(rc)
 	if err != nil {
@@ -160,7 +160,7 @@ func (s *Service) DownloadFromRemote(name string) error {
 	if err := os.MkdirAll(s.backupsDir, 0o755); err != nil {
 		return err
 	}
-	return prov.Download(name, local)
+	return prov.Download(name, local, step)
 }
 
 // DeleteFromRemote 删除远程对象（忽略本地不存在）。

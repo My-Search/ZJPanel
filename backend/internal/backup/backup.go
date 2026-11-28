@@ -7,9 +7,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
+	"zjpanel/backend/internal/bus"
 	"zjpanel/backend/internal/pkg"
+	"zjpanel/backend/internal/ws"
 
 	"gorm.io/gorm"
 )
@@ -105,14 +108,30 @@ type Service struct {
 	box *pkg.SecretBox
 	// backupsDir 本地备份包存放目录（DataDir/backups）。
 	backupsDir string
+
+	hub *ws.Hub // WS 进度广播（可为 nil：单测/无推送场景静默降级）
+	bus *bus.Bus
+
+	// 任务注册表与全局互斥：同一时刻只允许一个备份任务。
+	jobsMu   sync.Mutex
+	jobs     []*BackupJob // 新→旧
+	activeMu sync.Mutex
+	active   bool
+
+	// 定时备份调度器（boot 注入共享 cron；可为 nil，保存配置仍生效仅不调度）。
+	schedMu sync.Mutex
+	sched   Scheduler
+	schedID any
 }
 
-func New(cfg *pkg.Config, db *gorm.DB, box *pkg.SecretBox) *Service {
+func New(cfg *pkg.Config, db *gorm.DB, box *pkg.SecretBox, hub *ws.Hub, eventBus *bus.Bus) *Service {
 	return &Service{
 		cfg:        cfg,
 		db:         db,
 		box:        box,
 		backupsDir: filepath.Join(cfg.DataDir, "backups"),
+		hub:        hub,
+		bus:        eventBus,
 	}
 }
 
