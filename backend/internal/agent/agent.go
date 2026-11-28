@@ -20,6 +20,7 @@ import (
 	"github.com/coder/websocket"
 	"gorm.io/gorm"
 
+	"zjpanel/backend/internal/bus"
 	"zjpanel/backend/internal/model"
 	"zjpanel/backend/internal/pkg"
 	"zjpanel/backend/internal/ws"
@@ -67,6 +68,13 @@ type Event struct {
 	User     string    `json:"user,omitempty"`
 	Detail   string    `json:"detail"`
 	Count    int       `json:"count"`
+	Action   string    `json:"action,omitempty"` // banned/alert 等已采取的动作
+}
+
+// securityEventKinds 会发布到事件总线（host.security）供 AI 运维订阅的安全类事件。
+var securityEventKinds = map[string]bool{
+	"ssh_bruteforce": true,
+	"ssh_breakin":    true,
 }
 
 type conn struct {
@@ -103,6 +111,7 @@ type Service struct {
 	db  *gorm.DB
 	box *pkg.SecretBox
 	hub *ws.Hub
+	bus *bus.Bus // 事件总线：安全类事件转发给 AI 运维（opsagent）
 
 	mu      sync.Mutex
 	conns   map[uint]*conn
@@ -119,9 +128,9 @@ type Service struct {
 	upgradeFails map[uint]int
 }
 
-func New(cfg *pkg.Config, db *gorm.DB, box *pkg.SecretBox, hub *ws.Hub) *Service {
+func New(cfg *pkg.Config, db *gorm.DB, box *pkg.SecretBox, hub *ws.Hub, eventBus *bus.Bus) *Service {
 	return &Service{
-		cfg: cfg, db: db, box: box, hub: hub,
+		cfg: cfg, db: db, box: box, hub: hub, bus: eventBus,
 		conns:        map[uint]*conn{},
 		boot:         map[string]bootEntry{},
 		metrics:      map[uint]*Metrics{},
@@ -388,6 +397,8 @@ func (s *Service) onHello(hostID uint, ac *conn, msg map[string]any, newToken st
 	_ = ac.send(welcome)
 	// 回连即检查：面板内置的 Agent 版本更新时立即自动升级（失败有冷却，不会刷屏重试）
 	go s.maybeAutoUpgrade(hostID, version, str(msg["os"]), str(msg["arch"]))
+	// 回连即下发主动防御策略（老版本 Agent 回「未知指令」，升级后自动具备检测能力）
+	go s.PushDefensePolicy(hostID)
 	slog.Info("Agent 上线", "host", hostID, "version", version, "os", osarch)
 	s.emitSystem(hostID, "Agent 上线", "info", name+" "+version)
 }
@@ -434,6 +445,20 @@ func (s *Service) onEvent(hostID uint, msg map[string]any) {
 	// 复用面板 WS 主题，前端一台机器也能实时看到事件
 	if b, err := json.Marshal(e); err == nil {
 		s.hub.Broadcast("host-event", b)
+	}
+	// 安全类事件进事件总线：AI 运维（opsagent）订阅 host.security 自动分析处置
+	if securityEventKinds[e.Kind] && s.bus != nil {
+		s.bus.Publish("host.security", map[string]any{
+			"hostId":   e.HostID,
+			"kind":     e.Kind,
+			"severity": e.Severity,
+			"ip":       e.IP,
+			"user":     e.User,
+			"count":    e.Count,
+			"action":   e.Action,
+			"detail":   e.Detail,
+			"time":     e.Time.Format(time.RFC3339),
+		})
 	}
 }
 

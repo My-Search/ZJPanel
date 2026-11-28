@@ -49,7 +49,10 @@ func (s *Server) registerOpsAgentRoutes() {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "session": sess})
 	})
 	g.GET("/sessions", func(c *gin.Context) {
-		c.JSON(http.StatusOK, s.OpsAgent.ListSessions())
+		limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+		offset, _ := strconv.Atoi(c.Query("offset"))
+		items, total := s.OpsAgent.ListSessions(limit, offset, c.Query("q"))
+		c.JSON(http.StatusOK, gin.H{"items": items, "total": total})
 	})
 	g.GET("/sessions/:id", func(c *gin.Context) {
 		sess, err := s.OpsAgent.GetSession(idParam(c))
@@ -61,9 +64,17 @@ func (s *Server) registerOpsAgentRoutes() {
 		c.JSON(http.StatusOK, gin.H{
 			"id": sess.ID, "title": sess.Title, "source": sess.Source, "status": sess.Status,
 			"defenseMode": sess.DefenseMode, "hostId": sess.HostID, "error": sess.Error,
-			"createdAt": sess.CreatedAt, "updatedAt": sess.UpdatedAt,
+			"createdAt": sess.CreatedAt, "updatedAt": sess.UpdatedAt, "viewedAt": sess.ViewedAt,
 			"contextTokens": tokens, "contextLimit": limit,
 		})
+	})
+	// 标记已查看：前端打开会话 / 正查看的会话收到终态帧时调用，支撑「完成未查看」分组排序
+	g.POST("/sessions/:id/view", func(c *gin.Context) {
+		if err := s.OpsAgent.MarkSessionViewed(idParam(c)); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 	g.GET("/sessions/:id/messages", func(c *gin.Context) {
 		after, _ := strconv.Atoi(c.Query("afterId"))
@@ -157,7 +168,7 @@ func (s *Server) registerOpsAgentRoutes() {
 			}
 		}
 		// 局部保存：前端可能只传 llm（改模型）或只传 agent（改防御配置），未提供的一侧不动
-		if req.Agent.DefenseMode != "" || req.Agent.EventEnabled || len(req.Agent.Events) > 0 || req.Agent.AllowSSHExec {
+		if req.Agent.DefenseMode != "" || req.Agent.AttackMode != "" || req.Agent.EventEnabled || len(req.Agent.Events) > 0 || req.Agent.AllowSSHExec {
 			if err := s.OpsAgent.SaveAgentConfig(req.Agent); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return

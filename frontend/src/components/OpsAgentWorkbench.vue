@@ -34,15 +34,33 @@
       <!-- 左栏：会话列表（可折叠；移动端以浮层展开，不挤压聊天列） -->
       <transition name="om-side">
         <aside v-if="sideOpen" class="om-side">
-          <a-button type="primary" block class="om-new" @click="startNew">
-            <PlusOutlined /> 新会话
-          </a-button>
-          <div class="om-sessions">
+          <div class="om-actions">
+            <a-button type="primary" class="om-new" @click="startNew">
+              <PlusOutlined /> 新会话
+            </a-button>
+            <a-tooltip title="搜索会话（标题/消息内容）">
+              <a-button class="om-search-toggle" :class="{ on: searchOpen }" @click="toggleSearch">
+                <SearchOutlined />
+              </a-button>
+            </a-tooltip>
+          </div>
+          <div v-if="searchOpen" class="om-search-row">
+            <a-input-search
+              ref="searchRef"
+              v-model:value="searchInput"
+              class="om-search"
+              size="small"
+              placeholder="标题或消息内容"
+              allow-clear
+              @search="onSearchInput"
+            />
+          </div>
+          <div class="om-sessions" @scroll.passive="onListScroll">
             <div
               v-for="s in ops.sessions"
               :key="s.id"
               class="om-sess"
-              :class="{ on: s.id === ops.currentId, ['st-' + s.status]: true }"
+              :class="{ on: s.id === ops.currentId, ['st-' + s.status]: true, unread: !isRead(s) }"
               @click="pickSession(s.id)"
             >
               <div class="om-sess-top">
@@ -60,7 +78,11 @@
                 <span class="om-sess-time">{{ fmtTime(s.updatedAt) }}</span>
               </div>
             </div>
-            <div v-if="!ops.sessions.length" class="om-empty">暂无会话</div>
+            <div v-if="!ops.sessions.length" class="om-empty">{{ ops.sessionQuery ? '未找到匹配的会话' : '暂无会话' }}</div>
+            <div v-else-if="ops.sessions.length < ops.sessionsTotal" class="om-more" @click="ops.loadMoreSessions()">
+              加载更多（还有 {{ ops.sessionsTotal - ops.sessions.length }} 条）
+            </div>
+            <div v-else-if="ops.sessions.length > 20" class="om-more om-more-end">没有更多了</div>
           </div>
         </aside>
       </transition>
@@ -202,7 +224,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   RobotOutlined, PlusOutlined, DeleteOutlined, SendOutlined, PoweroffOutlined,
-  LoadingOutlined, ExclamationCircleOutlined,
+  LoadingOutlined, ExclamationCircleOutlined, SearchOutlined,
   CloseCircleOutlined, DashboardOutlined,
   SafetyOutlined, CloudServerOutlined, CompressOutlined, ArrowDownOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined,
@@ -247,6 +269,36 @@ const toggleSide = () => {
 const pickSession = (id: number) => {
   ops.selectSession(id)
   if (isMobile.value) sideOpen.value = false
+}
+
+// ---- 会话搜索（标题/消息内容，后端过滤）与触底加载更多 ----
+const searchOpen = ref(false)
+const searchInput = ref('')
+const searchRef = ref<any>(null)
+let searchTimer: ReturnType<typeof setTimeout> | null = null
+const toggleSearch = () => {
+  searchOpen.value = !searchOpen.value
+  if (searchOpen.value) {
+    nextTick(() => searchRef.value?.focus?.())
+  } else {
+    searchInput.value = ''
+    void ops.searchSessions('') // 收起即清除过滤
+  }
+}
+// 输入防抖过滤；回车（@search）立即生效
+const onSearchInput = () => {
+  if (searchTimer) { clearTimeout(searchTimer); searchTimer = null }
+  void ops.searchSessions(searchInput.value)
+}
+watch(searchInput, v => {
+  if (!searchOpen.value) return
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => void ops.searchSessions(v), 300)
+})
+// 触底自动加载下一页（store 内有并发与到尾守卫）
+const onListScroll = (e: Event) => {
+  const el = e.target as HTMLElement
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 40) void ops.loadMoreSessions()
 }
 
 // 时间线滚动（底部锚定状态机）与回合投影
@@ -300,8 +352,19 @@ const statusLabel = (s: string) =>
   ({ running: '运行中', waiting_confirm: '待确认', idle: '已完成', interrupted: '已中断', error: '出错' }[s] || s)
 const sourceLabel = (s: OpsSession) =>
   s.source === 'inspect' ? '巡检' : s.source.startsWith('event:') ? '事件' : ''
-const dotClass = (s: OpsSession) =>
-  (({ running: 'run', waiting_confirm: 'confirm', error: 'err' }) as Record<string, string>)[s.status] || ''
+// 已查看判定（与后端分组口径一致）：终态且 viewedAt 不早于 updatedAt = 已查看；
+// 进行中的会话天然属于「进行中」组，不算未读。
+const isRead = (s: OpsSession) => {
+  if (s.status === 'running' || s.status === 'waiting_confirm') return true
+  return !!s.viewedAt && s.viewedAt >= s.updatedAt
+}
+const dotClass = (s: OpsSession) => {
+  if (s.status === 'running') return 'run'
+  if (s.status === 'waiting_confirm') return 'confirm'
+  if (s.status === 'error') return 'err'
+  if (!isRead(s)) return s.status === 'interrupted' ? 'confirm' : 'ok' // 完成未查看点亮（已读灰点）
+  return ''
+}
 
 const ctxRatio = computed(() => {
   const s = curSession.value
@@ -321,8 +384,9 @@ const fillExample = (t: string) => {
   input.value = t
   nextTick(() => taRef.value?.focus())
 }
-// 新会话：回到空态引导页并聚焦输入框（输入区常驻，发送即创建会话）
+// 新会话：回到空态引导页并聚焦输入框（输入区常驻，发送即创建会话）；先清掉搜索过滤，避免新会话被滤掉
 const startNew = () => {
+  if (searchOpen.value) toggleSearch()
   ops.selectSession(null)
   if (isMobile.value) sideOpen.value = false
   nextTick(() => taRef.value?.focus())
@@ -395,7 +459,11 @@ onUnmounted(() => { stopWs(); window.removeEventListener('resize', onResize) })
   padding: 14px 12px; border-right: 1px solid var(--border-card, rgba(128,128,128,.18));
   background: rgba(128,128,128,.04);
 }
-.om-new { border-radius: 8px; font-weight: 600; }
+.om-actions { display: flex; gap: 8px; }
+.om-new { flex: 1; border-radius: 8px; font-weight: 600; }
+.om-search-toggle { flex-shrink: 0; width: 34px; border-radius: 8px; }
+.om-search-toggle.on { color: #1677ff; border-color: rgba(22,119,255,.45); }
+.om-search-row { display: flex; }
 .om-sessions { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
 .om-sess {
   padding: 9px 11px; border-radius: 10px; cursor: pointer; position: relative;
@@ -411,10 +479,12 @@ onUnmounted(() => { stopWs(); window.removeEventListener('resize', onResize) })
 .om-dot.run { background: #1677ff; box-shadow: 0 0 0 3px rgba(22,119,255,.18); }
 .om-dot.confirm { background: #f59e0b; box-shadow: 0 0 0 3px rgba(245,158,11,.18); }
 .om-dot.err { background: #ef4444; }
+.om-dot.ok { background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,.18); }
 .om-sess-title {
   flex: 1; min-width: 0; font-size: 12.5px; color: var(--color-ink);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.om-sess.unread .om-sess-title { font-weight: 600; }
 .om-sess-del {
   flex-shrink: 0; font-size: 12px; color: var(--color-slate); opacity: 0; transition: opacity .15s;
 }
@@ -429,6 +499,10 @@ onUnmounted(() => { stopWs(); window.removeEventListener('resize', onResize) })
 .om-sess-src { font-size: 10.5px; color: var(--color-slate); background: rgba(128,128,128,.14); border-radius: 4px; padding: 0 5px; }
 .om-sess-time { font-size: 11px; color: var(--color-slate); }
 .om-empty { text-align: center; color: var(--color-slate); font-size: 12px; padding: 28px 0; }
+.om-more { text-align: center; font-size: 11px; color: var(--color-slate); padding: 6px 0; cursor: pointer; }
+.om-more:hover { color: #1677ff; }
+.om-more.om-more-end { cursor: default; opacity: .6; }
+.om-more.om-more-end:hover { color: var(--color-slate); }
 /* 左栏折叠遮罩：仅移动端浮层模式下显示（桌面隐藏） */
 .om-side-mask { display: none; }
 

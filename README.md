@@ -161,7 +161,7 @@ ZJPanel/
 │   ├── cmd/zjpanel/
 │   ├── cmd/zjagent/        # 主机 Agent（单二进制：run/install/uninstall/upgrade/doctor）
 │   ├── sdk/plugin/         # 插件 SDK（稳定接口）
-│   ├── internal/           # boot/nginx/site/compose/cert/terminal/docker/metrics/logmap/security/waf/agent/mcp/opsagent/llm/plugin/update/http
+│   ├── internal/           # boot/nginx/site/compose/cert/terminal/docker/metrics/logmap/security/waf/agent/mcp/opsagent/llm/cleanup/plugin/update/http
 │   └── plugins/notifywebhook/  # 内置示例插件
 └── frontend/               # Vue3 + TS + Ant Design Vue
 ```

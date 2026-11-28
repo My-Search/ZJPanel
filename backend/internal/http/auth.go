@@ -261,6 +261,11 @@ func (s *Server) registerAuthRoutes() {
 		}
 		ip := c.ClientIP()
 		if !loginRateLimit(ip, req.Username) {
+			// 面板自身被爆破：限速拦截之外，事件进总线供 AI 运维订阅（60s 节流在 security 内）
+			if s.Security != nil {
+				s.Security.PublishAttack("面板登录爆破", "warn", ip,
+					"同一来源登录失败过多触发限速（每分钟 8 次），来源 IP "+ip)
+			}
 			c.JSON(http.StatusTooManyRequests, gin.H{"error": "尝试过于频繁，请稍后再试"})
 			return
 		}

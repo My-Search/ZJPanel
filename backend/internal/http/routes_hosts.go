@@ -349,6 +349,26 @@ func (s *Server) registerHostRoutes() {
 		c.JSON(http.StatusOK, gin.H{"ok": true, "output": res.Output})
 	})
 
+	// ---- 主机主动防御策略：全局一份，Agent 上线即下发（检测在 Agent，策略在面板） ----
+
+	g.GET("/defense-policy", func(c *gin.Context) {
+		c.JSON(http.StatusOK, s.Agent.GetDefensePolicy())
+	})
+	g.PUT("/defense-policy", func(c *gin.Context) {
+		var pol agent.HostDefensePolicy
+		if err := c.ShouldBindJSON(&pol); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			return
+		}
+		n, err := s.Agent.SaveDefensePolicy(pol)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		s.audit(c, "host.defense-policy", "保存主动防御策略，推送 "+strconv.Itoa(n)+" 台在线主机")
+		c.JSON(http.StatusOK, gin.H{"ok": true, "pushed": n})
+	})
+
 	// ---- Agent 侧端点（token 鉴权，不走登录态） ----
 
 	s.r.GET("/api/agent/time", func(c *gin.Context) {

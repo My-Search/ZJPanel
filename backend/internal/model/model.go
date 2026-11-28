@@ -277,8 +277,12 @@ type OpsAgentSession struct {
 	DefenseMode string    `gorm:"size:16" json:"defenseMode"`  // 会话级防御模式（创建时快照，空闲可切换）：observe|confirm|auto
 	HostID      *uint     `json:"hostId"`                      // 可选：会话绑定的主机上下文
 	Error       string    `gorm:"type:text" json:"error"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	// ViewedAt 用户最后一次打开会话的时间（前端打开会话/正查看的会话跑完时调用标记接口）。
+	// 未读 = 终态(idle/interrupted/error) 且 viewed_at 为空或早于 updated_at（即"完成后没再看过"），
+	// 列表据此把未读完成/失败的会话排在已读之前。
+	ViewedAt  *time.Time `json:"viewedAt"`
+	CreatedAt time.Time  `json:"createdAt"`
+	UpdatedAt time.Time  `json:"updatedAt"`
 }
 
 // OpsAgentMessage 会话消息。role=user|assistant|tool|event；tool 消息记录工具名/参数，

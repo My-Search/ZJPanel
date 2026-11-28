@@ -21,7 +21,19 @@ var EventCatalog = []EventDesc{
 	{Topic: "backup.done", Desc: "备份任务结束（成功或失败）"},
 	{Topic: "plugin.enabled", Desc: "插件启用"},
 	{Topic: "plugin.disabled", Desc: "插件停用"},
+	{Topic: "host.security", Desc: "主机防御事件（SSH 爆破/疑似爆破成功，主机 Agent 检测上报）"},
+	{Topic: "security.attack", Desc: "安全中心攻击事件（web 爆破/CC/敏感路径扫描/面板登录爆破等）"},
 }
+
+// securityTopics 攻击类事件主题：会话默认防御模式取 AgentConfig.AttackMode（默认自动处置），
+// 其余事件沿用 DefenseMode。AI 处置动作仍受三级防御门控与工具审计约束。
+var securityTopics = map[string]bool{
+	"host.security":   true,
+	"security.attack": true,
+}
+
+// IsSecurityTopic 判断事件主题是否为攻击类。
+func IsSecurityTopic(topic string) bool { return securityTopics[topic] }
 
 type EventDesc struct {
 	Topic string `json:"topic"`
@@ -134,14 +146,24 @@ func renderEvent(topic string, payload map[string]any) string {
 			desc = e.Desc
 		}
 	}
-	return fmt.Sprintf("【系统事件】%s（%s）\n时间：%s\n数据：\n%s\n\n请分析该事件：先说明发生了什么、影响范围，再给出（或按模式执行）处置建议。",
-		topic, desc, time.Now().Format("2006-01-02 15:04:05"), string(pj))
+	guide := ""
+	if IsSecurityTopic(topic) {
+		guide = `
+处置提示：这是攻击事件。主机类可先 host_firewall_status 查看封禁列表、host_check 做账号/持久化基线排查；
+确认攻击者 IP 未被封禁（或需要延长封禁时长）时可调用 host_ban_ip（面板 nginx 层对应 security_block_ip）；
+处置后用 panel_notify 发一条摘要通知（type 填 security.alert）。注意保护名单内的地址不能封禁也不要尝试绕过。`
+	}
+	return fmt.Sprintf("【系统事件】%s（%s）\n时间：%s\n数据：\n%s\n\n请分析该事件：先说明发生了什么、影响范围，再给出（或按模式执行）处置建议。%s",
+		topic, desc, time.Now().Format("2006-01-02 15:04:05"), string(pj), guide)
 }
 
 // eventTitle 事件会话的短标题。
 func eventTitle(topic string, payload map[string]any) string {
 	for _, k := range []string{"domain", "name", "id", "taskId", "kind"} {
 		if v, ok := payload[k]; ok {
+			if ip, ok2 := payload["ip"]; ok2 && k == "kind" {
+				return fmt.Sprintf("%s: %v (%v)", topic, v, ip)
+			}
 			return fmt.Sprintf("%s: %v", topic, v)
 		}
 	}
@@ -183,9 +205,9 @@ func renderInspect(task InspectTask) string {
 	return b.String()
 }
 
-// eventKey 事件去重键：同一来源（如同一域名）短时间内重复触发只建一个会话。
+// eventKey 事件去重键：同一来源（如同一域名、同一攻击 IP）短时间内重复触发只建一个会话。
 func eventKey(payload map[string]any) string {
-	for _, k := range []string{"domain", "name", "id"} {
+	for _, k := range []string{"domain", "name", "id", "ip"} {
 		if v, ok := payload[k]; ok {
 			return fmt.Sprintf("%v", v)
 		}

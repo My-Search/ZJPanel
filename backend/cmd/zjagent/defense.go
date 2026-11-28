@@ -539,6 +539,11 @@ func banIP(p map[string]any) (bool, string) {
 		return false, "仅支持合法 IPv4 地址"
 	}
 	ip = parsed.To4().String()
+	// 白名单保护：回环/面板地址/私网（未开启 banPrivate 时）/策略白名单永不封禁，
+	// 手动 API 与 AI 处置两条路径都经过这里
+	if ipProtected(ip, currentPolicy()) {
+		return false, ip + " 在保护名单内（回环/面板/私网/白名单），未封禁"
+	}
 	if secs < 60 {
 		secs = 60
 	}

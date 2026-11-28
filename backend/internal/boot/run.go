@@ -16,6 +16,7 @@ import (
 	"zjpanel/backend/internal/cert"
 	"zjpanel/backend/internal/cert/targets"
 	"zjpanel/backend/internal/compose"
+	"zjpanel/backend/internal/cleanup"
 	"zjpanel/backend/internal/docker"
 	httpapi "zjpanel/backend/internal/http"
 	"zjpanel/backend/internal/logmap"
@@ -120,7 +121,7 @@ func Run() {
 	logmapSvc.Start()
 
 	// 安全中心：订阅日志做秒级判定（P0 观测）+ 策略下发（P1 处置）+ 自动封禁告警（P2）
-	securitySvc := security.New(cfg, logmapSvc, nginxSvc, hub)
+	securitySvc := security.New(cfg, logmapSvc, nginxSvc, hub, eventBus)
 	// 停用应用关联网站：其流量/5xx/探测异常不计入安全中心（人工关停不属于「安全事件」）。
 	securitySvc.SetIgnoredSites(composeSvc.DisabledSiteDomains)
 	securitySvc.Start()
@@ -138,7 +139,7 @@ func Run() {
 	wafSvc.Start()
 
 	// 主机 Agent 控制面：反向 WS 注册表 + token + 指令队列。
-	agentSvc := agent.New(cfg, db, box, hub)
+	agentSvc := agent.New(cfg, db, box, hub, eventBus)
 	agentSvc.EnsureLocalHost()
 	// 防御检查定时跑并落库：即使没人打开页面，刷新后也有最近一次的审计结果。
 	agentSvc.StartAuditScheduler(6 * time.Hour)
@@ -237,6 +238,10 @@ func Run() {
 	opsAgentSvc.Start()
 	opsAgentSvc.StartInspectScheduler(cronSvc) // 定时巡检挂共享 cron，设置页可改频率并即时重排
 	srv.OpsAgent = opsAgentSvc
+	// 全局定时清理：每日低峰跑一轮 + 启动补跑一次（各模块把过期数据清理实现为 Cleaner 注册进来，见 internal/cleanup）
+	cleanupMgr := cleanup.New()
+	cleanupMgr.Register(opsAgentSvc.SessionCleaner()) // 运维会话按保留天数清理（设置页可配，默认永久）
+	cleanupMgr.Start(cronSvc, "30 3 * * *")
 	srv.RegisterStatic(srv.Engine())
 	srv.RegisterRoutes()
 

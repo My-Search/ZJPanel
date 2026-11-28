@@ -113,12 +113,17 @@ type llmSetting struct {
 // 防御模式是会话级属性（会话创建时确定、可在空闲时切换）：
 //   - 手动会话：工作台创建时选择（SettingsAiTab 不再提供全局模式开关）
 //   - 巡检会话：由巡检任务自带的 defenseMode 决定
-//   - 事件会话：自动创建、无法逐个选择，沿用这里的 DefenseMode 作为默认
+//   - 事件会话：自动创建、无法逐个选择——普通事件沿用 DefenseMode，
+//     攻击类事件（host.security/security.attack）时效性强，单独取 AttackMode 默认
 type AgentConfig struct {
-	DefenseMode  string          `json:"defenseMode"` // 事件会话默认防御模式：observe | confirm | auto
+	DefenseMode string `json:"defenseMode"` // 普通事件会话默认防御模式：observe | confirm | auto
+	// AttackMode 攻击事件会话默认防御模式（独立于 DefenseMode：攻击响应要求及时性，默认 auto）
+	AttackMode   string          `json:"attackMode"`
 	EventEnabled bool            `json:"eventEnabled"`
 	Events       map[string]bool `json:"events"`
 	AllowSSHExec bool            `json:"allowSSHExec"`
+	// SessionRetentionDays 会话保留天数：到期会话由全局定时清理任务删除（含消息），0=永久（默认）。
+	SessionRetentionDays int `json:"sessionRetentionDays"`
 }
 
 // 防御模式取值。
@@ -219,15 +224,18 @@ func (s *Service) SaveLLM(baseURL, apiKeyPlain, modelName string, contextTokens 
 	return s.db.Save(&model.Setting{Key: settingLLMKey, Value: string(b)}).Error
 }
 
-// AgentConfig 载入智能体配置（带默认值：事件会话仅观察 + 事件全关 + SSH 执行关闭）。
+// AgentConfig 载入智能体配置（带默认值：事件会话仅观察 + 攻击事件自动处置 + 事件全关 + SSH 执行关闭）。
 func (s *Service) AgentConfig() AgentConfig {
-	cfg := AgentConfig{DefenseMode: ModeObserve, Events: map[string]bool{}}
+	cfg := AgentConfig{DefenseMode: ModeObserve, AttackMode: ModeAuto, Events: map[string]bool{}}
 	var rec model.Setting
 	if err := s.db.Where("key = ?", settingAgentKey).First(&rec).Error; err == nil {
 		_ = json.Unmarshal([]byte(rec.Value), &cfg)
 	}
 	if !validMode(cfg.DefenseMode) {
 		cfg.DefenseMode = ModeObserve
+	}
+	if !validMode(cfg.AttackMode) {
+		cfg.AttackMode = ModeAuto
 	}
 	if cfg.Events == nil {
 		cfg.Events = map[string]bool{}
@@ -239,6 +247,12 @@ func (s *Service) SaveAgentConfig(cfg AgentConfig) error {
 	if !validMode(cfg.DefenseMode) {
 		return fmt.Errorf("非法防御模式: %s", cfg.DefenseMode)
 	}
+	if cfg.AttackMode == "" {
+		// 未提供攻击事件模式（不感知该字段的客户端）→ 沿用现值：既不拒绝保存，也不静默重置
+		cfg.AttackMode = s.AgentConfig().AttackMode
+	} else if !validMode(cfg.AttackMode) {
+		return fmt.Errorf("非法攻击事件防御模式: %s", cfg.AttackMode)
+	}
 	if cfg.Events == nil {
 		cfg.Events = map[string]bool{}
 	}
@@ -248,10 +262,48 @@ func (s *Service) SaveAgentConfig(cfg AgentConfig) error {
 
 // ===================== 会话 =====================
 
-func (s *Service) ListSessions() []model.OpsAgentSession {
-	var list []model.OpsAgentSession
-	s.db.Order("updated_at desc").Limit(50).Find(&list)
-	return list
+// ListSessions 分页列出会话，三组排序（组内按 updated_at 倒序）：
+//  0 = 进行中（running/waiting_confirm，需要用户关注）
+//  1 = 已结束未查看（终态且 viewed_at 为空或早于 updated_at，即"跑完还没看过"）
+//  2 = 已结束已查看
+// query 非空时按标题或消息内容模糊匹配（只搜标题经常搜不到目标会话）。
+func (s *Service) ListSessions(limit, offset int, query string) ([]model.OpsAgentSession, int64) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	q := strings.TrimSpace(query)
+	filter := func(tx *gorm.DB) *gorm.DB {
+		if q != "" {
+			like := "%" + q + "%"
+			return tx.Where("title LIKE ? OR EXISTS (SELECT 1 FROM ops_agent_messages m WHERE m.session_id = ops_agent_sessions.id AND m.content LIKE ?)", like, like)
+		}
+		return tx
+	}
+	var total int64
+	if err := s.db.Model(&model.OpsAgentSession{}).Scopes(filter).Count(&total).Error; err != nil {
+		slog.Warn("会话总数统计失败", "err", err)
+	}
+	list := []model.OpsAgentSession{}
+	_ = s.db.Scopes(filter).Order(sessionListOrder).Offset(offset).Limit(limit).Find(&list).Error
+	return list, total
+}
+
+// sessionListOrder 三组排序的 ORDER BY（与 ListSessions 的注释保持一致）。
+const sessionListOrder = `CASE WHEN status IN ('running','waiting_confirm') THEN 0
+	WHEN viewed_at IS NULL OR viewed_at < updated_at THEN 1
+	ELSE 2 END, updated_at DESC`
+
+// MarkSessionViewed 标记会话已查看（前端打开会话、或正查看的会话收到终态帧时调用）。
+// 用 UpdateColumn 只写 viewed_at：GORM 的 Update 会顺带把 updated_at 刷成稍晚的当前时间，
+// 反而让 viewed_at < updated_at 永远成立、会话永远判为未读；且标记已读也不应改变会话在已读组内的位置。
+func (s *Service) MarkSessionViewed(id uint) error {
+	return s.db.Model(&model.OpsAgentSession{}).Where("id = ?", id).UpdateColumn("viewed_at", time.Now()).Error
 }
 
 func (s *Service) GetSession(id uint) (*model.OpsAgentSession, error) {
@@ -898,7 +950,18 @@ func (s *Service) handleEvent(topic string, payload map[string]any) {
 		}
 		return
 	}
-	sess, err := s.CreateSession(eventTitle(topic, payload), "event:"+topic, nil, "event", renderEvent(topic, payload), cfg.DefenseMode)
+	// 攻击类事件时效性强，防御模式单独取 AttackMode（默认 auto）；其余事件沿用 DefenseMode
+	mode := cfg.DefenseMode
+	if IsSecurityTopic(topic) {
+		mode = cfg.AttackMode
+	}
+	// 攻击事件载荷带 hostId：把会话绑定到对应主机（AI 的 host_* 操作默认作用于它）
+	var hostID *uint
+	if hid, ok := payload["hostId"].(float64); ok && hid > 0 {
+		id := uint(hid)
+		hostID = &id
+	}
+	sess, err := s.CreateSession(eventTitle(topic, payload), "event:"+topic, hostID, "event", renderEvent(topic, payload), mode)
 	if err != nil {
 		slog.Error("事件触发会话创建失败", "topic", topic, "err", err)
 		return

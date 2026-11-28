@@ -57,10 +57,12 @@ type client struct {
 }
 
 const (
-	confPath  = "/etc/zjagent/agent.json"
-	stateDir  = "/var/lib/zjagent"
-	spoolPath = stateDir + "/events.jsonl"
+	confPath = "/etc/zjagent/agent.json"
+	stateDir = "/var/lib/zjagent"
 )
+
+// spoolPath 断网事件暂存文件（测试替换为临时目录）。
+var spoolPath = stateDir + "/events.jsonl"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -171,6 +173,8 @@ func run() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// 主动防御：常驻攻击检测（SSH 爆破等），策略在面板、检测在本机，断网按最后策略工作
+	go startDefense(ctx, c)
 	c.loop(ctx)
 }
 
@@ -351,6 +355,8 @@ func (c *client) exec(kind string, p map[string]any) (bool, string) {
 		return banIP(p)
 	case "unban_ip":
 		return unbanIP(p)
+	case "defense_policy":
+		return defensePolicyCmd(p)
 	case "uninstall":
 		// 先回 ack，再由脱离会话的子进程完成卸载（当前进程会被 systemctl stop 杀掉）
 		go func() {
@@ -741,6 +747,12 @@ func doctor() {
 	}
 	if _, err := os.Stat("/etc/ssh/sshd_config"); err == nil {
 		fmt.Println("  [ok] sshd_config 可读")
+	}
+	if pol := currentPolicy(); pol.Enabled {
+		fmt.Printf("  [ok] 主动防御已启用（SSH：%ds 内 ≥%d 次失败 → 封禁 %ds，自动封禁=%v）\n",
+			pol.SSH.WindowSecs, pol.SSH.MaxFails, pol.SSH.BanSeconds, pol.SSH.AutoBan)
+	} else {
+		fmt.Println("  [!] 主动防御未启用（等待面板下发策略）")
 	}
 	for _, p := range []string{"/var/log/auth.log", "/var/log/secure"} {
 		if _, err := os.Stat(p); err == nil {

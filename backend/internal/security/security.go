@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"zjpanel/backend/internal/bus"
 	"zjpanel/backend/internal/logmap"
 	"zjpanel/backend/internal/nginx"
 	"zjpanel/backend/internal/pkg"
@@ -131,6 +132,7 @@ type Service struct {
 	logmap *logmap.Service
 	nginx  *nginx.Service
 	hub    *ws.Hub
+	bus    *bus.Bus // 攻击事件发布到总线，供 AI 运维（opsagent）订阅分析处置
 
 	mu       sync.Mutex
 	buckets  []*bucket
@@ -146,6 +148,10 @@ type Service struct {
 	l4prev   l4Prev
 	liveFile *os.File
 	liveSize int64
+
+	// PublishAttack（面板自身等非 nginx 来源攻击事件）的独立节流
+	attackMu   sync.Mutex
+	lastAttack map[string]time.Time
 
 	polMu     sync.Mutex
 	pol       *Policy
@@ -172,14 +178,15 @@ type Service struct {
 	once sync.Once
 }
 
-func New(cfg *pkg.Config, lm *logmap.Service, ng *nginx.Service, hub *ws.Hub) *Service {
+func New(cfg *pkg.Config, lm *logmap.Service, ng *nginx.Service, hub *ws.Hub, eventBus *bus.Bus) *Service {
 	pol := defaultPolicy()
 	s := &Service{
-		cfg: cfg, logmap: lm, nginx: ng, hub: hub,
+		cfg: cfg, logmap: lm, nginx: ng, hub: hub, bus: eventBus,
 		lastEmit:   map[string]time.Time{},
 		ewCtry:     map[string]float64{},
 		cidrCache:  map[string]cidrEntry{},
 		lastNotify: map[string]time.Time{},
+		lastAttack: map[string]time.Time{},
 		pol:        pol,
 		view:       policyViewOf(pol),
 		stop:       make(chan struct{}),
@@ -644,9 +651,49 @@ func (s *Service) emit(kind, sev, site, ip, country, path, ua, detail string, co
 	if len(s.events) > maxEvents {
 		s.events = s.events[len(s.events)-maxEvents:]
 	}
+	// 攻击事件进总线：AI 运维（opsagent）订阅 security.attack 自动分析处置
+	//（emit 自带 60/120s 冷却，不会打爆总线）
+	if s.bus != nil {
+		s.bus.Publish("security.attack", map[string]any{
+			"kind":     kind,
+			"severity": sev,
+			"site":     site,
+			"ip":       ip,
+			"country":  country,
+			"path":     path,
+			"count":    count,
+			"detail":   detail,
+			"time":     now.Format(time.RFC3339),
+		})
+	}
 	if sev == "critical" {
 		s.notifyCritical(kind, detail, now)
 	}
+}
+
+// PublishAttack 面板自身等非 nginx 来源的攻击事件（如登录爆破触发限速）：
+// 不进安全中心事件环（无站点流量上下文），直接发布 security.attack 供 AI 订阅，
+// 按 kind+ip 节流 60s。
+func (s *Service) PublishAttack(kind, sev, ip, detail string) {
+	if s.bus == nil {
+		return
+	}
+	now := time.Now()
+	key := kind + "|" + ip
+	s.attackMu.Lock()
+	if t, ok := s.lastAttack[key]; ok && now.Sub(t) < 60*time.Second {
+		s.attackMu.Unlock()
+		return
+	}
+	s.lastAttack[key] = now
+	s.attackMu.Unlock()
+	s.bus.Publish("security.attack", map[string]any{
+		"kind":     kind,
+		"severity": sev,
+		"ip":       ip,
+		"detail":   detail,
+		"time":     now.Format(time.RFC3339),
+	})
 }
 
 // notifyCritical 严重事件告警：同类事件 5 分钟内只推一次，避免被打时把通知通道自己打爆。

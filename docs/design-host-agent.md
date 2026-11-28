@@ -270,6 +270,26 @@ v1.0.29 起 defense 后续能力落地，仍坚持「检查只读、动作带 TT
 
 尚未做：封禁中心 `Ban{scope}` 与 WAF 共用数据源、sshd 配置自动加固/回滚、批量安装与灰度升级、`host_ports/processes` MCP 工具。Webshell 为特征匹配（非沙箱/静态解析），只用于发现线索，需人工复核。
 
+### 主动防御（2026-11-28）
+
+内嵌轻量 fail2ban：**检测在 Agent、策略在面板**（硬原则落地），AI 运维作为强化层。攻击面全覆盖：主机层（zjagent 检测）、web 层（安全中心/WAF 已有检测，本次上总线）、面板自身（登录限速）。
+
+| 能力 | 实现 | 代码位置 |
+|---|---|---|
+| 检测器框架 | `sourceDef` 注册表：日志行流 + 行处理；SSH 爆破是首个实例，后续 MySQL/Redis 等注册新 `sourceDef` 即可 | `backend/cmd/zjagent/detect.go` |
+| SSH 检测 | journald（`-u ssh -u sshd -f`）优先，回退 tail `auth.log`/`secure`（inode/size 轮转重开）；失败正则含 `Failed password`/`Invalid user`/`Too many authentication failures`/`maximum authentication attempts exceeded`；每 IP 滑动窗口计数 | 同上 |
+| 聚合与升级 | 同窗口只报一次；双倍阈值升级 critical 再报一次（`lastSev`）；达阈值后 30 分钟内成功登录 → `ssh_breakin`（疑似爆破成功） | 同上 |
+| 本地自动封禁 | 阈值触发即 `banIP`（独立表 `inet zjpanel`，TTL 到期解封）；断网按最后策略继续检测与封禁 | `detect.go` + `defense.go` |
+| 白名单保护 | `ipProtected`：回环/未指定地址 + 面板地址（含 DNS 解析缓存，按地址键控失效）+ 私网段（`banPrivate` 默认关）+ 策略白名单；`banIP` 统一校验，手动 API 与 AI 处置两条路径都被保护 | `defense.go` |
+| 策略下发 | 全局一份存 Setting `agent.defense`；`GET/PUT /api/hosts/defense-policy`；Agent 上线（`onHello`）即推送 + 保存时推全部在线主机；Agent 持久化 `/var/lib/zjagent/defense.json`，老版本 Agent 收到 `defense_policy` 回「未知指令」无害，回连自动升级后具备能力 | `internal/agent/policy.go`、`routes_hosts.go`、`zjagent/main.go exec()` |
+| 事件上总线 | Agent `event` 消息 → 面板 `onEvent` → 环形缓存 + WS 广播 + **`bus.Publish("host.security")`**；安全中心五类判定 emit → **`bus.Publish("security.attack")`**；面板登录限速触发 → `PublishAttack("面板登录爆破")` | `agent/agent.go onEvent`、`security/security.go emit`、`http/auth.go` |
+| AI 强化处置 | opsagent 事件目录新增 `host.security`/`security.attack`；攻击类事件会话默认防御模式单独取 `AgentConfig.AttackMode`（默认 auto，与普通事件 DefenseMode 分离）；会话绑定事件主机；提示词附处置指引（查封禁/基线排查/延长封禁/通报） | `opsagent/prompt.go`、`service.go handleEvent` |
+| 断网补传 | 检测事件断线写 `/var/lib/zjagent/events.jsonl`（≤200 条裁剪最旧一半，与既有 `flushSpool` 补传语义一致）——首次有了写入方 | `detect.go emitEvent/appendSpool` |
+| 前端 | 防御 Tab「主动防御（SSH 爆破）」卡片：启用/自动封禁/封私网/统计窗口/失败阈值/封禁时长/白名单，保存即下发并显示生效主机数；设置页 AI 事件目录自动多出两个主题 + 「攻击事件防御模式」 | `HostsPage.vue`、`SettingsAiTab.vue` |
+
+事件 kinds：`ssh_bruteforce`（warning/critical，action=banned/alert）、`ssh_breakin`（critical）。bus 载荷含 hostId/kind/severity/ip/user/count/action/detail，`eventKey` 按 ip 去重（同 IP 10 分钟一个会话）。
+
+
 ### 更早遗留（P1+）
 
 - 封禁中心 `Ban{scope}` 重构，WAF 与主机共用数据源。

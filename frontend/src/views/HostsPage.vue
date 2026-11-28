@@ -163,6 +163,52 @@
                 </a-col>
               </a-row>
 
+              <a-card size="small" class="def-fw" title="主动防御（SSH 爆破）">
+                <template #extra>
+                  <a-space>
+                    <a-tag :color="pol.enabled ? 'green' : 'default'">{{ pol.enabled ? '已启用' : '已停用' }}</a-tag>
+                    <a-button size="small" type="primary" :loading="polSaving" @click="savePolicy">保存并下发</a-button>
+                  </a-space>
+                </template>
+                <div class="pol-grid">
+                  <div class="pol-item">
+                    <span class="pol-label">启用检测</span>
+                    <a-switch v-model:checked="pol.enabled" checked-children="开" un-checked-children="关" />
+                  </div>
+                  <div class="pol-item">
+                    <span class="pol-label">自动封禁</span>
+                    <a-switch v-model:checked="pol.ssh.autoBan" checked-children="开" un-checked-children="关" />
+                  </div>
+                  <div class="pol-item">
+                    <span class="pol-label">封私网段</span>
+                    <a-switch v-model:checked="pol.banPrivate" checked-children="开" un-checked-children="关" />
+                  </div>
+                  <div class="pol-item">
+                    <span class="pol-label">统计窗口</span>
+                    <a-input-number v-model:value="polWindow" :min="1" :max="1440" addon-after="分钟" style="width: 132px" />
+                  </div>
+                  <div class="pol-item">
+                    <span class="pol-label">失败阈值</span>
+                    <a-input-number v-model:value="pol.ssh.maxFails" :min="3" :max="1000" addon-after="次" style="width: 132px" />
+                  </div>
+                  <div class="pol-item">
+                    <span class="pol-label">封禁时长</span>
+                    <a-select v-model:value="pol.ssh.banSeconds" :options="ttlOptions" style="width: 132px" />
+                  </div>
+                </div>
+                <div class="pol-item" style="margin-top: 8px">
+                  <span class="pol-label">白名单</span>
+                  <a-select
+                    v-model:value="pol.whitelist" mode="tags" placeholder="IP 或 CIDR，如 10.0.0.0/8"
+                    style="flex: 1; min-width: 200px" :max-tag-count="6" allow-clear
+                  />
+                </div>
+                <div class="hint" style="margin-top: 8px">
+                  策略全局一份，保存后即时下发各在线主机：Agent 本机 tail SSH 认证日志实时检测，达到阈值即写入独立 nftables 表封禁（到期自动解封），断网时按最后下发的策略继续工作。
+                  攻击事件上报后可在「事件」查看；AI 运维开启订阅后会自动创建分析会话做加强处置。回环、面板地址与私网段默认受保护不封禁。
+                </div>
+              </a-card>
+
               <a-card size="small" class="def-fw" title="主机层封禁">
                 <template #extra>
                   <a-tag :color="fw?.active ? 'green' : 'orange'">
@@ -357,7 +403,7 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { Empty, message } from 'ant-design-vue'
 import { PlusOutlined, ApiOutlined, CodeSandboxOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import HostTerminal from '../components/HostTerminal.vue'
-import { get, getQuiet, post, del, wsTopic, fmtBytes, fmtTime, fmtVer } from '../api'
+import { get, getQuiet, post, put, del, wsTopic, fmtBytes, fmtTime, fmtVer } from '../api'
 
 const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE
 
@@ -462,6 +508,38 @@ const fwMeta = computed(() => {
   return `${fw.value.backend} · ${fw.value.rules || 0} 条规则 · ${fw.value.active ? '生效中' : '未生效'}`
 })
 const bans = computed(() => fw.value?.bans || [])
+
+// 主动防御：全局策略（面板保存并下发，Agent 本机检测 + 自动封禁）
+const polSaving = ref(false)
+const pol = reactive<any>({
+  enabled: true,
+  ssh: { windowSecs: 600, maxFails: 10, banSeconds: 3600, autoBan: true },
+  whitelist: [] as string[],
+  banPrivate: false,
+})
+const polWindow = ref(10)
+let polLoaded = false
+const loadPolicy = async () => {
+  try {
+    const r = await getQuiet<any>('/api/hosts/defense-policy')
+    Object.assign(pol, {
+      enabled: !!r.enabled, banPrivate: !!r.banPrivate, whitelist: r.whitelist || [],
+      ssh: { ...pol.ssh, ...(r.ssh || {}) },
+    })
+    polWindow.value = Math.max(1, Math.round((pol.ssh.windowSecs || 600) / 60))
+    polLoaded = true
+  } catch { /* 全局策略加载失败不阻塞防御页 */ }
+}
+const savePolicy = async () => {
+  polSaving.value = true
+  try {
+    pol.ssh.windowSecs = Math.max(60, (polWindow.value || 10) * 60)
+    const r = await put<any>('/api/hosts/defense-policy', JSON.parse(JSON.stringify(pol)))
+    message.success(`已保存并下发（${r.pushed || 0} 台在线主机生效）`)
+  } catch (e: any) {
+    message.error(e?.response?.data?.error || '保存失败')
+  } finally { polSaving.value = false }
+}
 
 const statusClass = (h: any) => h.local ? 'dot-local' : h.online ? 'dot-on' : h.agentStatus === 'pending' ? 'dot-pending' : h.agentStatus === 'uninstalled' ? 'dot-off' : 'dot-off'
 const statusText = (h: any) => h.local ? '内置' : h.agentStatus === 'local' ? '内置' : h.online ? '在线' : h.agentStatus === 'pending' ? '待回连' : h.agentStatus === 'uninstalled' ? '已卸载' : h.agentStatus === 'none' || !h.agentStatus ? '未安装' : '离线'
@@ -838,6 +916,7 @@ watch(tab, (v) => {
   localStorage.setItem(TAB_KEY, v)
   if (v === 'defense') {
     loadChecks()
+    if (!polLoaded) loadPolicy()
     if (canCheck.value) refreshFirewall()
   }
 })
@@ -916,6 +995,9 @@ watch(tab, (v) => {
 .def-foot .hint { margin-top: 0; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .def-result { margin-top: 12px; }
 .def-fw { margin-top: 12px; }
+.pol-grid { display: flex; gap: 16px 24px; flex-wrap: wrap; }
+.pol-item { display: flex; align-items: center; gap: 8px; }
+.pol-label { font-size: 12px; color: var(--color-slate); flex: none; }
 .fw-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--color-ink); }
 .fw-dot { width: 7px; height: 7px; border-radius: 50%; background: #f59e0b; box-shadow: 0 0 0 3px rgba(245, 158, 11, .14); }
 .fw-dot.on { background: #10b981; box-shadow: 0 0 0 3px rgba(16, 185, 129, .14); }

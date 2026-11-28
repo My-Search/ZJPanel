@@ -11,6 +11,7 @@ export interface OpsSession {
   error: string
   createdAt: string
   updatedAt: string
+  viewedAt: string | null // 最后打开会话的时间；为空或早于 updatedAt = 完成后未查看（列表分组依据）
   contextTokens?: number // 上下文用量估算（WS context 帧 / 会话详情回填）
   contextLimit?: number  // 模型上下文窗口配置
 }
@@ -40,7 +41,7 @@ export interface OpsEventDesc { topic: string; desc: string }
 
 export interface OpsAgentSettings {
   llm: { baseURL: string; model: string; apiKeySet: boolean; ready: boolean; hint: string; contextTokens: number }
-  agent: { defenseMode: string; eventEnabled: boolean; events: Record<string, boolean>; allowSSHExec: boolean }
+  agent: { defenseMode: string; attackMode: string; eventEnabled: boolean; events: Record<string, boolean>; allowSSHExec: boolean; sessionRetentionDays: number }
   events: OpsEventDesc[]
 }
 
@@ -68,6 +69,8 @@ export interface InspectTaskView extends InspectTask {
 export interface OpsAgentAPI {
   open: boolean
   sessions: OpsSession[]
+  sessionsTotal: number // 后端命中的会话总数（搜索/分页「加载更多」依据）
+  sessionQuery: string  // 当前会话搜索关键词（侧栏搜索框）
   currentId: number | null
   messages: Record<number, OpsMessage[]>
   running: number // 运行中/待确认会话数（顶栏角标）
@@ -77,7 +80,10 @@ export interface OpsAgentAPI {
   inspects: InspectTaskView[]
   inspectCatalog: InspectItem[]
   fetchRunning(): Promise<void>
-  fetchSessions(): Promise<void>
+  fetchSessions(opts?: { limit?: number; offset?: number; append?: boolean }): Promise<void>
+  searchSessions(q: string): Promise<void>
+  loadMoreSessions(): Promise<void>
+  markViewed(id: number): Promise<void>
   fetchMessages(id: number, afterId?: number): Promise<OpsMessage[]>
   selectSession(id: number | null): void
   fetchSessionDetail(id: number): Promise<void>
@@ -105,6 +111,8 @@ export interface OpsAgentAPI {
 export const api: OpsAgentAPI = reactive({
   open: false,
   sessions: [] as OpsSession[],
+  sessionsTotal: 0,
+  sessionQuery: '',
   currentId: null as number | null,
   messages: {} as Record<number, OpsMessage[]>,
   running: 0,
@@ -117,10 +125,43 @@ export const api: OpsAgentAPI = reactive({
   async fetchRunning() {
     try { api.running = (await get<any>('/api/opsagent/running-count')).count ?? 0 } catch { /* ignore */ }
   },
-  async fetchSessions() {
+  /**
+   * 会话列表：默认取最近 20 条；后端三组排序（进行中 → 完成未查看 → 已查看）。
+   * append=true 时为「加载更多」；limit 可覆盖（WS 防抖刷新时保持已加载条数不塌缩）。
+   */
+  async fetchSessions(opts: { limit?: number; offset?: number; append?: boolean } = {}) {
     try {
-      api.sessions = await get<OpsSession[]>('/api/opsagent/sessions')
-      api.running = api.sessions.filter(s => s.status === 'running' || s.status === 'waiting_confirm').length
+      const limit = opts.limit ?? 20
+      const offset = opts.offset ?? 0
+      const q = api.sessionQuery ? `&q=${encodeURIComponent(api.sessionQuery)}` : ''
+      const r = await get<{ items: OpsSession[]; total: number }>(`/api/opsagent/sessions?limit=${limit}&offset=${offset}${q}`)
+      api.sessionsTotal = r.total ?? 0
+      api.sessions = opts.append ? [...api.sessions, ...r.items] : r.items
+      void api.fetchRunning() // 角标走独立接口：分页后 items 只是切片，不能当 running 依据
+    } catch { /* ignore */ }
+  },
+  /** 关键词搜索会话（标题或消息内容），重置到第一页。 */
+  async searchSessions(q: string) {
+    api.sessionQuery = q.trim()
+    await api.fetchSessions()
+  },
+  /** 触底加载下一页（loadingMore 守卫并发：触底滚动会连发多次调用）。 */
+  async loadMoreSessions() {
+    if (loadingMore || api.sessions.length >= api.sessionsTotal) return
+    loadingMore = true
+    try {
+      await api.fetchSessions({ offset: api.sessions.length, append: true })
+    } finally {
+      loadingMore = false
+    }
+  },
+  /** 标记会话已查看（打开会话时调用）；活跃会话无需标记。 */
+  async markViewed(id: number) {
+    const s = api.sessions.find(x => x.id === id)
+    if (!s || s.status === 'running' || s.status === 'waiting_confirm') return
+    try {
+      await post(`/api/opsagent/sessions/${id}/view`, {})
+      s.viewedAt = new Date().toISOString()
     } catch { /* ignore */ }
   },
   async fetchMessages(id: number, afterId = 0) {
@@ -141,6 +182,7 @@ export const api: OpsAgentAPI = reactive({
     if (id == null) return
     if (!api.messages[id]) void api.fetchMessages(id)
     void api.fetchSessionDetail(id) // 回填上下文用量等详情字段
+    void api.markViewed(id)         // 打开即已查看（完成后未查看的分组排序依据）
   },
   async fetchSessionDetail(id: number) {
     try {
@@ -261,6 +303,12 @@ export const api: OpsAgentAPI = reactive({
     } else if (frame.type === 'status' && frame.sessionId != null) {
       const s = api.sessions.find(x => x.id === frame.sessionId)
       if (s) { s.status = frame.status; s.error = frame.error || '' }
+      // 正在查看的会话跑完 → 顺手标记已查看，避免落进「完成未查看」组
+      if (api.currentId === frame.sessionId && ['idle', 'interrupted', 'error'].includes(frame.status)) {
+        void api.markViewed(frame.sessionId)
+      }
+      // 状态转移影响三组排序（进行中→完成等），防抖刷新列表保持分组正确
+      scheduleSessionsRefresh()
       void api.fetchRunning()
     } else if (frame.type === 'mode' && frame.sessionId != null) {
       // 会话级防御模式切换（工作台操作后回帧；其他标签页同步）
@@ -271,9 +319,11 @@ export const api: OpsAgentAPI = reactive({
       const s = api.sessions.find(x => x.id === frame.sessionId)
       if (s) { s.contextTokens = frame.tokens; s.contextLimit = frame.limit }
     } else if (frame.type === 'session' && frame.session) {
-      if (!api.sessions.some(x => x.id === frame.session.id)) {
-        api.sessions = [frame.session, ...api.sessions]
+      if (!api.sessionQuery && !api.sessions.some(x => x.id === frame.session.id)) {
+        api.sessions = [frame.session, ...api.sessions] // 先头部插入保证即时可见，防抖刷新再校正分组
+        api.sessionsTotal++
       }
+      scheduleSessionsRefresh()
       void api.fetchRunning()
     }
   },
@@ -283,5 +333,19 @@ export function useOpsAgent(): OpsAgentAPI {
   return api
 }
 
+// 「加载更多」进行中标记（模块级并发守卫：触底滚动会连发多次调用）
+let loadingMore = false
+
 // delta 帧发现行缺失时防重复全量修复的会话集合（fetch 进行中标记）
 const missingFetch = new Set<number>()
+
+// 会话状态/新增帧的防抖列表刷新：状态转移会改变三组排序，本地改 status 只是不重排，
+// 统一重拉列表保持分组正确；limit 保持已加载条数，避免已点过「加载更多」的列表塌回第一页。
+let sessionsRefreshTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleSessionsRefresh() {
+  if (sessionsRefreshTimer) clearTimeout(sessionsRefreshTimer)
+  sessionsRefreshTimer = setTimeout(() => {
+    sessionsRefreshTimer = null
+    void api.fetchSessions({ limit: Math.max(20, api.sessions.length) })
+  }, 500)
+}

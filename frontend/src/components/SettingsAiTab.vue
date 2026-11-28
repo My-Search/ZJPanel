@@ -55,11 +55,35 @@
         </a-radio-group>
         <p class="ai-hint">防御模式是会话级设置，这里只决定事件自动创建的会话；手动会话在工作台创建时选择（空闲可切换），定时巡检任务在任务里各自指定。</p>
       </a-form-item>
+      <a-form-item label="攻击事件防御模式">
+        <a-radio-group v-model:value="agent.attackMode">
+          <a-radio value="auto">自动处置（推荐）</a-radio>
+          <a-radio value="confirm">执行前确认</a-radio>
+          <a-radio value="observe">仅观察</a-radio>
+        </a-radio-group>
+        <p class="ai-hint">攻击类事件（SSH 爆破、web 爆破/CC、面板登录爆破等）时效性强，默认单独用「自动处置」：Agent 直接执行封禁延长、基线排查等动作并全程留痕，不受上方「事件会话防御模式」影响。</p>
+      </a-form-item>
       <a-form-item>
         <a-switch v-model:checked="agent.allowSSHExec" />
         <span class="ai-switch-hint">允许 Agent 通过 SSH 在主机上执行任意命令（高危总开关，默认关闭；仍受会话防御模式约束：仅观察不提供该工具，执行前确认需人工放行）</span>
       </a-form-item>
       <a-button type="primary" :loading="savingAgent" @click="saveAgent">保存 Agent 配置</a-button>
+    </a-form>
+  </a-card>
+
+  <a-card v-else-if="page === 'session'" size="small" title="会话配置" class="ai-card ai-card-narrow">
+    <a-form layout="vertical">
+      <a-form-item label="会话保留时长">
+        <a-select v-model:value="agent.sessionRetentionDays" style="max-width: 240px">
+          <a-select-option :value="0">永久保留</a-select-option>
+          <a-select-option :value="7">保留 7 天</a-select-option>
+          <a-select-option :value="30">保留 30 天</a-select-option>
+          <a-select-option :value="90">保留 90 天</a-select-option>
+          <a-select-option :value="365">保留 365 天</a-select-option>
+        </a-select>
+        <p class="ai-hint">会话与消息长期积累会占用存储：超过保留期的会话由全局定时清理任务每天自动删除（进行中/待确认的会话不受影响）。默认永久保留。</p>
+      </a-form-item>
+      <a-button type="primary" :loading="savingAgent" @click="saveAgent">保存会话配置</a-button>
     </a-form>
   </a-card>
 
@@ -223,7 +247,7 @@ import { DeleteOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/i
 import { get, fmtTime } from '../api'
 import { useOpsAgent, OPS_MODE_OPTIONS, opsModeLabel, type InspectTask, type OpsKnowledge } from '../store/opsagent'
 
-// page：当前渲染的子页（llm | agent | kb | memory | inspect），由 SettingsPage 的下拉二级菜单切换
+// page：当前渲染的子页（llm | agent | session | kb | memory | inspect），由 SettingsPage 的下拉二级菜单切换
 defineProps<{ page: string }>()
 
 const api = useOpsAgent()
@@ -237,8 +261,8 @@ const removeKnowledge = (id: number) => api.deleteKnowledge(id)
 
 const llm = ref<{ baseURL: string; model: string; apiKeySet: boolean; contextTokens: number }>({ baseURL: '', model: '', apiKeySet: false, contextTokens: 300000 })
 const llmApiKey = ref('')
-const agent = ref<{ defenseMode: string; eventEnabled: boolean; events: Record<string, boolean>; allowSSHExec: boolean }>({
-  defenseMode: 'observe', eventEnabled: false, events: {}, allowSSHExec: false,
+const agent = ref<{ defenseMode: string; attackMode: string; eventEnabled: boolean; events: Record<string, boolean>; allowSSHExec: boolean; sessionRetentionDays: number }>({
+  defenseMode: 'observe', attackMode: 'auto', eventEnabled: false, events: {}, allowSSHExec: false, sessionRetentionDays: 0,
 })
 const savingLLM = ref(false)
 const savingAgent = ref(false)
@@ -340,9 +364,11 @@ const load = async () => {
     llm.value = { baseURL: settings.value.llm.baseURL, model: settings.value.llm.model, apiKeySet: settings.value.llm.apiKeySet, contextTokens: settings.value.llm.contextTokens || 300000 }
     agent.value = {
       defenseMode: settings.value.agent.defenseMode || 'observe',
+      attackMode: settings.value.agent.attackMode || 'auto',
       eventEnabled: !!settings.value.agent.eventEnabled,
       events: { ...(settings.value.agent.events || {}) },
       allowSSHExec: !!settings.value.agent.allowSSHExec,
+      sessionRetentionDays: settings.value.agent.sessionRetentionDays || 0,
     }
     api.loadMemories()
     api.loadKnowledge()

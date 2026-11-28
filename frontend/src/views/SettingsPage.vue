@@ -356,6 +356,7 @@ const onTabChange = (k: string | number) => {
 const aiPages = [
   { key: 'llm', label: '模型' },
   { key: 'agent', label: 'Agent 配置' },
+  { key: 'session', label: '会话配置' },
   { key: 'kb', label: '知识库' },
   { key: 'memory', label: '长期记忆' },
   { key: 'inspect', label: '定时巡检' },
