@@ -21,17 +21,20 @@ http.interceptors.response.use(
   },
 )
 
-export const get = <T = any>(url: string, params?: any) => http.get<T>(url, { params }).then(r => r.data)
+// 请求附加配置：timeout 覆写（备份恢复等大文件上传传 0 = 不限时）、silent 静默错误提示。
+export type ReqCfg = { timeout?: number; silent?: boolean }
+
+export const get = <T = any>(url: string, params?: any, cfg?: ReqCfg) => http.get<T>(url, { params, ...cfg }).then(r => r.data)
 // 轮询/后台刷新用：失败不弹全局 toast，由调用方就地展示，避免同一个错误每 15s 弹一次
 export const getQuiet = <T = any>(url: string, params?: any) =>
   http.get<T>(url, { params, silent: true } as any).then(r => r.data)
-export const post = <T = any>(url: string, data?: any) => http.post<T>(url, data).then(r => r.data)
-export const put = <T = any>(url: string, data?: any) => http.put<T>(url, data).then(r => r.data)
-export const del = <T = any>(url: string) => http.delete<T>(url).then(r => r.data)
-export const upload = (url: string, file: File, field = 'file') => {
+export const post = <T = any>(url: string, data?: any, cfg?: ReqCfg) => http.post<T>(url, data, cfg as any).then(r => r.data)
+export const put = <T = any>(url: string, data?: any, cfg?: ReqCfg) => http.put<T>(url, data, cfg as any).then(r => r.data)
+export const del = <T = any>(url: string, cfg?: ReqCfg) => http.delete<T>(url, cfg as any).then(r => r.data)
+export const upload = (url: string, file: File, field = 'file', cfg?: ReqCfg) => {
   const fd = new FormData()
   fd.append(field, file)
-  return http.post(url, fd, { headers: { 'Content-Type': 'multipart/form-data' } }).then(r => r.data)
+  return http.post(url, fd, { headers: { 'Content-Type': 'multipart/form-data' }, ...cfg } as any).then(r => r.data)
 }
 
 // WebSocket 主题订阅（统一 /api/ws?topic=xxx，带自动重连）。
