@@ -44,6 +44,7 @@ func TestSaveInspectValidation(t *testing.T) {
 		{"坏 cron", InspectTask{Name: "日常巡检", Cron: "bad", Items: []string{"security"}, Enabled: true}, true},
 		{"空巡检项", InspectTask{Name: "日常巡检", Cron: "0 9 * * *", Items: nil, Enabled: true}, true},
 		{"未知巡检项", InspectTask{Name: "日常巡检", Cron: "0 9 * * *", Items: []string{"nope"}, Enabled: true}, true},
+		{"坏防御模式", InspectTask{Name: "日常巡检", Cron: "0 9 * * *", Items: []string{"security"}, DefenseMode: "bad", Enabled: true}, true},
 		{"合法", InspectTask{Name: "日常巡检", Cron: "0 9 * * *", Items: []string{"security", "certs"}, Enabled: true}, false},
 	}
 	for _, c := range cases {
@@ -58,6 +59,9 @@ func TestSaveInspectValidation(t *testing.T) {
 	}
 	if list[0].ID == "" {
 		t.Fatal("新建任务未分配 ID")
+	}
+	if list[0].DefenseMode != ModeObserve {
+		t.Fatalf("未指定防御模式的任务应落到默认 observe，实际 %q", list[0].DefenseMode)
 	}
 }
 

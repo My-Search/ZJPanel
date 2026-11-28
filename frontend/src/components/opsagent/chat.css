@@ -1,0 +1,23 @@
+/* opsagent 聊天共享样式：shimmer 渐变文字（思考中/正在处理），明暗主题自适应 */
+.om-shimmer {
+  background: linear-gradient(90deg, var(--color-slate, #909399) 20%, #1677ff 50%, var(--color-slate, #909399) 80%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: omShimmer 1.8s linear infinite;
+}
+html[data-theme='dark'] .om-shimmer {
+  background: linear-gradient(90deg, #8c8c8c 20%, #6aa6ff 50%, #8c8c8c 80%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+@keyframes omShimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .om-shimmer { animation: none; background: none; color: var(--color-slate, #909399); }
+  html[data-theme='dark'] .om-shimmer { background: none; color: #8c8c8c; }
+}

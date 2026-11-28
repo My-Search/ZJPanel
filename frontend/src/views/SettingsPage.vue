@@ -1,7 +1,7 @@
 <template>
   <a-spin :spinning="loading">
   <a-card size="small">
-    <a-tabs v-model:value="activeTab">
+    <a-tabs :activeKey="activeTab" @update:activeKey="onTabChange">
       <a-tab-pane key="general" tab="常规">
         <a-card size="small" title="访问安全入口" style="margin-bottom: 16px">
           <a-alert type="warning" show-icon style="margin-bottom: 12px"
@@ -89,8 +89,20 @@
         </a-table>
       </a-tab-pane>
 
-      <a-tab-pane key="ai" tab="运维Agent">
-        <SettingsAiTab />
+      <!-- 运维Agent：二级菜单为 tab 上的下拉，点它选子页；选中后子项名以 tag 形式跟在「Agent运维」后，
+           菜单只列其它子页、选完收起 -->
+      <a-tab-pane key="ai">
+        <template #tab>
+          <a-dropdown v-model:open="aiDropdownOpen" :trigger="['click']">
+            <span class="ai-tab-label" @click.stop>Agent运维<a-tag v-if="aiSub" class="ai-tab-tag">{{ aiSubLabel }}</a-tag><DownOutlined class="ai-tab-caret" /></span>
+            <template #overlay>
+              <a-menu @click="onAiMenuClick">
+                <a-menu-item v-for="p in aiMenuPages" :key="p.key">{{ p.label }}</a-menu-item>
+              </a-menu>
+            </template>
+          </a-dropdown>
+        </template>
+        <SettingsAiTab :page="aiSub || 'llm'" />
       </a-tab-pane>
 
       <a-tab-pane key="backup" tab="备份与恢复">
@@ -319,6 +331,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onDeactivated, onUnmounted, ref } from 'vue'
 import { message } from 'ant-design-vue'
+import { DownOutlined } from '@ant-design/icons-vue'
 import { getQuiet, put, post, del, fmtTime, fmtBytes, http, wsTopic } from '../api'
 import { useAuth } from '../store/auth'
 import AceEditor from '../components/AceEditor.vue'
@@ -327,8 +340,36 @@ import SettingsAiTab from '../components/SettingsAiTab.vue'
 
 const auth = useAuth()
 const authName = computed(() => auth.username)
-// 设置页 Tab：从授权回调返回时带 ?tab=backup，直接落到备份页
+// 设置页 Tab：从授权回调返回时带 ?tab=backup，直接落到备份页。
+// 受控 activeKey（此前 v-model:value 并非 Tabs 的受控 prop，深链 ?tab= 实际不生效）
 const activeTab = ref('general')
+const onTabChange = (k: string | number) => {
+  // 「Agent运维」tab 点击只展开二级下拉（含 tab 边缘空白区命中），子页选择见 onAiMenuClick
+  if (k === 'ai') {
+    aiDropdownOpen.value = true
+    return
+  }
+  activeTab.value = String(k)
+}
+
+// ---- 运维Agent 二级菜单：tab 本身即下拉触发器，选中子页后 tab 显示子页名 ----
+const aiPages = [
+  { key: 'llm', label: '模型' },
+  { key: 'agent', label: 'Agent 配置' },
+  { key: 'kb', label: '知识库' },
+  { key: 'memory', label: '长期记忆' },
+  { key: 'inspect', label: '定时巡检' },
+]
+const aiSub = ref('')
+const aiDropdownOpen = ref(false)
+const aiSubLabel = computed(() => aiPages.find(p => p.key === aiSub.value)?.label || '')
+// 下拉只列「可切换到的其它子页」，当前子页不出现；选中后收起菜单
+const aiMenuPages = computed(() => aiPages.filter(p => p.key !== aiSub.value))
+const onAiMenuClick = ({ key }: { key: string | number }) => {
+  aiSub.value = String(key)
+  activeTab.value = 'ai'
+  aiDropdownOpen.value = false // 选完收起（当前 antd 版本菜单项点击不会自动收起，显式关闭）
+}
 const settings = ref<any>({})
 const version = ref('')
 const info = ref<any>(null)
@@ -756,7 +797,10 @@ const loading = ref(false)
 
 const load = async () => {
   const tab = new URLSearchParams(location.search).get('tab')
-  if (tab) activeTab.value = tab
+  if (tab) {
+    activeTab.value = tab
+    if (tab === 'ai') aiSub.value = 'llm' // 深链直达运维Agent：落到默认子页（模型）
+  }
   loading.value = true
   try {
     // 四个接口互不依赖：并发拉取，避免版本/审计/维护模板逐个等前面返回。
@@ -845,6 +889,10 @@ onUnmounted(() => {
 
 <style scoped>
 .dim { color: var(--color-slate); font-size: 12px; }
+/* 「Agent运维」下拉 tab：选中子页以 tag 形式跟在名称后 */
+.ai-tab-label { display: inline-flex; align-items: center; gap: 3px; }
+.ai-tab-tag { margin: 0; font-size: 11px; line-height: 18px; }
+.ai-tab-caret { font-size: 10px; color: var(--color-slate); }
 .backup-card { margin-bottom: 16px; }
 .item-group { margin-top: 12px; }
 .item-row { padding: 6px 0; }

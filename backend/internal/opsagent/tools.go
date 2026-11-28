@@ -30,7 +30,7 @@ const observeBlocked = "（「仅观察」模式已阻止该处置操作。请�
 func (s *Service) buildToolset(mode string, allowSSH bool) []agentTool {
 	var out []agentTool
 	for _, t := range s.reg.List() {
-		if t.Mutating && mode == "observe" {
+		if t.Mutating && mode == ModeObserve {
 			continue
 		}
 		out = append(out, agentTool{Name: t.Name, Desc: t.Description, Schema: normalizeSchema(t.InputSchema), Mutating: t.Mutating})
@@ -55,8 +55,19 @@ func (s *Service) buildToolset(mode string, allowSSH bool) []agentTool {
 				"key": map[string]any{"type": "string", "description": "要删除的记忆标识"},
 			}, "required": []string{"key"}},
 			Builtin: true},
+		agentTool{Name: "kb_search", Desc: "检索运维知识库（人工维护的操作规范/手册/约定，如既定处置流程、变更规范）。返回条目 id、标题、标签与摘要",
+			Schema: map[string]any{"type": "object", "properties": map[string]any{
+				"query": map[string]any{"type": "string", "description": "关键词，匹配标题/标签/内容"},
+				"limit": map[string]any{"type": "integer", "description": "条数，默认 10"},
+			}},
+			Builtin: true},
+		agentTool{Name: "kb_read", Desc: "按 id 读取知识库条目全文",
+			Schema: map[string]any{"type": "object", "properties": map[string]any{
+				"id": map[string]any{"type": "integer", "description": "条目 id（来自 kb_search 或系统提示词中的常驻知识）"},
+			}, "required": []string{"id"}},
+			Builtin: true},
 	)
-	if allowSSH {
+	if allowSSH && mode != ModeObserve {
 		out = append(out, agentTool{Name: "host_exec", Desc: "在指定主机上通过 SSH 执行一段 shell 命令（输出截断）。危险能力：仅在结构化工具无法满足时使用，遵守先查询后行动",
 				Schema: map[string]any{"type": "object", "properties": map[string]any{
 					"hostId":     map[string]any{"type": "integer", "description": "主机 ID"},
@@ -110,14 +121,22 @@ func (s *Service) dispatch(sess *model.OpsAgentSession, call llm.ToolCall) strin
 		return s.toolMemorySearch(args)
 	case "memory_forget":
 		return s.toolMemoryForget(args)
+	case "kb_search":
+		return s.toolKBSearch(args)
+	case "kb_read":
+		return s.toolKBRead(args)
 	case "host_exec":
+		// 与处置类 MCP 工具同样的双保险：observe 模式下即使被唤起也不执行
+		if sess.DefenseMode == ModeObserve {
+			return observeBlocked
+		}
 		return s.toolHostExec(args)
 	}
 	tool := s.reg.Get(call.Name)
 	if tool == nil {
 		return "工具不存在: " + call.Name
 	}
-	if tool.Mutating && sess.DefenseMode == "observe" {
+	if tool.Mutating && sess.DefenseMode == ModeObserve {
 		return observeBlocked
 	}
 	out, err := tool.Handler(args)
@@ -129,7 +148,7 @@ func (s *Service) dispatch(sess *model.OpsAgentSession, call llm.ToolCall) strin
 
 // needsConfirm 该调用是否需要走「执行前确认」。
 func needsConfirm(mode string, t agentTool) bool {
-	return t.Mutating && mode == "confirm"
+	return t.Mutating && mode == ModeConfirm
 }
 
 func lookupTool(s *Service, name string) *agentTool {
@@ -152,6 +171,8 @@ func (s *Service) buildToolsetUnfiltered() []agentTool {
 		agentTool{Name: "memory_save", Builtin: true},
 		agentTool{Name: "memory_search", Builtin: true},
 		agentTool{Name: "memory_forget", Builtin: true},
+		agentTool{Name: "kb_search", Builtin: true},
+		agentTool{Name: "kb_read", Builtin: true},
 	)
 	if cfg.AllowSSHExec {
 		out = append(out, agentTool{Name: "host_exec", Mutating: true, Builtin: true})

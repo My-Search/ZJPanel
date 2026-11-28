@@ -6,7 +6,7 @@ export interface OpsSession {
   title: string
   source: string // manual | event:<topic> | inspect
   status: 'running' | 'waiting_confirm' | 'idle' | 'interrupted' | 'error'
-  defenseMode: 'observe' | 'confirm' | 'auto'
+  defenseMode: OpsMode
   hostId: number | null
   error: string
   createdAt: string
@@ -15,14 +15,24 @@ export interface OpsSession {
   contextLimit?: number  // 模型上下文窗口配置
 }
 
+// 防御模式是会话级授权级别（工作台创建/切换；巡检任务各自指定；事件会话用全局默认）。
+export type OpsMode = 'observe' | 'confirm' | 'auto'
+export const OPS_MODE_OPTIONS: { value: OpsMode; label: string; hint: string }[] = [
+  { value: 'observe', label: '仅观察', hint: '分析 + 通知 + 建议' },
+  { value: 'confirm', label: '执行前确认', hint: '处置需人工放行' },
+  { value: 'auto', label: '自动处置', hint: '直接执行（全程审计）' },
+]
+export const opsModeLabel = (m?: string) => OPS_MODE_OPTIONS.find(o => o.value === m)?.label || ''
+
 export interface OpsMessage {
   id: number
   sessionId: number
   role: 'user' | 'assistant' | 'tool' | 'event' | 'summary'
   content: string
+  reasoning?: string // 思考模型的推理过程（仅 assistant，前端折叠卡展示）
   toolName?: string
   toolArgs?: string
-  meta?: string | null // JSON：assistant→{toolCalls:[…]}；tool→{callId,pending?}；summary→{toId,count}
+  meta?: string | null // JSON：assistant→{toolCalls:[…],streaming?}；tool→{callId,pending?}；summary→{toId,count}
   createdAt: string
 }
 
@@ -36,8 +46,12 @@ export interface OpsAgentSettings {
 
 export interface OpsMemory { id: number; scope: string; refId: string; key: string; content: string; updatedAt: string }
 
+// 运维知识库条目：人工维护的操作规范/手册/约定（区别于智能体自动积累的记忆）。
+// persistent=true 为常驻知识：每次会话自动注入系统提示词。
+export interface OpsKnowledge { id: number; title: string; tags: string; content: string; persistent: boolean; updatedAt: string }
+
 export interface InspectItem { key: string; title: string; hint: string }
-export interface InspectTask { id: string; name: string; cron: string; items: string[]; hostId: number | null; enabled: boolean }
+export interface InspectTask { id: string; name: string; cron: string; items: string[]; hostId: number | null; defenseMode: OpsMode; enabled: boolean }
 export interface InspectTaskView extends InspectTask {
   next: string // Go time.Time：零值 = "0001-01-01T00:00:00Z"（未排程）
 }
@@ -59,6 +73,7 @@ export interface OpsAgentAPI {
   running: number // 运行中/待确认会话数（顶栏角标）
   settings: OpsAgentSettings | null
   memories: OpsMemory[]
+  knowledge: OpsKnowledge[]
   inspects: InspectTaskView[]
   inspectCatalog: InspectItem[]
   fetchRunning(): Promise<void>
@@ -66,8 +81,9 @@ export interface OpsAgentAPI {
   fetchMessages(id: number, afterId?: number): Promise<OpsMessage[]>
   selectSession(id: number | null): void
   fetchSessionDetail(id: number): Promise<void>
-  newSession(message: string, hostId?: number): Promise<any>
+  newSession(message: string, hostId?: number, defenseMode?: OpsMode): Promise<any>
   sendMessage(id: number, message: string): Promise<void>
+  setSessionMode(id: number, mode: OpsMode): Promise<void>
   confirm(id: number, approve: boolean): Promise<void>
   stop(id: number): Promise<void>
   removeSession(id: number): Promise<void>
@@ -76,6 +92,9 @@ export interface OpsAgentAPI {
   testLLM(): Promise<{ ok: boolean; error?: string }>
   loadMemories(query?: string): Promise<void>
   deleteMemory(id: number): Promise<void>
+  loadKnowledge(query?: string): Promise<void>
+  saveKnowledge(k: Partial<OpsKnowledge>): Promise<void>
+  deleteKnowledge(id: number): Promise<void>
   loadInspects(): Promise<void>
   saveInspect(t: InspectTask): Promise<void>
   deleteInspect(id: string): Promise<void>
@@ -91,6 +110,7 @@ export const api: OpsAgentAPI = reactive({
   running: 0,
   settings: null as OpsAgentSettings | null,
   memories: [] as OpsMemory[],
+  knowledge: [] as OpsKnowledge[],
   inspects: [] as InspectTaskView[],
   inspectCatalog: [] as InspectItem[],
 
@@ -132,8 +152,8 @@ export const api: OpsAgentAPI = reactive({
       }
     } catch { /* ignore */ }
   },
-  async newSession(message: string, hostId?: number) {
-    const r = await post<any>('/api/opsagent/sessions', { message, hostId: hostId || 0 })
+  async newSession(message: string, hostId?: number, defenseMode?: OpsMode) {
+    const r = await post<any>('/api/opsagent/sessions', { message, hostId: hostId || 0, defenseMode })
     await api.fetchSessions()
     api.selectSession(r.session.id)
     await api.fetchMessages(r.session.id)
@@ -142,6 +162,11 @@ export const api: OpsAgentAPI = reactive({
   async sendMessage(id: number, message: string) {
     await post(`/api/opsagent/sessions/${id}/messages`, { message })
     await api.fetchMessages(id)
+  },
+  async setSessionMode(id: number, mode: OpsMode) {
+    await put(`/api/opsagent/sessions/${id}/mode`, { defenseMode: mode })
+    const s = api.sessions.find(x => x.id === id)
+    if (s) s.defenseMode = mode
   },
   async confirm(id: number, approve: boolean) {
     await post(`/api/opsagent/sessions/${id}/confirm`, { approve })
@@ -173,6 +198,17 @@ export const api: OpsAgentAPI = reactive({
     await del(`/api/opsagent/memories/${id}`)
     api.memories = api.memories.filter(m => m.id !== id)
   },
+  async loadKnowledge(query = '') {
+    api.knowledge = await get<OpsKnowledge[]>(`/api/opsagent/kb?query=${encodeURIComponent(query)}`)
+  },
+  async saveKnowledge(k: Partial<OpsKnowledge>) {
+    await post('/api/opsagent/kb', k)
+    await api.loadKnowledge()
+  },
+  async deleteKnowledge(id: number) {
+    await del(`/api/opsagent/kb/${id}`)
+    api.knowledge = api.knowledge.filter(k => k.id !== id)
+  },
   async loadInspects() {
     const r = await get<any>('/api/opsagent/inspects')
     api.inspects = r.list || []
@@ -191,7 +227,10 @@ export const api: OpsAgentAPI = reactive({
     await Promise.all([api.loadInspects(), api.fetchSessions()])
   },
 
-  /** WS 帧（后端主题 opsagent）：message / status / session / context。 */
+  /**
+   * WS 帧（后端主题 opsagent）：message / delta / status / session / context / mode。
+   * message = 整行 upsert（流式定稿也走这里，整行替换）；delta = 流式增量追加。
+   */
   onWsFrame(frame: any) {
     if (!frame || !frame.type) return
     if (frame.type === 'message' && frame.sessionId != null && frame.message) {
@@ -200,10 +239,33 @@ export const api: OpsAgentAPI = reactive({
       const map = new Map(cur.map(m => [m.id, m]))
       map.set(frame.message.id, frame.message)
       api.messages[id] = [...map.values()].sort((a, b) => a.id - b.id)
+    } else if (frame.type === 'delta' && frame.sessionId != null && frame.messageId != null) {
+      // 流式增量（path: content | reasoning）：按 messageId 追加；行缺失（如重连丢帧）时
+      // 先补占位行再拉一次全量修复，之后的增量继续在本地追加
+      const sid: number = frame.sessionId
+      const cur = api.messages[sid] || []
+      let row = cur.find(m => m.id === frame.messageId)
+      if (!row) {
+        row = {
+          id: frame.messageId, sessionId: sid, role: 'assistant', content: '',
+          meta: '{"streaming":true}', createdAt: new Date().toISOString(),
+        }
+        api.messages[sid] = [...cur, row].sort((a, b) => a.id - b.id)
+        if (!missingFetch.has(sid)) {
+          missingFetch.add(sid)
+          void api.fetchMessages(sid).finally(() => missingFetch.delete(sid))
+        }
+      }
+      if (frame.path === 'reasoning') row.reasoning = (row.reasoning || '') + (frame.append || '')
+      else row.content += frame.append || ''
     } else if (frame.type === 'status' && frame.sessionId != null) {
       const s = api.sessions.find(x => x.id === frame.sessionId)
       if (s) { s.status = frame.status; s.error = frame.error || '' }
       void api.fetchRunning()
+    } else if (frame.type === 'mode' && frame.sessionId != null) {
+      // 会话级防御模式切换（工作台操作后回帧；其他标签页同步）
+      const s = api.sessions.find(x => x.id === frame.sessionId)
+      if (s && frame.defenseMode) s.defenseMode = frame.defenseMode
     } else if (frame.type === 'context' && frame.sessionId != null) {
       // 每轮 LLM 调用后的上下文用量（估算 tokens / 配置窗口）
       const s = api.sessions.find(x => x.id === frame.sessionId)
@@ -220,3 +282,6 @@ export const api: OpsAgentAPI = reactive({
 export function useOpsAgent(): OpsAgentAPI {
   return api
 }
+
+// delta 帧发现行缺失时防重复全量修复的会话集合（fetch 进行中标记）
+const missingFetch = new Set<number>()

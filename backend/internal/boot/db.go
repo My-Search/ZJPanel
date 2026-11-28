@@ -40,7 +40,7 @@ func OpenDB(cfg *pkg.Config) (*gorm.DB, error) {
 		&model.AcmeAccount{}, &model.DnsCredential{}, &model.CertTask{}, &model.CertInfo{}, &model.CertRun{},
 		&model.PluginRecord{}, &model.PluginSetting{}, &model.MetricSample{}, &model.AuditLog{},
 		&model.Notification{}, &model.QuickCmd{},
-		&model.OpsAgentSession{}, &model.OpsAgentMessage{}, &model.OpsAgentMemory{},
+		&model.OpsAgentSession{}, &model.OpsAgentMessage{}, &model.OpsAgentMemory{}, &model.OpsAgentKnowledge{},
 	); err != nil {
 		return nil, err
 	}

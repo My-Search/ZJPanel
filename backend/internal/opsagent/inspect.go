@@ -36,12 +36,13 @@ type InspectItem struct {
 
 // InspectTask 一个巡检任务。
 type InspectTask struct {
-	ID      string   `json:"id"`
-	Name    string   `json:"name"`
-	Cron    string   `json:"cron"`  // 标准 5 段 crontab
-	Items   []string `json:"items"` // InspectCatalog key 子集
-	HostID  *uint    `json:"hostId"` // 可选：绑定主机（主机类检查项只巡这一台）
-	Enabled bool     `json:"enabled"`
+	ID          string   `json:"id"`
+	Name        string   `json:"name"`
+	Cron        string   `json:"cron"`        // 标准 5 段 crontab
+	Items       []string `json:"items"`       // InspectCatalog key 子集
+	HostID      *uint    `json:"hostId"`      // 可选：绑定主机（主机类检查项只巡这一台）
+	DefenseMode string   `json:"defenseMode"` // 巡检会话的防御模式：observe | confirm | auto（空=全局默认）
+	Enabled     bool     `json:"enabled"`
 }
 
 // InspectView 列表视图：附带下次执行时间。
@@ -115,6 +116,13 @@ func (s *Service) SaveInspect(t InspectTask) error {
 		if !valid[k] {
 			return fmt.Errorf("未知巡检项: %s", k)
 		}
+	}
+	// 防御模式随任务保存（会话级授权级别）；旧任务留空则落到全局默认，保持升级前行为
+	if t.DefenseMode == "" {
+		t.DefenseMode = s.resolveMode("")
+	}
+	if !validMode(t.DefenseMode) {
+		return fmt.Errorf("未知防御模式: %s", t.DefenseMode)
 	}
 	list := s.loadInspects()
 	if t.ID == "" {
@@ -212,7 +220,7 @@ func (s *Service) runInspect(task InspectTask) error {
 	if task.HostID != nil && *task.HostID > 0 {
 		hostID = task.HostID
 	}
-	sess, err := s.CreateSession("巡检: "+task.Name, "inspect", hostID, "event", renderInspect(task))
+	sess, err := s.CreateSession("巡检: "+task.Name, "inspect", hostID, "event", renderInspect(task), task.DefenseMode)
 	if err != nil {
 		return err
 	}

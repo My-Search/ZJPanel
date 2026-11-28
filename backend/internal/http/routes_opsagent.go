@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"zjpanel/backend/internal/model"
 	"zjpanel/backend/internal/opsagent"
 )
 
@@ -18,8 +19,9 @@ func (s *Server) registerOpsAgentRoutes() {
 	// ---- 会话 ----
 	g.POST("/sessions", func(c *gin.Context) {
 		var req struct {
-			Message string `json:"message"`
-			HostID  uint   `json:"hostId"`
+			Message     string `json:"message"`
+			HostID      uint   `json:"hostId"`
+			DefenseMode string `json:"defenseMode"` // 会话级防御模式；空 = 全局默认
 		}
 		if err := c.ShouldBindJSON(&req); err != nil || req.Message == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "消息不能为空"})
@@ -34,7 +36,7 @@ func (s *Server) registerOpsAgentRoutes() {
 		if req.HostID > 0 {
 			hostID = &req.HostID
 		}
-		sess, err := s.OpsAgent.CreateSession(title, "manual", hostID, "user", msg)
+		sess, err := s.OpsAgent.CreateSession(title, "manual", hostID, "user", msg, req.DefenseMode)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -100,6 +102,20 @@ func (s *Server) registerOpsAgentRoutes() {
 		}
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
+	g.PUT("/sessions/:id/mode", func(c *gin.Context) {
+		var req struct {
+			DefenseMode string `json:"defenseMode"`
+		}
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			return
+		}
+		if err := s.OpsAgent.SetDefenseMode(idParam(c), req.DefenseMode); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
 	g.DELETE("/sessions/:id", func(c *gin.Context) {
 		if err := s.OpsAgent.DeleteSession(idParam(c)); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -112,7 +128,7 @@ func (s *Server) registerOpsAgentRoutes() {
 		c.JSON(http.StatusOK, gin.H{"count": s.OpsAgent.RunningCount()})
 	})
 
-	// ---- 配置（模型 + 防御模式 + 事件订阅） ----
+	// ---- 配置（模型 + 防御默认 + 事件订阅） ----
 	g.GET("/config", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"llm":    s.OpsAgent.LLMView(),
@@ -148,7 +164,7 @@ func (s *Server) registerOpsAgentRoutes() {
 			}
 		}
 		s.audit(c, "opsagent.config.save",
-			"mode="+req.Agent.DefenseMode+" eventEnabled="+strconv.FormatBool(req.Agent.EventEnabled)+
+			"eventMode="+req.Agent.DefenseMode+" eventEnabled="+strconv.FormatBool(req.Agent.EventEnabled)+
 				" sshExec="+strconv.FormatBool(req.Agent.AllowSSHExec))
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
@@ -213,6 +229,37 @@ func (s *Server) registerOpsAgentRoutes() {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	// ---- 知识库（人工维护的操作规范，Agent 经 kb_search / kb_read 查阅） ----
+	g.GET("/kb", func(c *gin.Context) {
+		c.JSON(http.StatusOK, s.OpsAgent.ListKnowledge(c.Query("query")))
+	})
+	g.POST("/kb", func(c *gin.Context) {
+		var req model.OpsAgentKnowledge
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			return
+		}
+		isNew := req.ID == 0
+		if err := s.OpsAgent.SaveKnowledge(req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		s.audit(c, "opsagent.kb.save", fmt.Sprintf("id=%d persistent=%v %s", req.ID, req.Persistent, req.Title))
+		detail := "知识条目已创建"
+		if !isNew {
+			detail = "知识条目已更新"
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "detail": detail})
+	})
+	g.DELETE("/kb/:id", func(c *gin.Context) {
+		if err := s.OpsAgent.DeleteKnowledge(idParam(c)); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		s.audit(c, "opsagent.kb.delete", c.Param("id"))
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 }

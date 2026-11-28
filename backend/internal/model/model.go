@@ -95,17 +95,17 @@ type QuickCmd struct {
 
 // Site 站点（nginx vhost 的面板元数据；配置实体在 sites-available/<domain>.conf）
 type Site struct {
-	ID               uint   `gorm:"primaryKey" json:"id"`
-	Domain           string `gorm:"size:255;uniqueIndex" json:"domain"`
-	Type             string `gorm:"size:16" json:"type"`      // proxy | static
-	Upstream         string `gorm:"size:255" json:"upstream"` // 127.0.0.1:port（proxy）
-	Root             string `gorm:"size:255" json:"root"`     // 静态目录（static）
-	SSL              bool   `json:"ssl"`
-	CertTaskID       *uint  `json:"certTaskId"`
+	ID         uint   `gorm:"primaryKey" json:"id"`
+	Domain     string `gorm:"size:255;uniqueIndex" json:"domain"`
+	Type       string `gorm:"size:16" json:"type"`      // proxy | static
+	Upstream   string `gorm:"size:255" json:"upstream"` // 127.0.0.1:port（proxy）
+	Root       string `gorm:"size:255" json:"root"`     // 静态目录（static）
+	SSL        bool   `json:"ssl"`
+	CertTaskID *uint  `json:"certTaskId"`
 	// 手动指定证书路径（成对填写才生效）；空 = 自动约定 <NginxPrefix>/ssl/<域名>/。
 	// 「从证书仓库选择」不落库：保存时一次性复制到约定目录，续期由部署目标覆盖同目录。
-	SSLCertPath string `gorm:"size:255" json:"sslCertPath"`
-	SSLKeyPath  string `gorm:"size:255" json:"sslKeyPath"`
+	SSLCertPath      string `gorm:"size:255" json:"sslCertPath"`
+	SSLKeyPath       string `gorm:"size:255" json:"sslKeyPath"`
 	Advanced         bool   `json:"advanced"` // 高级模式：整文件 raw 编辑
 	Maintenance      bool   `json:"maintenance"`
 	MaintenanceHTML  string `json:"maintenanceHtml"` // 站点级覆盖；空则用全局模板
@@ -262,7 +262,7 @@ type Notification struct {
 	Level     string     `gorm:"size:16" json:"level"` // info | warn | error
 	Title     string     `gorm:"size:255" json:"title"`
 	Body      string     `gorm:"type:text" json:"body"`
-	Source    string     `gorm:"size:64" json:"source"` // core 或插件 ID
+	Source    string     `gorm:"size:64" json:"source"`  // core 或插件 ID
 	CreatedAt time.Time  `json:"createdAt" gorm:"index"` // 30 天清理的 DELETE 条件
 	ReadAt    *time.Time `json:"readAt" gorm:"index"`    // 未读 COUNT 轮询的过滤列（无索引时全表扫）
 }
@@ -272,9 +272,9 @@ type Notification struct {
 type OpsAgentSession struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	Title       string    `gorm:"size:255" json:"title"`
-	Source      string    `gorm:"size:64" json:"source"`       // manual | event:<topic>
+	Source      string    `gorm:"size:64" json:"source"`       // manual | event:<topic> | inspect
 	Status      string    `gorm:"size:16;index" json:"status"` // running|waiting_confirm|idle|interrupted|error
-	DefenseMode string    `gorm:"size:16" json:"defenseMode"`  // 会话创建时的防御模式快照：observe|confirm|auto
+	DefenseMode string    `gorm:"size:16" json:"defenseMode"`  // 会话级防御模式（创建时快照，空闲可切换）：observe|confirm|auto
 	HostID      *uint     `json:"hostId"`                      // 可选：会话绑定的主机上下文
 	Error       string    `gorm:"type:text" json:"error"`
 	CreatedAt   time.Time `json:"createdAt"`
@@ -282,12 +282,14 @@ type OpsAgentSession struct {
 }
 
 // OpsAgentMessage 会话消息。role=user|assistant|tool|event；tool 消息记录工具名/参数，
-// Meta 存 JSON（confirm 模式下待确认动作的完整信息，前端据此渲染确认卡片）。
+// Meta 存 JSON（confirm 模式下待确认动作的完整信息，前端据此渲染确认卡片）；
+// Reasoning 仅 assistant 行使用（思考模型的推理过程，仅前端展示，不回流模型上下文）。
 type OpsAgentMessage struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
 	SessionID uint      `gorm:"index:idx_ops_msg_session" json:"sessionId"`
 	Role      string    `gorm:"size:16;index:idx_ops_msg_session" json:"role"`
 	Content   string    `gorm:"type:text" json:"content"`
+	Reasoning string    `gorm:"type:text" json:"reasoning,omitempty"`
 	ToolName  string    `gorm:"size:128" json:"toolName,omitempty"`
 	ToolArgs  string    `gorm:"type:text" json:"toolArgs,omitempty"`
 	Meta      string    `gorm:"type:text" json:"meta,omitempty"`
@@ -303,4 +305,17 @@ type OpsAgentMemory struct {
 	Content   string    `gorm:"type:text" json:"content"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// OpsAgentKnowledge 运维知识库：人工维护的操作规范/手册/约定（区别于智能体自己积累的记忆），
+// 供会话中经 kb_search / kb_read 内建工具查阅。Persistent=true 的条目为「常驻知识」，
+// 每次会话（含事件与巡检会话）的系统提示词全量携带；注入总量有字符上限保护（见 opsagent/knowledge.go）。
+type OpsAgentKnowledge struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	Title      string    `gorm:"size:255" json:"title"`
+	Tags       string    `gorm:"size:255" json:"tags"` // 逗号分隔，便于检索
+	Content    string    `gorm:"type:text" json:"content"`
+	Persistent bool      `json:"persistent"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
 }

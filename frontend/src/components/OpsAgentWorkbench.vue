@@ -1,7 +1,7 @@
 <template>
   <!-- 顶栏触发：常驻 WS 连接，运行中会话数作角标（与会话状态解耦，弹框开关不影响） -->
   <a-badge :count="ops.running" :offset="[-2, 4]" size="small">
-    <a-button type="text" class="ops-btn" title="管理 Agent（AI 运维）" @click="openWorkbench">
+    <a-button type="text" class="ops-btn" title="运维Agent" @click="openWorkbench">
       <RobotOutlined />
     </a-button>
   </a-badge>
@@ -18,7 +18,7 @@
       <div class="owm-title">
         <span class="owm-logo"><RobotOutlined /></span>
         <span class="owm-name">
-          <b>管理 Agent</b>
+          <b>运维Agent</b>
           <small>会话在服务器后台运行 · 关闭/刷新页面不中断</small>
         </span>
         <a-tag v-if="modeLabel" class="owm-mode" :color="modeColor" style="margin-right: 0">{{ modeLabel }}</a-tag>
@@ -58,7 +58,7 @@
         </div>
       </aside>
 
-      <!-- 右栏：消息流 + 输入 -->
+      <!-- 右栏：消息流 + 输入（扁平时间线：助手全宽、用户气泡、工具轨迹折叠） -->
       <section class="om-main">
         <a-alert
           v-if="ops.settings && !ops.settings.llm.ready"
@@ -69,7 +69,7 @@
         />
         <div v-if="curError" class="om-error"><CloseCircleOutlined /> {{ curError }}</div>
 
-        <div ref="scrollRef" class="om-msgs">
+        <div :ref="setScrollEl" class="om-msgs">
           <!-- 空态：欢迎页（新会话发送首条消息前显示；输入区始终在下方，发送即创建会话） -->
           <div v-if="ops.currentId == null" class="om-guide">
             <div class="om-guide-icon"><RobotOutlined /></div>
@@ -92,54 +92,32 @@
           </div>
 
           <template v-else>
-            <template v-for="m in curMessages" :key="m.id">
-              <!-- 压缩分隔条：早期上下文已压成摘要（原始记录保留在库） -->
-              <div v-if="m.role === 'summary'" class="om-compact">
-                <CompressOutlined /> 早期上下文已压缩（{{ summaryCount(m) }} 条）· 摘要已注入模型上下文
-              </div>
-              <!-- 事件横幅 -->
-              <div v-else-if="m.role === 'event'" class="om-ev">
-                <ThunderboltOutlined class="om-ev-icon" />
-                <pre class="om-ev-text">{{ m.content }}</pre>
-              </div>
-              <!-- 用户气泡 -->
-              <div v-else-if="m.role === 'user'" class="om-row right">
-                <div class="om-bubble om-user">{{ m.content }}</div>
-                <span class="om-avatar me"><UserOutlined /></span>
-              </div>
-              <!-- 助手 -->
-              <div v-else-if="m.role === 'assistant'" class="om-row">
-                <span class="om-avatar ai"><RobotOutlined /></span>
-                <div class="om-bubble om-assist">
-                  <div v-if="m.content" class="om-text" :class="{ 'om-err-text': isErrText(m) }">{{ m.content }}</div>
-                  <div v-if="toolCallsOf(m).length" class="om-calls">
-                    <span v-for="tc in toolCallsOf(m)" :key="tc.id" class="om-call-chip" :title="tc.name + ' ' + fmtArgs(tc.arguments)">
-                      <ApiOutlined /> {{ tc.name }}
-                    </span>
-                  </div>
+            <div class="om-col">
+              <template v-for="u in projection.units" :key="u.type === 'turn' ? u.turn.key : 's' + u.msg.id">
+                <!-- 压缩分隔条：早期上下文已压成摘要（原始记录保留在库） -->
+                <div v-if="u.type === 'summary'" class="om-compact">
+                  <CompressOutlined /> 早期上下文已压缩（{{ summaryCount(u.msg) }} 条）· 摘要已注入模型上下文
                 </div>
+                <OpsTurnGroup v-else :turn="u.turn" />
+              </template>
+              <!-- 等待首 token / 工具间隙的思考占位 -->
+              <div v-if="projection.showThinking" class="om-thinking">
+                <LoadingOutlined spin class="om-thinking-icon" />
+                <span class="om-shimmer">正在思考</span>
               </div>
-              <!-- 工具执行 -->
-              <div v-else-if="m.role === 'tool'" class="om-row">
-                <span class="om-avatar ai tool"><ApiOutlined /></span>
-                <div class="om-tool" :class="{ pending: isPending(m) }">
-                  <div class="om-tool-head">
-                    <LoadingOutlined v-if="isPending(m)" spin />
-                    <ToolOutlined v-else />
-                    <span class="om-tool-name">{{ m.toolName }}</span>
-                    <span class="om-tool-args">{{ fmtArgs(m.toolArgs) }}</span>
-                  </div>
-                  <pre v-if="m.content" class="om-tool-out">{{ m.content }}</pre>
-                </div>
-              </div>
-            </template>
+            </div>
+            <transition name="om-fadeup">
+              <button v-if="showBackToBottom" class="om-to-bottom" @click="resetToBottom">
+                <ArrowDownOutlined /> 回到底部
+              </button>
+            </transition>
           </template>
         </div>
 
         <!-- confirm 模式：待确认操作卡片 -->
         <div v-if="pendingMsg && curSession?.status === 'waiting_confirm'" class="om-confirm">
           <div class="om-confirm-title"><ExclamationCircleOutlined /> 待确认操作 · 「执行前确认」模式下处置操作需人工放行</div>
-          <div class="om-confirm-tool"><span class="om-tool-name">{{ pendingMsg.toolName }}</span> <span class="om-tool-args">{{ fmtArgs(pendingMsg.toolArgs) }}</span></div>
+          <div class="om-confirm-tool"><span class="om-confirm-name">{{ pendingMsg.toolName }}</span> <span class="om-confirm-args1">{{ fmtArgs(pendingMsg.toolArgs) }}</span></div>
           <pre class="om-confirm-args">{{ prettyArgs(pendingMsg.toolArgs) }}</pre>
           <div class="om-confirm-actions">
             <a-button size="small" @click="ops.confirm(curSession!.id, false)">拒绝</a-button>
@@ -161,6 +139,22 @@
             @blur="composerFocus = false"
           ></textarea>
           <div class="om-composer-bar">
+            <!-- 防御模式：会话级授权级别，新建时选、空闲时可切换（运行中锁定） -->
+            <a-tooltip :title="modeTip">
+              <a-select
+                class="om-mode"
+                size="small"
+                :bordered="false"
+                :value="curSession ? curSession.defenseMode : newMode"
+                :disabled="modeLocked"
+                :popup-match-select-width="false"
+                @change="(v: any) => onModeChange(v as OpsMode)"
+              >
+                <a-select-option v-for="m in OPS_MODE_OPTIONS" :key="m.value" :value="m.value">
+                  {{ m.label }}
+                </a-select-option>
+              </a-select>
+            </a-tooltip>
             <a-select
               v-model:value="hostId"
               class="om-host"
@@ -176,7 +170,7 @@
             <span class="om-kbd om-ctx" :class="{ warn: ctxRatio > 0.75 }" v-if="curSession?.contextLimit" :title="'估算值，超过窗口 75% 时自动压缩上下文'">
               ≈ {{ fmtTokens(curSession.contextTokens) }} / {{ fmtTokens(curSession.contextLimit) }}
             </span>
-            <span class="om-kbd">Ctrl + Enter 发送</span>
+            <span class="om-kbd om-hint">Ctrl + Enter 发送</span>
             <a-button
               v-if="curSession && curSession.status === 'running'"
               size="small" danger
@@ -197,33 +191,69 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   RobotOutlined, PlusOutlined, DeleteOutlined, SendOutlined, PoweroffOutlined,
-  LoadingOutlined, ExclamationCircleOutlined, ThunderboltOutlined, ApiOutlined,
-  UserOutlined, ToolOutlined, CloseCircleOutlined, DashboardOutlined,
-  SafetyOutlined, CloudServerOutlined, CompressOutlined,
+  LoadingOutlined, ExclamationCircleOutlined,
+  CloseCircleOutlined, DashboardOutlined,
+  SafetyOutlined, CloudServerOutlined, CompressOutlined, ArrowDownOutlined,
 } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
-import { useOpsAgent, type OpsMessage, type OpsSession } from '../store/opsagent'
+import { useOpsAgent, OPS_MODE_OPTIONS, opsModeLabel, type OpsSession, type OpsMode } from '../store/opsagent'
 import { wsTopic, get } from '../api'
 import { usePolling } from '../composables/usePolling'
+import { useTimelineScroll } from '../composables/useTimelineScroll'
+import { useConversationTurns } from '../composables/useConversationTurns'
+import OpsTurnGroup from './opsagent/OpsTurnGroup.vue'
+import { isPending, summaryCount, fmtArgs, prettyArgs } from './opsagent/meta'
 
 const ops = useOpsAgent()
 const input = ref('')
 const hostId = ref<number | undefined>(undefined)
+const newMode = ref<OpsMode>('observe') // 新会话的防御模式（发送时随会话创建落库）
 const hosts = ref<{ id: number; name: string }[]>([])
 const sending = ref(false)
-const scrollRef = ref<HTMLElement | null>(null)
 const taRef = ref<HTMLTextAreaElement | null>(null)
 const isMobile = ref(window.innerWidth < 768)
 const composerFocus = ref(false)
 
+// 时间线滚动（底部锚定状态机）与回合投影
+const { setScrollEl, showBackToBottom, onContentChanged, resetToBottom } = useTimelineScroll()
+
 const curSession = computed(() => ops.sessions.find(s => s.id === ops.currentId) || null)
 const curMessages = computed(() => (ops.currentId != null ? ops.messages[ops.currentId] || [] : []))
 const curError = computed(() => curSession.value?.error || '')
-const modeLabel = computed(() =>
-  ({ observe: '仅观察', confirm: '执行前确认', auto: '自动处置' }[ops.settings?.agent.defenseMode || ''] || ''))
+const projection = useConversationTurns(
+  () => curMessages.value,
+  () => curSession.value?.status,
+)
+const curMode = computed<OpsMode>(() => curSession.value?.defenseMode || newMode.value)
+const modeLocked = computed(() => {
+  const st = curSession.value?.status
+  return st === 'running' || st === 'waiting_confirm'
+})
+const modeLabel = computed(() => opsModeLabel(curMode.value))
 const modeColor = computed(() =>
-  ({ observe: 'blue', confirm: 'orange', auto: 'red' }[ops.settings?.agent.defenseMode || ''] || 'default'))
+  ({ observe: 'blue', confirm: 'orange', auto: 'red' } as Record<string, string>)[curMode.value] || 'default')
+const modeTip = computed(() => {
+  if (!curSession.value) return '本次会话的防御模式：仅观察只做分析建议，执行前确认需人工放行，自动处置直接执行（全程审计）'
+  if (modeLocked.value) return '会话运行中不可切换防御模式，停止后可改'
+  return '切换该会话的防御模式（下一轮对话生效）'
+})
 const pendingMsg = computed(() => curMessages.value.find(m => m.role === 'tool' && isPending(m)) || null)
+
+// 防御模式切换：新会话只改待创建快照；已有会话调接口（空闲才允许）
+async function onModeChange(mode: OpsMode) {
+  const sess = curSession.value
+  if (!sess) {
+    newMode.value = mode
+    return
+  }
+  if (modeLocked.value || mode === sess.defenseMode) return
+  try {
+    await ops.setSessionMode(sess.id, mode)
+    message.success(`防御模式已切换为「${opsModeLabel(mode)}」`)
+  } catch (e: any) {
+    message.error(e?.response?.data?.error || '切换失败')
+  }
+}
 
 const statusLabel = (s: string) =>
   ({ running: '运行中', waiting_confirm: '待确认', idle: '已完成', interrupted: '已中断', error: '出错' }[s] || s)
@@ -232,17 +262,6 @@ const sourceLabel = (s: OpsSession) =>
 const dotClass = (s: OpsSession) =>
   (({ running: 'run', waiting_confirm: 'confirm', error: 'err' }) as Record<string, string>)[s.status] || ''
 
-const toolCallsOf = (m: OpsMessage): { id: string; name: string; arguments?: string }[] => {
-  try {
-    const meta = m.meta ? JSON.parse(m.meta) : null
-    return meta?.toolCalls || []
-  } catch { return [] }
-}
-const isPending = (m: OpsMessage) => !!m.meta && m.meta.includes('"pending":true')
-const isErrText = (m: OpsMessage) => !!m.meta && m.meta.includes('"error":true') || m.content.startsWith('⚠')
-const summaryCount = (m: OpsMessage) => {
-  try { return JSON.parse(m.meta || '{}')?.count ?? '?' } catch { return '?' }
-}
 const ctxRatio = computed(() => {
   const s = curSession.value
   if (!s?.contextLimit || !s.contextTokens) return 0
@@ -251,14 +270,6 @@ const ctxRatio = computed(() => {
 const fmtTokens = (n?: number) => {
   if (!n || n <= 0) return '0'
   return n >= 1000 ? (n / 1000).toFixed(n >= 100000 ? 0 : 1) + 'k' : String(n)
-}
-const fmtArgs = (a?: string) => {
-  if (!a) return ''
-  const s = a.replace(/\s+/g, ' ')
-  return s.length > 72 ? s.slice(0, 72) + '…' : s
-}
-const prettyArgs = (a?: string) => {
-  try { return JSON.stringify(JSON.parse(a || '{}'), null, 2) } catch { return a || '' }
 }
 const fmtTime = (t: string) => {
   const d = new Date(t)
@@ -281,7 +292,7 @@ async function send() {
   sending.value = true
   try {
     if (ops.currentId == null) {
-      await ops.newSession(msg, hostId.value)
+      await ops.newSession(msg, hostId.value, newMode.value)
     } else {
       await ops.sendMessage(ops.currentId, msg)
     }
@@ -290,7 +301,7 @@ async function send() {
     message.error(e?.response?.data?.error || '发送失败')
   } finally {
     sending.value = false
-    scrollBottom()
+    onContentChanged()
   }
 }
 
@@ -298,7 +309,7 @@ async function openWorkbench() {
   ops.open = true
   await Promise.all([ops.fetchSessions(), ops.loadSettings(), loadHosts()])
   if (ops.currentId == null && ops.sessions.length) ops.selectSession(ops.sessions[0].id)
-  scrollBottom()
+  resetToBottom()
 }
 
 async function loadHosts() {
@@ -309,15 +320,15 @@ async function loadHosts() {
   } catch { /* ignore */ }
 }
 
-function scrollBottom() {
-  nextTick(() => {
-    const el = scrollRef.value
-    if (el) el.scrollTop = el.scrollHeight
-  })
-}
-
-watch(() => curMessages.value.length, scrollBottom)
-watch(() => curSession.value?.status, scrollBottom)
+// ---- 时间线滚动联动 ----
+// 切换会话：回到底部（打开会话定位最新消息）
+watch(() => ops.currentId, () => resetToBottom())
+// 新消息/流式增量：行集与内容长度指纹变化 → 贴底裁决（跟随中贴底，离底不拉回）
+watch(
+  () => curMessages.value.map(m => `${m.id}:${m.content.length}:${(m.reasoning || '').length}`).join(',') +
+    '|' + (curSession.value?.status || ''),
+  () => onContentChanged(),
+)
 
 // 常驻 WS：角标实时刷新，弹框开着时增量消息由 store upsert
 const stopWs = wsTopic('opsagent', (frame: any) => {
@@ -404,65 +415,37 @@ onUnmounted(() => { stopWs(); window.removeEventListener('resize', onResize) })
 .om-guide-card small { color: var(--color-slate); font-size: 11px; }
 .om-gc-icon { font-size: 18px; color: #1677ff; flex-shrink: 0; }
 
-/* ---- 消息流 ---- */
-.om-msgs { flex: 1; overflow-y: auto; padding: 16px 18px; display: flex; flex-direction: column; gap: 4px; }
-.om-row { display: flex; gap: 8px; margin-top: 10px; align-items: flex-start; }
-.om-row.right { justify-content: flex-end; }
-.om-avatar {
-  width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0; display: grid; place-items: center; font-size: 13px;
-  background: rgba(22,119,255,.14); color: #1677ff;
+/* ---- 消息时间线（扁平布局：内容列居中限宽，助手全宽、用户气泡） ---- */
+.om-msgs {
+  flex: 1; overflow-y: auto; padding: 16px 18px 8px; position: relative;
+  display: flex; flex-direction: column; overflow-anchor: none;
 }
-.om-avatar.me { background: rgba(128,128,128,.16); color: var(--color-slate); }
-.om-avatar.tool { background: rgba(103,194,58,.16); color: #67c23a; }
-.om-bubble {
-  max-width: 76%; border-radius: 14px; padding: 9px 13px; font-size: 13px; line-height: 1.65;
-  white-space: pre-wrap; word-break: break-word;
+.om-col {
+  width: 100%; max-width: 860px; margin: 0 auto;
+  display: flex; flex-direction: column; gap: 18px; padding: 4px 2px 16px;
 }
-.om-user {
-  background: linear-gradient(135deg, #1677ff, #4c8dff); color: #fff;
-  border-bottom-right-radius: 5px; box-shadow: 0 4px 12px rgba(22,119,255,.22);
+.om-compact {
+  text-align: center; font-size: 11px; color: var(--color-slate); margin: 2px 0;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
 }
-.om-assist {
-  background: var(--surface-card, rgba(128,128,128,.08));
-  border: 1px solid var(--border-card, rgba(128,128,128,.16));
-  border-top-left-radius: 5px; color: var(--color-ink);
+.om-compact::before, .om-compact::after {
+  content: ''; height: 1px; flex: 1; background: rgba(128,128,128,.2);
 }
-.om-err-text { color: #ef4444; }
-.om-calls { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.om-call-chip {
-  display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-family: ui-monospace, Consolas, monospace;
-  background: rgba(22,119,255,.1); color: #1677ff; border: 1px solid rgba(22,119,255,.25);
-  border-radius: 999px; padding: 2px 10px;
-}
+.om-thinking { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 2px 2px; }
+.om-thinking-icon { color: #1677ff; font-size: 13px; }
 
-/* 事件横幅 */
-.om-ev {
-  display: flex; gap: 9px; margin: 10px 0; padding: 10px 13px; border-radius: 10px;
-  background: rgba(245,158,11,.08); border: 1px solid rgba(245,158,11,.4); border-left-width: 3px;
+/* 回到底部悬浮按钮（sticky 贴在时间线底部） */
+.om-to-bottom {
+  position: sticky; bottom: 14px; align-self: center; z-index: 5;
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border-card, rgba(128,128,128,.25)); border-radius: 999px;
+  background: var(--surface-card, #fff); color: var(--color-ink, #303133);
+  padding: 5px 14px; font-size: 12px; cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0,0,0,.14);
 }
-.om-ev-icon { color: #f59e0b; font-size: 14px; margin-top: 2px; }
-.om-ev-text { margin: 0; flex: 1; white-space: pre-wrap; word-break: break-all; font-size: 12px; line-height: 1.6; color: #b45309; font-family: inherit; }
-html[data-theme='dark'] .om-ev-text { color: #fbbf24; }
-
-/* 工具卡 */
-.om-tool {
-  border: 1px solid var(--border-card, rgba(128,128,128,.18)); border-left: 3px solid #67c23a;
-  border-radius: 10px; padding: 8px 12px; font-size: 12px; max-width: 82%;
-  background: var(--surface-card, rgba(128,128,128,.05));
-}
-.om-tool.pending { border-left-color: #f59e0b; }
-.om-tool-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
-.om-tool-name { color: #1677ff; font-weight: 600; font-family: ui-monospace, Consolas, monospace; flex-shrink: 0; }
-.om-tool-args {
-  color: var(--color-slate); font-family: ui-monospace, Consolas, monospace;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
-}
-.om-tool-out {
-  margin: 7px 0 0; padding: 8px 10px; max-height: 200px; overflow: auto;
-  background: rgba(128,128,128,.07); border-radius: 6px;
-  white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.55;
-  color: var(--color-slate); font-family: ui-monospace, Consolas, monospace;
-}
+.om-to-bottom:hover { border-color: rgba(22,119,255,.5); color: #1677ff; }
+.om-fadeup-enter-active, .om-fadeup-leave-active { transition: opacity .18s, transform .18s; }
+.om-fadeup-enter-from, .om-fadeup-leave-to { opacity: 0; transform: translateY(8px); }
 
 /* 确认卡 */
 .om-confirm {
@@ -473,6 +456,11 @@ html[data-theme='dark'] .om-ev-text { color: #fbbf24; }
 .om-confirm-title { font-size: 12.5px; font-weight: 600; color: #b45309; display: flex; align-items: center; gap: 6px; }
 html[data-theme='dark'] .om-confirm-title { color: #fbbf24; }
 .om-confirm-tool { display: flex; gap: 8px; margin-top: 8px; align-items: baseline; min-width: 0; }
+.om-confirm-name { color: #1677ff; font-weight: 600; font-family: ui-monospace, Consolas, monospace; font-size: 12px; flex-shrink: 0; }
+.om-confirm-args1 {
+  color: var(--color-slate); font-family: ui-monospace, Consolas, monospace; font-size: 11.5px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0;
+}
 .om-confirm-args {
   margin: 8px 0 10px; padding: 9px 11px; border-radius: 8px; background: rgba(128,128,128,.08);
   font-size: 12px; font-family: ui-monospace, Consolas, monospace; max-height: 130px; overflow: auto;
@@ -493,29 +481,28 @@ html[data-theme='dark'] .om-confirm-title { color: #fbbf24; }
   padding: 11px 14px 4px; font-size: 13px; line-height: 1.6; font-family: inherit;
 }
 .om-input::placeholder { color: var(--color-slate); }
-.om-composer-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px 8px 4px; }
+.om-composer-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px 8px 4px; flex-wrap: wrap; }
 .om-host { min-width: 170px; flex-shrink: 0; }
+.om-mode { min-width: 112px; flex-shrink: 0; font-weight: 600; }
 .om-kbd { margin-left: auto; font-size: 11px; color: var(--color-slate); }
 .om-ctx { margin-left: auto; font-family: ui-monospace, Consolas, monospace; }
 .om-ctx + .om-kbd { margin-left: 0; }
 .om-ctx.warn { color: #f59e0b; font-weight: 600; }
-.om-compact {
-  text-align: center; font-size: 11px; color: var(--color-slate); margin: 8px 0;
-  display: flex; align-items: center; justify-content: center; gap: 6px;
-}
-.om-compact::before, .om-compact::after {
-  content: ''; height: 1px; flex: 1; background: rgba(128,128,128,.2);
-}
 .om-send { border-radius: 8px; font-weight: 600; }
 
 @media (max-width: 768px) {
   .om-side { width: 168px; padding: 10px 8px; }
   .om-guide-cards { flex-direction: column; }
   .om-guide-card { width: 100%; }
+  .om-msgs { padding: 12px 10px 6px; }
+  .om-hint { display: none; }
+  .om-host { min-width: 140px; }
 }
 </style>
 
 <style>
+@import './opsagent/chat.css';
+
 /* 弹框框架样式（teleport 到 body，需全局作用域，用 wrap-class 限定） */
 .ops-workbench .ant-modal-content { padding: 0; overflow: hidden; border-radius: 14px; }
 .ops-workbench .ant-modal-header {

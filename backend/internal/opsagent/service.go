@@ -25,21 +25,24 @@ import (
 // AI 运维智能体控制面：会话在后端 goroutine 运行（前端只是视图），
 // 页面刷新/关闭不影响执行；消息逐条落库并经 WS 主题 opsagent 推送。
 //
-// 工具层复用面板 MCP 注册表（含插件工具），按三级防御模式过滤/拦截处置类操作：
+// 工具层复用面板 MCP 注册表（含插件工具），按三级防御模式过滤/拦截处置类操作
+// （模式是会话级属性：创建时指定、空闲可切换；事件会话用全局默认，巡检任务各自指定）：
 //   observe 仅观察（默认）：工具表剔除处置工具，只能查询+通知+给建议
 //   confirm 执行前确认  ：处置调用挂起等待用户确认后执行
 //   auto    自动处置    ：直接执行（底层工具自带审计）
 // 另有内建工具：长期记忆（跨会话）与 host_exec（SSH 执行，设置显式开启）。
 
 const (
-	wsTopic          = "opsagent"
-	settingLLMKey    = "opsagent.llm"
-	settingAgentKey  = "opsagent.config"
-	maxRounds        = 15     // 单次任务最大 LLM 轮数
-	maxConcurrent    = 5      // 并发 runner 上限
-	maxCtxMessages   = 400    // 送入模型的最大消息条数（安全兜底；常规控制靠上下文压缩）
+	wsTopic              = "opsagent"
+	settingLLMKey        = "opsagent.llm"
+	settingAgentKey      = "opsagent.config"
+	maxRounds            = 15     // 单次任务最大 LLM 轮数
+	maxConcurrent        = 5      // 并发 runner 上限
+	maxCtxMessages       = 400    // 送入模型的最大消息条数（安全兜底；常规控制靠上下文压缩）
 	defaultContextTokens = 300000 // 模型上下文窗口默认值（设置页可改）
-	eventDedupeEvery = 10 * time.Minute
+	eventDedupeEvery     = 10 * time.Minute
+	streamFlushWindow    = 100 * time.Millisecond // 流式增量合并窗口（delta 帧节流）
+	streamPersistEvery   = 2 * time.Second        // 流式中途落库间隔（断线/重启后可恢复已生成部分）
 )
 
 type Service struct {
@@ -56,7 +59,7 @@ type Service struct {
 	lastEvent sync.Map // 事件去重 key -> time.Time
 	throttle  sync.Map // 通知节流 key -> time.Time
 
-	sched          CronScheduler  // 共享 cron（定时巡检），boot 注入
+	sched          CronScheduler // 共享 cron（定时巡检），boot 注入
 	inspectMu      sync.Mutex
 	inspectEntries map[string]any // 巡检任务 ID -> cron entry
 }
@@ -107,12 +110,43 @@ type llmSetting struct {
 	ContextTokens int `json:"contextTokens"`
 }
 
-// AgentConfig 三级防御 + 事件订阅 + SSH 执行开关。
+// AgentConfig 全局配置：事件订阅 + SSH 执行总开关 + 事件会话的防御模式。
+// 防御模式是会话级属性（会话创建时确定、可在空闲时切换）：
+//   - 手动会话：工作台创建时选择（SettingsAiTab 不再提供全局模式开关）
+//   - 巡检会话：由巡检任务自带的 defenseMode 决定
+//   - 事件会话：自动创建、无法逐个选择，沿用这里的 DefenseMode 作为默认
 type AgentConfig struct {
-	DefenseMode  string          `json:"defenseMode"` // observe | confirm | auto
+	DefenseMode  string          `json:"defenseMode"` // 事件会话默认防御模式：observe | confirm | auto
 	EventEnabled bool            `json:"eventEnabled"`
 	Events       map[string]bool `json:"events"`
 	AllowSSHExec bool            `json:"allowSSHExec"`
+}
+
+// 防御模式取值。
+const (
+	ModeObserve = "observe" // 仅观察：剔除/拦截处置类工具
+	ModeConfirm = "confirm" // 执行前确认：处置类调用挂起等待人工放行
+	ModeAuto    = "auto"    // 自动处置：直接执行（底层工具自带审计）
+)
+
+func validMode(mode string) bool {
+	switch mode {
+	case ModeObserve, ModeConfirm, ModeAuto:
+		return true
+	}
+	return false
+}
+
+// resolveMode 归一化会话防御模式：显式合法值优先；空值回落到全局默认（事件会话默认）；
+// 非法值按最保守的「仅观察」处理，避免畸形参数意外拿到更高授权。
+func (s *Service) resolveMode(mode string) string {
+	if validMode(mode) {
+		return mode
+	}
+	if mode != "" {
+		return ModeObserve
+	}
+	return s.AgentConfig().DefenseMode
 }
 
 func (s *Service) loadLLMSetting() llmSetting {
@@ -150,7 +184,7 @@ func (s *Service) LLMView() map[string]any {
 	return map[string]any{
 		"baseURL": st.BaseURL, "model": st.Model, "apiKeySet": st.APIKey != "",
 		"contextTokens": st.ContextTokens,
-		"ready": err == nil, "hint": readyHint(err),
+		"ready":         err == nil, "hint": readyHint(err),
 	}
 }
 
@@ -186,15 +220,15 @@ func (s *Service) SaveLLM(baseURL, apiKeyPlain, modelName string, contextTokens 
 	return s.db.Save(&model.Setting{Key: settingLLMKey, Value: string(b)}).Error
 }
 
-// AgentConfig 载入智能体配置（带默认值：仅观察 + 事件全关 + SSH 执行关闭）。
+// AgentConfig 载入智能体配置（带默认值：事件会话仅观察 + 事件全关 + SSH 执行关闭）。
 func (s *Service) AgentConfig() AgentConfig {
-	cfg := AgentConfig{DefenseMode: "observe", Events: map[string]bool{}}
+	cfg := AgentConfig{DefenseMode: ModeObserve, Events: map[string]bool{}}
 	var rec model.Setting
 	if err := s.db.Where("key = ?", settingAgentKey).First(&rec).Error; err == nil {
 		_ = json.Unmarshal([]byte(rec.Value), &cfg)
 	}
-	if cfg.DefenseMode != "observe" && cfg.DefenseMode != "confirm" && cfg.DefenseMode != "auto" {
-		cfg.DefenseMode = "observe"
+	if !validMode(cfg.DefenseMode) {
+		cfg.DefenseMode = ModeObserve
 	}
 	if cfg.Events == nil {
 		cfg.Events = map[string]bool{}
@@ -203,7 +237,7 @@ func (s *Service) AgentConfig() AgentConfig {
 }
 
 func (s *Service) SaveAgentConfig(cfg AgentConfig) error {
-	if cfg.DefenseMode != "observe" && cfg.DefenseMode != "confirm" && cfg.DefenseMode != "auto" {
+	if !validMode(cfg.DefenseMode) {
 		return fmt.Errorf("非法防御模式: %s", cfg.DefenseMode)
 	}
 	if cfg.Events == nil {
@@ -244,10 +278,11 @@ func (s *Service) Messages(sessionID, afterID uint, limit int) []model.OpsAgentM
 }
 
 // CreateSession 建会话并写入首条消息（manual 或 event），随后由调用方 startRunner。
-func (s *Service) CreateSession(title, source string, hostID *uint, firstRole, firstContent string) (*model.OpsAgentSession, error) {
+// defenseMode 为会话级授权级别快照：非法/为空时回落到全局默认（事件会话默认）。
+func (s *Service) CreateSession(title, source string, hostID *uint, firstRole, firstContent, defenseMode string) (*model.OpsAgentSession, error) {
 	sess := model.OpsAgentSession{
 		Title: trunc(title, 80), Source: source, Status: "idle",
-		DefenseMode: s.AgentConfig().DefenseMode, HostID: hostID,
+		DefenseMode: s.resolveMode(defenseMode), HostID: hostID,
 	}
 	if err := s.db.Create(&sess).Error; err != nil {
 		return nil, err
@@ -256,6 +291,29 @@ func (s *Service) CreateSession(title, source string, hostID *uint, firstRole, f
 		s.addMessage(sess.ID, firstRole, firstContent, "", "", "")
 	}
 	return &sess, nil
+}
+
+// SetDefenseMode 切换会话防御模式（会话级；运行中/待确认不可切换，避免跑一半改授权级别）。
+func (s *Service) SetDefenseMode(sessionID uint, mode string) error {
+	if !validMode(mode) {
+		return fmt.Errorf("非法防御模式: %s", mode)
+	}
+	sess, err := s.GetSession(sessionID)
+	if err != nil {
+		return err
+	}
+	if sess.Status == "running" || sess.Status == "waiting_confirm" {
+		return fmt.Errorf("会话正在运行，请停止后再切换防御模式")
+	}
+	if sess.DefenseMode == mode {
+		return nil
+	}
+	if err := s.db.Model(sess).Update("defense_mode", mode).Error; err != nil {
+		return err
+	}
+	s.audit("opsagent.session.mode", fmt.Sprintf("session=%d mode=%s", sessionID, mode))
+	s.broadcast(map[string]any{"type": "mode", "sessionId": sessionID, "defenseMode": mode})
+	return nil
 }
 
 // SendMessage 用户追加消息并唤醒循环（idle/interrupted/error 会话）。
@@ -410,17 +468,22 @@ func (s *Service) runLoop(id uint, ctx context.Context, run *sessionRun) {
 		}
 		tools := toLLMTools(s.buildToolset(sess.DefenseMode, s.AgentConfig().AllowSSHExec))
 
-		resp, err := s.llm.Chat(ctx, cfg, messages, tools)
+		// 流式调用：正文/思考增量经 sink 合并广播（delta 帧），定稿在调用结束后统一落库
+		sink := newStreamSink(s, id)
+		resp, err := s.llm.ChatStream(ctx, cfg, messages, tools, sink.delta)
 		if errors.Is(err, llm.ErrContextLength) {
 			// 模型报上下文超限：强制压缩（更激进的压缩目标）后重试一次；仍超限才真正失败
 			if ok, cerr := s.compactContext(sess, ctx, cfg, s.sessionRows(id)); ok {
 				messages = s.buildContext(sess, hosts, siteDomains)
-				resp, err = s.llm.Chat(ctx, cfg, messages, tools)
+				sink = newStreamSink(s, id)
+				resp, err = s.llm.ChatStream(ctx, cfg, messages, tools, sink.delta)
 			} else if cerr != nil {
 				err = fmt.Errorf("上下文超限且自动压缩失败（%v），请手动精简会话或调大模型上下文窗口", cerr)
 			}
 		}
 		if err != nil {
+			// 已流出的部分内容先定稿保留（无增量时为空操作），再走中断/失败收尾
+			sink.finish("")
 			if ctx.Err() != nil {
 				s.finish(id, "interrupted", "已手动停止")
 				return
@@ -432,12 +495,12 @@ func (s *Service) runLoop(id uint, ctx context.Context, run *sessionRun) {
 		s.broadcast(map[string]any{"type": "context", "sessionId": id,
 			"tokens": estimateMessagesTokens(messages), "limit": limit})
 
-		// 助手消息（可能带工具调用请求）落库推送
+		// 助手消息（可能带工具调用请求）定稿推送：流式行整行替换；纯工具调用（无正文增量）时补建行
 		meta := ""
 		if len(resp.ToolCalls) > 0 {
 			meta = metaToolCallsJSON(resp.ToolCalls)
 		}
-		s.addMessage(id, "assistant", resp.Content, meta, "", "")
+		sink.finish(meta)
 
 		if len(resp.ToolCalls) == 0 {
 			s.finish(id, "idle", "")
@@ -537,8 +600,12 @@ func (s *Service) setStatus(id uint, status, errMsg string) {
 // ===================== 消息持久化 =====================
 
 func (s *Service) addMessage(sessionID uint, role, content, meta, toolName, toolArgs string) *model.OpsAgentMessage {
+	return s.addMessageFull(sessionID, role, content, "", meta, toolName, toolArgs)
+}
+
+func (s *Service) addMessageFull(sessionID uint, role, content, reasoning, meta, toolName, toolArgs string) *model.OpsAgentMessage {
 	row := model.OpsAgentMessage{
-		SessionID: sessionID, Role: role, Content: content, Meta: meta,
+		SessionID: sessionID, Role: role, Content: content, Reasoning: reasoning, Meta: meta,
 		ToolName: trunc(toolName, 128), ToolArgs: trunc(toolArgs, 2000),
 	}
 	if err := s.db.Create(&row).Error; err != nil {
@@ -556,6 +623,127 @@ func (s *Service) updateMessage(id uint, content, meta string) {
 		s.broadcast(map[string]any{"type": "message", "sessionId": row.SessionID, "message": row})
 	}
 }
+
+// updateAssistant 定稿流式助手行：完整正文/推理/工具调用 meta 一次性落库并广播整行替换。
+func (s *Service) updateAssistant(id uint, content, reasoning, meta string) {
+	s.db.Model(&model.OpsAgentMessage{}).Where("id = ?", id).
+		Updates(map[string]any{"content": content, "reasoning": reasoning, "meta": meta})
+	var row model.OpsAgentMessage
+	if err := s.db.First(&row, id).Error; err == nil {
+		s.broadcast(map[string]any{"type": "message", "sessionId": row.SessionID, "message": row})
+	}
+}
+
+// streamSink 一轮流式模型响应的落库/广播聚合器（每个 LLM 轮一个）。
+// 首个增量到达时才建 assistant 行（此前失败不留垃圾行），正文首段随行落库保证中途刷新可见；
+// 增量按 streamFlushWindow 合并成 WS delta 帧广播，并按 streamPersistEvery 静默落库；
+// finish 定稿：完整 content/reasoning/meta 一次性落库并广播 message 帧（整行替换语义）。
+type streamSink struct {
+	svc         *Service
+	sessionID   uint
+	mu          sync.Mutex
+	rowID       uint
+	content     strings.Builder
+	reasoning   strings.Builder
+	pendC       strings.Builder
+	pendR       strings.Builder
+	timer       *time.Timer
+	lastPersist time.Time
+}
+
+func newStreamSink(svc *Service, sessionID uint) *streamSink {
+	return &streamSink{svc: svc, sessionID: sessionID, lastPersist: time.Now()}
+}
+
+// delta 实现 llm.ChatStream 的增量回调；返回 nil 表示继续流式。
+func (k *streamSink) delta(d llm.StreamDelta) error {
+	kind, text := d.Kind, d.Text
+	if text == "" {
+		return nil
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.rowID == 0 {
+		// 首个增量：建行（meta 带 streaming 标记供前端识别流式行）
+		if kind == "content" {
+			k.content.WriteString(text)
+			if row := k.svc.addMessage(k.sessionID, "assistant", text, metaStreamingJSON(), "", ""); row.ID > 0 {
+				k.rowID = row.ID
+			}
+			return nil
+		}
+		k.reasoning.WriteString(text)
+		k.pendR.WriteString(text)
+		if row := k.svc.addMessage(k.sessionID, "assistant", "", metaStreamingJSON(), "", ""); row.ID > 0 {
+			k.rowID = row.ID
+			k.timer = time.AfterFunc(streamFlushWindow, k.flush)
+		}
+		return nil
+	}
+	if kind == "content" {
+		k.content.WriteString(text)
+		k.pendC.WriteString(text)
+	} else {
+		k.reasoning.WriteString(text)
+		k.pendR.WriteString(text)
+	}
+	if k.timer == nil {
+		k.timer = time.AfterFunc(streamFlushWindow, k.flush)
+	}
+	return nil
+}
+
+// flush 把缓冲中的增量广播为 delta 帧；顺带按间隔静默落库（重启/断线后可恢复已生成部分）。
+func (k *streamSink) flush() {
+	k.mu.Lock()
+	c, r := k.pendC.String(), k.pendR.String()
+	k.pendC.Reset()
+	k.pendR.Reset()
+	if k.timer != nil {
+		k.timer.Stop()
+		k.timer = nil
+	}
+	rowID := k.rowID
+	content := k.content.String()
+	reasoning := k.reasoning.String()
+	persist := rowID > 0 && time.Since(k.lastPersist) >= streamPersistEvery && (c != "" || r != "")
+	if persist {
+		k.lastPersist = time.Now()
+	}
+	k.mu.Unlock()
+	if rowID == 0 {
+		return
+	}
+	if r != "" {
+		k.svc.broadcast(map[string]any{"type": "delta", "sessionId": k.sessionID, "messageId": rowID, "path": "reasoning", "append": r})
+	}
+	if c != "" {
+		k.svc.broadcast(map[string]any{"type": "delta", "sessionId": k.sessionID, "messageId": rowID, "path": "content", "append": c})
+	}
+	if persist {
+		k.svc.db.Model(&model.OpsAgentMessage{}).Where("id = ?", rowID).
+			Updates(map[string]any{"content": content, "reasoning": reasoning})
+	}
+}
+
+// finish 定稿本轮流式行。rowID 为 0（未收到任何增量）时：有 meta（纯工具调用）或正文则补建行，否则空操作。
+func (k *streamSink) finish(meta string) {
+	k.flush()
+	k.mu.Lock()
+	rowID := k.rowID
+	content := k.content.String()
+	reasoning := k.reasoning.String()
+	k.mu.Unlock()
+	if rowID == 0 {
+		if content != "" || meta != "" {
+			k.svc.addMessageFull(k.sessionID, "assistant", content, reasoning, meta, "", "")
+		}
+		return
+	}
+	k.svc.updateAssistant(rowID, content, reasoning, meta)
+}
+
+func metaStreamingJSON() string { return `{"streaming":true}` }
 
 // finalizePendingBySession 把会话中残留的 pending 工具行标为未执行（面板重启兜底）。
 func (s *Service) finalizePendingBySession(sessionID uint, note string) {
@@ -596,7 +784,10 @@ func metaInt(meta, key string) uint {
 	return 0
 }
 
-func metaToolJSON(callID string) string  { m, _ := json.Marshal(map[string]any{"callId": callID}); return string(m) }
+func metaToolJSON(callID string) string {
+	m, _ := json.Marshal(map[string]any{"callId": callID})
+	return string(m)
+}
 func metaPendingJSON(callID string) string {
 	m, _ := json.Marshal(map[string]any{"callId": callID, "pending": true})
 	return string(m)
@@ -631,7 +822,7 @@ func (s *Service) buildContext(sess *model.OpsAgentSession, hosts []model.SshHos
 		}
 	}
 	memories := s.relatedMemories(sess)
-	out := []llm.Message{{Role: "system", Content: buildSystemPrompt(sess, hosts, siteDomains, memories)}}
+	out := []llm.Message{{Role: "system", Content: buildSystemPrompt(sess, hosts, siteDomains, memories, s.persistentKnowledge())}}
 	for i := range rows {
 		r := &rows[i]
 		if r.ID <= maxToId && i != lastSummaryIdx {
@@ -639,8 +830,7 @@ func (s *Service) buildContext(sess *model.OpsAgentSession, hosts []model.SshHos
 		}
 		switch r.Role {
 		case "summary":
-			out = append(out, llm.Message{Role: "system", Content:
-				fmt.Sprintf("【早期上下文摘要】以下摘自本会话更早的 %d 条消息（原始记录已归档）：\n%s", metaInt(r.Meta, "count"), r.Content)})
+			out = append(out, llm.Message{Role: "system", Content: fmt.Sprintf("【早期上下文摘要】以下摘自本会话更早的 %d 条消息（原始记录已归档）：\n%s", metaInt(r.Meta, "count"), r.Content)})
 		case "user", "event":
 			out = append(out, llm.Message{Role: "user", Content: r.Content})
 		case "assistant":
@@ -711,7 +901,7 @@ func (s *Service) handleEvent(topic string, payload map[string]any) {
 		}
 		return
 	}
-	sess, err := s.CreateSession(eventTitle(topic, payload), "event:"+topic, nil, "event", renderEvent(topic, payload))
+	sess, err := s.CreateSession(eventTitle(topic, payload), "event:"+topic, nil, "event", renderEvent(topic, payload), cfg.DefenseMode)
 	if err != nil {
 		slog.Error("事件触发会话创建失败", "topic", topic, "err", err)
 		return

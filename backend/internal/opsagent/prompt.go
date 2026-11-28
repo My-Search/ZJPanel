@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"zjpanel/backend/internal/buildinfo"
 	"zjpanel/backend/internal/model"
@@ -29,16 +30,16 @@ type EventDesc struct {
 
 // modeRules 三级防御模式在系统提示词中的规则说明。
 var modeRules = map[string]string{
-	"observe": "当前为「仅观察」模式：你只能查询、分析与发送通知（panel_notify），不能执行任何处置操作。" +
+	ModeObserve: "当前为「仅观察」模式：你只能查询、分析与发送通知（panel_notify），不能执行任何处置操作。" +
 		"发现问题时给出具体建议方案（工具名+参数+影响），等待人工确认或切换模式。",
-	"confirm": "当前为「执行前确认」模式：你调用的处置类操作会先展示给用户，确认后才会执行。" +
+	ModeConfirm: "当前为「执行前确认」模式：你调用的处置类操作会先展示给用户，确认后才会执行。" +
 		"若操作被拒绝，不要重复原方案，改提替代建议。",
-	"auto": "当前为「自动处置」模式：你可以直接执行处置操作，但必须先用只读工具确认现状与影响范围，" +
+	ModeAuto: "当前为「自动处置」模式：你可以直接执行处置操作，但必须先用只读工具确认现状与影响范围，" +
 		"操作后在回复中清楚说明做了什么、为什么。",
 }
 
-// buildSystemPrompt 组装系统提示词：角色 + 面板上下文 + 防御模式规则 + 记忆注入 + 行为准则。
-func buildSystemPrompt(sess *model.OpsAgentSession, hosts []model.SshHost, siteDomains []string, memories []model.OpsAgentMemory) string {
+// buildSystemPrompt 组装系统提示词：角色 + 面板上下文 + 防御模式规则 + 记忆注入 + 常驻知识 + 行为准则。
+func buildSystemPrompt(sess *model.OpsAgentSession, hosts []model.SshHost, siteDomains []string, memories []model.OpsAgentMemory, kbs []model.OpsAgentKnowledge) string {
 	var b strings.Builder
 	b.WriteString("你是 ZJPanel（nginx 站点/证书/容器/主机一体化管理面板）内置的 AI 运维智能体，")
 	b.WriteString("通过工具查询与操作面板：站点、nginx、容器、compose、证书、主机 Agent、安全中心、WAF、备份等。\n\n")
@@ -66,7 +67,11 @@ func buildSystemPrompt(sess *model.OpsAgentSession, hosts []model.SshHost, siteD
 	}
 
 	b.WriteString("\n# 防御模式\n")
-	b.WriteString(modeRules[sess.DefenseMode])
+	if rule, ok := modeRules[sess.DefenseMode]; ok {
+		b.WriteString(rule)
+	} else {
+		b.WriteString(modeRules[ModeObserve])
+	}
 	b.WriteString("\n")
 
 	if len(memories) > 0 {
@@ -80,11 +85,34 @@ func buildSystemPrompt(sess *model.OpsAgentSession, hosts []model.SshHost, siteD
 		}
 	}
 
+	// 常驻知识：人工维护、每次会话全量携带；总量超限时只注入能放下的部分，
+	// 其余靠 kb_search / kb_read 工具按需查询（kb 工具始终可用，不受此上限影响）。
+	// 上限按字符（rune）计：知识内容以中文为主，len() 的字节口径会低估约 2/3 容量。
+	if len(kbs) > 0 {
+		b.WriteString("\n# 常驻知识（人工维护的运维知识库，每次会话自动携带，优先遵循）\n")
+		total, capped := 0, false
+		for _, k := range kbs {
+			if total+utf8.RuneCountInString(k.Content) > kbPersistentMaxChars {
+				capped = true
+				break
+			}
+			total += utf8.RuneCountInString(k.Content)
+			fmt.Fprintf(&b, "## %s\n%s\n\n", k.Title, k.Content)
+		}
+		if capped {
+			b.WriteString("（常驻知识总量超出注入上限，以上仅为部分条目；更多内容可用 kb_search 检索、kb_read 查看全文）\n")
+		}
+	}
+
 	b.WriteString(`
 # 记忆使用
 用 memory_save / memory_search / memory_forget 维护长期记忆（跨会话生效）：
 - 值得记：主机特殊路径与架构、故障定位结论、用户明确交代的事项与偏好
 - 不值得记：一次性的查询结果、随时会变的实时指标
+
+# 知识库使用
+运维知识库是人工维护的操作规范/手册（kb_search 检索条目，kb_read 按 id 读全文）。
+任务涉及知识库覆盖的内容（如既定处置流程、变更规范、面板约定）时，先查知识库并遵循其约定。
 
 # 行为准则
 - 先查询后行动：处置前先用只读工具确认现状，避免凭猜测操作

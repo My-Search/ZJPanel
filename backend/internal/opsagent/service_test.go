@@ -20,7 +20,7 @@ func testDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("打开内存库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&model.OpsAgentSession{}, &model.OpsAgentMessage{}, &model.OpsAgentMemory{}, &model.Setting{}, &model.Site{}); err != nil {
+	if err := db.AutoMigrate(&model.OpsAgentSession{}, &model.OpsAgentMessage{}, &model.OpsAgentMemory{}, &model.OpsAgentKnowledge{}, &model.Setting{}, &model.Site{}, &model.AuditLog{}); err != nil {
 		t.Fatalf("迁移失败: %v", err)
 	}
 	return db
@@ -51,15 +51,57 @@ func TestBuildToolsetFiltering(t *testing.T) {
 	if observe["host_exec"] {
 		t.Fatal("未开启 AllowSSHExec 不应包含 host_exec")
 	}
+	// 开了 SSH 执行也必须遵守会话防御模式：仅观察不暴露 host_exec
+	if names(s.buildToolset("observe", true))["host_exec"] {
+		t.Fatal("observe 模式不应包含 host_exec（即使 AllowSSHExec 已开启）")
+	}
 
 	auto := names(s.buildToolset("auto", true))
 	if !auto["host_ban_ip"] || !auto["host_exec"] {
 		t.Fatal("auto 模式应包含处置工具与 host_exec")
 	}
 
-	// observe 二次拦截：dispatch 对处置工具直接拒绝
+	// observe 二次拦截：dispatch 对处置类 MCP 工具与 host_exec 直接拒绝
 	if got := s.dispatch(&model.OpsAgentSession{DefenseMode: "observe"}, llmCall("c1", "host_ban_ip", "{}")); got != observeBlocked {
 		t.Fatalf("observe 拦截失效: %s", got)
+	}
+	if got := s.dispatch(&model.OpsAgentSession{DefenseMode: "observe"}, llmCall("c2", "host_exec", `{"hostId":1,"command":"id"}`)); got != observeBlocked {
+		t.Fatalf("observe 模式 host_exec 未拦截: %s", got)
+	}
+}
+
+// 防御模式是会话级属性：创建时显式指定，非法/空回落默认；空闲可切换，运行中锁定。
+func TestSessionDefenseMode(t *testing.T) {
+	db := testDB(t)
+	s := &Service{db: db}
+
+	sess, err := s.CreateSession("t", "manual", nil, "user", "", ModeConfirm)
+	if err != nil {
+		t.Fatalf("建会话失败: %v", err)
+	}
+	if sess.DefenseMode != ModeConfirm {
+		t.Fatalf("会话应记录显式模式 confirm，实际 %s", sess.DefenseMode)
+	}
+	fallback, _ := s.CreateSession("t2", "manual", nil, "user", "", "")
+	if fallback.DefenseMode != ModeObserve {
+		t.Fatalf("空模式应回落默认 observe，实际 %s", fallback.DefenseMode)
+	}
+
+	if err := s.SetDefenseMode(sess.ID, ModeAuto); err != nil {
+		t.Fatalf("空闲会话切换模式失败: %v", err)
+	}
+	var got model.OpsAgentSession
+	db.First(&got, sess.ID)
+	if got.DefenseMode != ModeAuto {
+		t.Fatalf("模式未落库: %s", got.DefenseMode)
+	}
+
+	db.Model(&model.OpsAgentSession{}).Where("id = ?", sess.ID).Update("status", "running")
+	if err := s.SetDefenseMode(sess.ID, ModeObserve); err == nil {
+		t.Fatal("运行中会话不应允许切换防御模式")
+	}
+	if err := s.SetDefenseMode(sess.ID, "bad"); err == nil {
+		t.Fatal("非法防御模式应被拒绝")
 	}
 }
 
