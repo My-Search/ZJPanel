@@ -33,6 +33,7 @@
           <span class="ver">ZJPanel {{ version }}</span>
         </div>
         <a-space :size="4">
+          <OpsAgentWorkbench />
           <NotifyBell />
           <a-dropdown>
             <a-button type="text" class="theme-btn" :title="'主题：' + themeLabel">
@@ -84,6 +85,7 @@ import { usePluginMenu } from '../store/pluginMenu'
 import { useNotify } from '../store/notify'
 import SideMenu from '../components/SideMenu.vue'
 import NotifyBell from '../components/NotifyBell.vue'
+import OpsAgentWorkbench from '../components/OpsAgentWorkbench.vue'
 import { MenuOutlined, SkinOutlined, UserOutlined } from '@ant-design/icons-vue'
 
 const route = useRoute()

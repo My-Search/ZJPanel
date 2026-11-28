@@ -83,6 +83,7 @@ const (
 	CtxBackupRemoteSecret = "settings.backup.remote.client_secret"
 	CtxBackupRemoteToken  = "settings.backup.remote.refresh_token"
 	CtxBackupCrypt        = "settings.backup.crypt.pass" // 备份包加密密码
+	CtxLLMApiKey          = "settings.opsagent.llm.api_key" // AI 运维智能体的 LLM API Key
 )
 
 // CtxPluginSetting 插件 password 类型设置项的 AAD 上下文。

@@ -24,6 +24,7 @@ import (
 	"zjpanel/backend/internal/model"
 	"zjpanel/backend/internal/nginx"
 	"zjpanel/backend/internal/notify"
+	"zjpanel/backend/internal/opsagent"
 	"zjpanel/backend/internal/pkg"
 	"zjpanel/backend/internal/plugin"
 	"zjpanel/backend/internal/security"
@@ -65,6 +66,7 @@ type Server struct {
 	MCPReg   *mcp.Registry
 	MCPSrv   *mcp.Server
 	Backup   *backup.Service
+	OpsAgent *opsagent.Service
 }
 
 func NewServer(cfg *pkg.Config, db *gorm.DB, auth *middleware.Auth, hub *ws.Hub, box *pkg.SecretBox) *Server {

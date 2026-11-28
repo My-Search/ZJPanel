@@ -38,6 +38,7 @@ func (s *Server) RegisterRoutes() {
 	s.registerPluginRoutes()
 	s.registerNotifyRoutes()
 	s.registerBackupRoutes()
+	s.registerOpsAgentRoutes()
 	s.registerMCPTools()
 	s.registerWSRoutes()
 	s.registerMaintenanceRoute()

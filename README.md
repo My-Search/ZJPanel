@@ -29,6 +29,7 @@ Go + Vue3 + TypeScript 服务器管理面板：**nginx 管理 + SSH 终端 + 主
 | **监控** | CPU/内存/负载/网络实时（WS）+ 磁盘用量；历史采样 30 天 |
 | **数据库** | 内置「数据库管理」插件：MySQL/MariaDB、PostgreSQL、SQLite、SQL Server、Oracle、Redis、MongoDB；连接管理（凭据加密）、库表/键/集合浏览、结构与 DDL、分页数据与行级编辑、SQL 与命令控制台、SQL 文件导入 |
 | **MCP** | 面板唯一 `/mcp` 端点（Streamable HTTP + API Key），核心工具与**插件声明的工具聚合**统一对外 |
+| **AI 运维智能体** | 顶栏「管理 Agent」多会话工作台：会话在服务器后台运行（页面刷新/关闭不中断，面板重启标记中断可续聊）；LLM 走 OpenAI 兼容单配置（设置 → 智能助手，兼容 DeepSeek/通义/GLM/Ollama 等，API Key 加密落库）；工具层直接复用 MCP 工具注册表，三级防御模式（仅观察→执行前确认→自动处置，默认仅观察，处置类操作全程审计）；可订阅系统事件（站点宕机/证书失败/备份结束等）自动建会话分析与处置；持久长期记忆（跨会话）；可选开启经 SSH 在主机执行任意命令（默认关） |
 | **插件** | 内置/外部插件同一 SDK：菜单页、HTTP 路由、cron、事件订阅、MCP 工具、证书 DNS 提供商与部署目标注册；zip 上传安装，Yaegi 解释执行 |
 | **备份与恢复** | 云端为主存储：打包（数据库/证书/安全策略/插件数据/Nginx 配置/Compose 应用目录整目录）→ 可选 age 加密（密码加密落库，可用 age 命令行离线恢复）→ 自动上传云盘（WebDAV / Google Drive / OneDrive）→ 按本地/云端保留份数清理旧包（本地 0 份 = 同步完立即删本地）；创建/上传/下载/恢复均为后台任务，WS 实时进度 + 断线快照补帧；定时备份支持 cron 频率，结果经事件总线推站内信/webhook；恢复直接覆盖原位（完成后需重启面板/重载 nginx） |
 | **更新** | 面板一键更新：容器部署走镜像式（compose 固定具体版本 tag + 启动自愈清理本地旧镜像，down/up 不回退），本地直跑走二进制式（`ZJPANEL_GH_MIRROR` 加速）；另有 `update.sh`（宿主机执行，同步容器镜像） |
@@ -160,7 +161,7 @@ ZJPanel/
 │   ├── cmd/zjpanel/
 │   ├── cmd/zjagent/        # 主机 Agent（单二进制：run/install/uninstall/upgrade/doctor）
 │   ├── sdk/plugin/         # 插件 SDK（稳定接口）
-│   ├── internal/           # boot/nginx/site/compose/cert/terminal/docker/metrics/logmap/security/waf/agent/mcp/plugin/update/http
+│   ├── internal/           # boot/nginx/site/compose/cert/terminal/docker/metrics/logmap/security/waf/agent/mcp/opsagent/llm/plugin/update/http
 │   └── plugins/notifywebhook/  # 内置示例插件
 └── frontend/               # Vue3 + TS + Ant Design Vue
 ```
@@ -171,5 +172,5 @@ ZJPanel/
 - 仅信任 `ZJPANEL_TRUSTED_PROXIES` 配置的反代 CIDR 解析 `X-Forwarded-For`（默认仅回环；直连伪造该头不影响限速与审计 IP）；面板直接暴露公网时建议设为 `none`
 - SSH 密码/私钥、ACME 账户私钥、DNS 凭证均 AES-256-GCM 加密落库，v2 密文带 AAD 字段绑定（密文不可跨字段互换），启动时自动从旧格式无感升级；主密钥默认 `data/secret.key`，可用 `ZJPANEL_SECRET_KEY`（`openssl rand -hex 32`）改为环境注入实现密钥与数据分离
 - 会话与登录时的密码哈希绑定：修改密码后其他设备全部下线，带外篡改用户表哈希所签发的会话在哈希还原后立即失效
-- MCP API Key 仅存哈希；API Key 只能访问 `/mcp`，不能访问面板 UI 与 WS
+- MCP API Key 仅存哈希；API Key 只能访问 `/mcp`，不能访问面板 UI 与 WS；持有 API Key 即可驱动全部 MCP 工具（含封禁、容器操作等处置类），请按需签发并妥善保管
 - 全部变更操作记录审计日志（设置 → 审计）

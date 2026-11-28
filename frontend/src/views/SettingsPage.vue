@@ -89,6 +89,10 @@
         </a-table>
       </a-tab-pane>
 
+      <a-tab-pane key="ai" tab="智能助手">
+        <SettingsAiTab />
+      </a-tab-pane>
+
       <a-tab-pane key="backup" tab="备份与恢复">
         <a-spin :spinning="backupBusy">
           <a-row :gutter="16">
@@ -318,6 +322,8 @@ import { message } from 'ant-design-vue'
 import { getQuiet, put, post, del, fmtTime, fmtBytes, http, wsTopic } from '../api'
 import { useAuth } from '../store/auth'
 import AceEditor from '../components/AceEditor.vue'
+import SettingsAiTab from '../components/SettingsAiTab.vue'
+
 
 const auth = useAuth()
 const authName = computed(() => auth.username)
@@ -770,6 +776,7 @@ const load = async () => {
     loadEntry()
   } finally { loading.value = false }
 }
+
 const checkUpdate = async () => {
   checking.value = true
   try { info.value = await post('/api/update/check') } catch { /* ignore */ }

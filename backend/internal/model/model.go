@@ -266,3 +266,41 @@ type Notification struct {
 	CreatedAt time.Time  `json:"createdAt" gorm:"index"` // 30 天清理的 DELETE 条件
 	ReadAt    *time.Time `json:"readAt" gorm:"index"`    // 未读 COUNT 轮询的过滤列（无索引时全表扫）
 }
+
+// OpsAgentSession AI 运维会话。会话在后端 goroutine 里运行（前端只是视图），
+// 页面刷新/关闭不影响执行；面板重启后 running 会话被标记 interrupted，可发消息续聊。
+type OpsAgentSession struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	Title       string    `gorm:"size:255" json:"title"`
+	Source      string    `gorm:"size:64" json:"source"`       // manual | event:<topic>
+	Status      string    `gorm:"size:16;index" json:"status"` // running|waiting_confirm|idle|interrupted|error
+	DefenseMode string    `gorm:"size:16" json:"defenseMode"`  // 会话创建时的防御模式快照：observe|confirm|auto
+	HostID      *uint     `json:"hostId"`                      // 可选：会话绑定的主机上下文
+	Error       string    `gorm:"type:text" json:"error"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+// OpsAgentMessage 会话消息。role=user|assistant|tool|event；tool 消息记录工具名/参数，
+// Meta 存 JSON（confirm 模式下待确认动作的完整信息，前端据此渲染确认卡片）。
+type OpsAgentMessage struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	SessionID uint      `gorm:"index:idx_ops_msg_session" json:"sessionId"`
+	Role      string    `gorm:"size:16;index:idx_ops_msg_session" json:"role"`
+	Content   string    `gorm:"type:text" json:"content"`
+	ToolName  string    `gorm:"size:128" json:"toolName,omitempty"`
+	ToolArgs  string    `gorm:"type:text" json:"toolArgs,omitempty"`
+	Meta      string    `gorm:"type:text" json:"meta,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+// OpsAgentMemory 智能体持久记忆：跨会话生效。Scope=global 全局事实 / host 主机事实（RefID=主机ID）。
+type OpsAgentMemory struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	Scope     string    `gorm:"size:16;index" json:"scope"` // global | host
+	RefID     string    `gorm:"size:32;index" json:"refId"` // host 作用域的主机 ID
+	Key       string    `gorm:"size:255" json:"key"`
+	Content   string    `gorm:"type:text" json:"content"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}

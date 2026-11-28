@@ -25,6 +25,7 @@ import (
 	"zjpanel/backend/internal/model"
 	"zjpanel/backend/internal/nginx"
 	"zjpanel/backend/internal/notify"
+	"zjpanel/backend/internal/opsagent"
 	"zjpanel/backend/internal/pkg"
 	"zjpanel/backend/internal/plugin"
 	"zjpanel/backend/internal/security"
@@ -231,6 +232,10 @@ func Run() {
 	srv.Backup = backupSvc
 	srv.MCPReg = mcpReg
 	srv.MCPSrv = mcpSrv
+	// AI 运维智能体：依赖 MCP 注册表（工具层）与统一通知（事件限流提醒），最后装配并启动
+	opsAgentSvc := opsagent.New(db, box, hub, eventBus, mcpReg, notifySvc)
+	opsAgentSvc.Start()
+	srv.OpsAgent = opsAgentSvc
 	srv.RegisterStatic(srv.Engine())
 	srv.RegisterRoutes()
 
