@@ -24,6 +24,7 @@ func (s *Server) RegisterRoutes() {
 	s.registerHostRoutes()
 	s.registerTerminalRoutes()
 	s.registerSftpRoutes()
+	s.registerFsRoutes()
 	s.registerQuickCmdRoutes()
 	s.registerDockerRoutes()
 	s.registerSettingsRoutes()
