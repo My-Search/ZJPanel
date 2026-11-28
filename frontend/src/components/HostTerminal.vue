@@ -1,7 +1,8 @@
 <!--
   HostTerminal：主机页「终端」Tab 的内嵌终端。
   单会话（按当前主机创建），复用后端 /api/ws/terminal 协议；
-  自带文件管理/上传入口与底部资源状态栏，避免为了传文件再跳回旧终端页。
+  工具栏只保留关闭/文件管理/多标签入口（上传走文件面板拖拽），断线与关闭的反馈
+  由后端/前端直接写入终端画面，不再用状态标签占位。
   默认不自动连接：进入 Tab 先显示「未开启」占位，由用户显式打开/关闭，
   避免浏览主机时悄悄建立常驻 SSH 会话造成资源浪费。
   会话按主机持久化：sessionId + xterm 画面快照存 localStorage，浏览器刷新后
@@ -24,8 +25,6 @@
     <template v-else>
       <div class="ht-bar">
         <a-space size="small" wrap>
-          <a-tag :color="stateColor" class="ht-state">{{ stateText }}</a-tag>
-          <a-button size="small" @click="reconnect">重连</a-button>
           <a-popconfirm
             title="关闭将结束后端终端会话（Shell 进程与连接一并释放），未保存的工作会丢失。"
             ok-text="关闭" cancel-text="取消" @confirm="closeTerminal"
@@ -37,9 +36,6 @@
             @click="toggleFile"
           >
             <FolderOpenOutlined /> 文件管理
-          </a-button>
-          <a-button v-if="!isLocal" size="small" :disabled="!connected" @click="pickUpload">
-            <UploadOutlined /> 上传文件
           </a-button>
           <a-button size="small" type="link" @click="openFull">
             多标签终端 <ExportOutlined />
@@ -55,7 +51,7 @@
         </div>
         <template v-if="fileOpen && !isLocal">
           <div class="ht-side">
-            <TermFilePanel ref="filePanel" :host-id="hostId" />
+            <TermFilePanel :host-id="hostId" />
           </div>
         </template>
       </div>
@@ -67,7 +63,7 @@
 import { computed, markRaw, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { FolderOpenOutlined, UploadOutlined, ExportOutlined, CodeOutlined, PoweroffOutlined } from '@ant-design/icons-vue'
+import { FolderOpenOutlined, ExportOutlined, CodeOutlined, PoweroffOutlined } from '@ant-design/icons-vue'
 import StatusStrip from './StatusStrip.vue'
 import TermFilePanel from './TermFilePanel.vue'
 import { useTermTheme } from '../utils/termTheme'
@@ -86,11 +82,9 @@ const isLocal = computed(() => !!props.local)
 const hostId = computed(() => props.hostId)
 
 const termEl = ref<HTMLElement>()
-const filePanel = ref<any>(null)
 const fileOpen = ref(false)
 const stats = ref<any>(null)
 const state = ref<'connecting' | 'online' | 'reconnecting' | 'closed' | 'idle'>('idle')
-const connected = computed(() => state.value === 'online')
 // 终端开关：false 时显示「未开启」占位，不加载 xterm 也不建 WS（默认不打开，显式开/关）
 const opened = ref(false)
 
@@ -172,11 +166,6 @@ const forgetSession = () => {
   try { localStorage.removeItem(key) } catch { /* ignore */ }
   boundKey = ''
 }
-
-const stateText = computed(() => ({
-  idle: '未连接', connecting: '连接中…', online: '已连接', reconnecting: '重连中…', closed: '已断开',
-}[state.value]))
-const stateColor = computed(() => state.value === 'online' ? 'green' : state.value === 'connecting' || state.value === 'reconnecting' ? 'orange' : 'default')
 
 const focusTerm = () => term?.focus()
 
@@ -341,6 +330,8 @@ const connect = (fresh: boolean) => {
         forgetSession()
         sessionId = ''
         state.value = 'closed'
+        // 状态标签已移除，终结反馈直接写进画面（与完整终端页一致）
+        termWrite('\r\n\x1b[31m[会话已关闭，重新打开终端可建立新会话]\x1b[0m\r\n')
         break
       case 'disconnected':
         state.value = 'reconnecting'
@@ -370,18 +361,6 @@ const connect = (fresh: boolean) => {
   const pull = () => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'stats' })) }
   setTimeout(pull, 800)
   statsTimer = setInterval(pull, 5000)
-}
-
-const reconnect = async () => {
-  clearReconnect()
-  closeWS()
-  await deleteSession()
-  forgetSession()
-  consumed = 0
-  skipReplay = 0
-  term?.reset()
-  stats.value = null
-  connect(true)
 }
 
 const reset = async (deleteOld: boolean) => {
@@ -442,15 +421,6 @@ const onVisibility = () => { if (document.hidden) persistNow(true) }
 const toggleFile = () => {
   fileOpen.value = !fileOpen.value
   nextTick(() => setTimeout(fitNow, 60))
-}
-
-const pickUpload = async () => {
-  if (isLocal.value) { message.info('本机 Shell 不需要 SFTP 上传'); return }
-  if (!fileOpen.value) {
-    fileOpen.value = true
-    await nextTick()
-  }
-  setTimeout(() => filePanel.value?.pickFiles?.(), 80)
 }
 
 const openFull = () => {
@@ -537,7 +507,6 @@ defineExpose({ open })
 .ht-idle-title { font-size: 16px; font-weight: 600; color: var(--color-ink); }
 .ht-idle-sub { font-size: 12.5px; line-height: 1.7; color: var(--color-slate); margin-bottom: 6px; }
 .ht-bar { flex: none; padding: 2px 0 8px; }
-.ht-state { margin-inline-end: 0; }
 .dim { color: var(--color-slate); font-size: 12px; }
 .ht-body { flex: 1; min-height: 0; min-width: 0; display: flex; gap: 10px; }
 .ht-main { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; container-type: inline-size; }
