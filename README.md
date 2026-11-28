@@ -30,7 +30,7 @@ Go + Vue3 + TypeScript 服务器管理面板：**nginx 管理 + SSH 终端 + 主
 | **数据库** | 内置「数据库管理」插件：MySQL/MariaDB、PostgreSQL、SQLite、SQL Server、Oracle、Redis、MongoDB；连接管理（凭据加密）、库表/键/集合浏览、结构与 DDL、分页数据与行级编辑、SQL 与命令控制台、SQL 文件导入 |
 | **MCP** | 面板唯一 `/mcp` 端点（Streamable HTTP + API Key），核心工具与**插件声明的工具聚合**统一对外 |
 | **插件** | 内置/外部插件同一 SDK：菜单页、HTTP 路由、cron、事件订阅、MCP 工具、证书 DNS 提供商与部署目标注册；zip 上传安装，Yaegi 解释执行 |
-| **备份与恢复** | 手动/定时打包：面板数据库、证书、安全策略、插件数据、Nginx 配置与 Compose 应用目录整目录；创建/上传云盘（WebDAV / Google Drive / OneDrive）/下载/恢复均为后台任务，WS 实时进度 + 断线快照补帧；定时备份支持 cron 频率、完成后自动上传远程、按份数自动清理，结果经事件总线推站内信/webhook；恢复直接覆盖原位（完成后需重启面板/重载 nginx） |
+| **备份与恢复** | 云端为主存储：打包（数据库/证书/安全策略/插件数据/Nginx 配置/Compose 应用目录整目录）→ 可选 age 加密（密码加密落库，可用 age 命令行离线恢复）→ 自动上传云盘（WebDAV / Google Drive / OneDrive）→ 按本地/云端保留份数清理旧包（本地 0 份 = 同步完立即删本地）；创建/上传/下载/恢复均为后台任务，WS 实时进度 + 断线快照补帧；定时备份支持 cron 频率，结果经事件总线推站内信/webhook；恢复直接覆盖原位（完成后需重启面板/重载 nginx） |
 | **更新** | 面板一键更新：容器部署走镜像式（compose 固定具体版本 tag + 启动自愈清理本地旧镜像，down/up 不回退），本地直跑走二进制式（`ZJPANEL_GH_MIRROR` 加速）；另有 `update.sh`（宿主机执行，同步容器镜像） |
 
 ## 快速部署（Linux 服务器）
