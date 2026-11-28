@@ -120,6 +120,35 @@ func eventTitle(topic string, payload map[string]any) string {
 	return topic
 }
 
+// renderInspect 把巡检任务渲染成首条会话指令。
+func renderInspect(task InspectTask) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "【定时巡检】%s\n请按以下巡检项逐项检查（括号内为建议工具）：\n", task.Name)
+	catalog := map[string]InspectItem{}
+	for _, it := range InspectCatalog {
+		catalog[it.Key] = it
+	}
+	for _, key := range task.Items {
+		it, ok := catalog[key]
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(&b, "- %s（%s）\n", it.Title, it.Hint)
+	}
+	if task.HostID != nil && *task.HostID > 0 {
+		fmt.Fprintf(&b, "\n本任务绑定主机 #%d：主机类检查项（防御基线/资源水位）只检查这台主机，其他巡检项照常。\n", *task.HostID)
+	}
+	b.WriteString(`
+要求：
+1. 每个巡检项给出明确结论：正常 / 异常 / 风险
+2. 异常项列出证据（具体数值、事件、容器名、域名等）
+3. 最后输出汇总：整体健康度评级 + 待处理事项（按优先级排序）
+4. 全部完成后调用 panel_notify 发一条摘要通知（type 填 inspect.report，标题「巡检报告：`)
+	b.WriteString(task.Name)
+	b.WriteString(`」，正文为一句话结论）`)
+	return b.String()
+}
+
 // eventKey 事件去重键：同一来源（如同一域名）短时间内重复触发只建一个会话。
 func eventKey(payload map[string]any) string {
 	for _, k := range []string{"domain", "name", "id"} {

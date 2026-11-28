@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -154,6 +155,45 @@ func (s *Server) registerOpsAgentRoutes() {
 			c.JSON(http.StatusOK, gin.H{"ok": false, "error": err.Error()})
 			return
 		}
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+
+	// ---- 定时巡检 ----
+	g.GET("/inspects", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"list": s.OpsAgent.InspectViews(), "catalog": opsagent.InspectCatalog})
+	})
+	g.POST("/inspects", func(c *gin.Context) {
+		var req opsagent.InspectTask
+		if err := c.ShouldBindJSON(&req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
+			return
+		}
+		isNew := req.ID == ""
+		if err := s.OpsAgent.SaveInspect(req); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		s.audit(c, "opsagent.inspect.save", fmt.Sprintf("%s cron=%s items=%v", req.Name, req.Cron, req.Items))
+		detail := "任务已创建"
+		if !isNew {
+			detail = "任务已更新"
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": true, "detail": detail})
+	})
+	g.DELETE("/inspects/:id", func(c *gin.Context) {
+		if err := s.OpsAgent.DeleteInspect(c.Param("id")); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		s.audit(c, "opsagent.inspect.delete", c.Param("id"))
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+	})
+	g.POST("/inspects/:id/run", func(c *gin.Context) {
+		if err := s.OpsAgent.RunInspectNow(c.Param("id")); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		s.audit(c, "opsagent.inspect.run", c.Param("id"))
 		c.JSON(http.StatusOK, gin.H{"ok": true})
 	})
 

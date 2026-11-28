@@ -76,20 +76,90 @@
           <a-button type="primary" :loading="savingAgent" @click="saveAgent">保存 Agent 配置</a-button>
         </a-form>
       </a-card>
+
+      <a-card size="small" title="定时巡检" class="ai-card">
+        <a-alert
+          type="info"
+          show-icon
+          message="到点自动创建巡检会话：Agent 按勾选的巡检项自查并输出报告（含摘要通知）。巡检走智能体能力，需先配置好模型。"
+          style="margin-bottom: 12px"
+        />
+        <div class="ai-inspect-bar">
+          <a-button size="small" type="primary" @click="openInspect(null)"><PlusOutlined /> 新建巡检任务</a-button>
+        </div>
+        <div class="ai-inspect-list">
+          <div v-for="t in inspects" :key="t.id" class="ai-inspect-row">
+            <div class="ai-inspect-main">
+              <div class="ai-inspect-top">
+                <a-switch size="small" :checked="t.enabled" @change="(v: any) => toggleInspect(t, !!v)" />
+                <b class="ai-inspect-name">{{ t.name }}</b>
+                <code class="ai-inspect-cron">{{ t.cron }}</code>
+              </div>
+              <div class="ai-inspect-meta">
+                <a-tag v-for="k in t.items" :key="k" style="margin-right: 4px">{{ itemTitle(k) }}</a-tag>
+                <span class="ai-inspect-next">下次：{{ fmtNext(t.next) }}</span>
+              </div>
+            </div>
+            <a-space size="4">
+              <a-tooltip title="立即执行一次">
+                <a-button size="small" :loading="runningId === t.id" @click="runNow(t)"><ThunderboltOutlined /></a-button>
+              </a-tooltip>
+              <a-button size="small" @click="openInspect(t)">编辑</a-button>
+              <a-popconfirm title="删除该巡检任务？" @confirm="removeInspect(t.id)">
+                <a-button size="small" danger>删除</a-button>
+              </a-popconfirm>
+            </a-space>
+          </div>
+          <div v-if="!inspects.length" class="ai-mem-empty">暂无巡检任务</div>
+        </div>
+      </a-card>
     </a-col>
   </a-row>
+
+  <!-- 巡检任务编辑弹窗 -->
+  <a-modal v-model:open="inspectOpen" :title="inspectForm.id ? '编辑巡检任务' : '新建巡检任务'" :width="580" @ok="saveInspect">
+    <a-form layout="vertical">
+      <a-form-item label="任务名称" required>
+        <a-input v-model:value="inspectForm.name" placeholder="如：每日安全巡检" />
+      </a-form-item>
+      <a-form-item label="执行频率（crontab）" required>
+        <a-input v-model:value="inspectForm.cron" placeholder="0 9 * * *" />
+        <p class="ai-hint">5 段标准 crontab。示例：0 9 * * *（每天 9 点）· 0 */6 * * *（每 6 小时）· 30 8 * * 1-5（工作日 8:30）</p>
+      </a-form-item>
+      <a-form-item label="巡检项" required>
+        <div class="ai-ev-list">
+          <a-checkbox
+            v-for="it in inspectCatalog"
+            :key="it.key"
+            :checked="inspectForm.items.includes(it.key)"
+            @change="(ev: any) => toggleItem(it.key, !!ev.target.checked)"
+          >{{ it.title }}<span class="ai-ev-topic">{{ it.hint }}</span></a-checkbox>
+        </div>
+      </a-form-item>
+      <a-form-item label="绑定主机（可选）">
+        <a-select v-model:value="inspectForm.hostId" allow-clear placeholder="全部主机" style="width: 100%">
+          <a-select-option v-for="h in hosts" :key="h.id" :value="h.id">{{ h.name }}</a-select-option>
+        </a-select>
+        <p class="ai-hint">绑定后，主机类巡检项（防御基线/资源水位）只巡检这台主机</p>
+      </a-form-item>
+      <a-form-item label="启用">
+        <a-switch v-model:checked="inspectForm.enabled" />
+      </a-form-item>
+    </a-form>
+  </a-modal>
 </template>
 
 <script setup lang="ts">
 import { onMounted, ref, toRefs } from 'vue'
 import { message } from 'ant-design-vue'
-import { DeleteOutlined } from '@ant-design/icons-vue'
-import { useOpsAgent } from '../store/opsagent'
+import { DeleteOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons-vue'
+import { get } from '../api'
+import { useOpsAgent, type InspectTask } from '../store/opsagent'
 
 const api = useOpsAgent()
 // 模板一律消费 toRefs 拆出的顶层 ref（自动解包的类型检查路径最稳），
 // store 对象只用于脚本内调方法，避免模板上下文类型退化
-const { memories, settings } = toRefs(api)
+const { memories, settings, inspects, inspectCatalog } = toRefs(api)
 const loadMemories = (q?: string) => api.loadMemories(q)
 const deleteMemory = (id: number) => api.deleteMemory(id)
 
@@ -103,6 +173,69 @@ const savingAgent = ref(false)
 const testing = ref(false)
 const memQuery = ref('')
 
+// ---- 定时巡检 ----
+const hosts = ref<{ id: number; name: string }[]>([])
+const inspectOpen = ref(false)
+const runningId = ref('')
+const inspectForm = ref<InspectTask>({ id: '', name: '', cron: '', items: [], hostId: null, enabled: true })
+
+const itemTitle = (key: string) => inspectCatalog.value.find(i => i.key === key)?.title || key
+const fmtNext = (next: string) => {
+  const d = new Date(next)
+  if (!next || isNaN(d.getTime()) || d.getFullYear() < 2000) return '—'
+  return `${d.getMonth() + 1}-${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+const openInspect = (t: InspectTask | null) => {
+  inspectForm.value = t
+    ? { id: t.id, name: t.name, cron: t.cron, items: [...t.items], hostId: t.hostId, enabled: t.enabled }
+    : { id: '', name: '', cron: '', items: ['security'], hostId: null, enabled: true }
+  inspectOpen.value = true
+}
+const toggleItem = (key: string, on: boolean) => {
+  const set = new Set(inspectForm.value.items)
+  on ? set.add(key) : set.delete(key)
+  inspectForm.value.items = [...set]
+}
+const saveInspect = async () => {
+  const f = inspectForm.value
+  if (!f.name.trim()) { message.warning('任务名称必填'); return }
+  if (!f.cron.trim()) { message.warning('cron 表达式必填'); return }
+  if (!f.items.length) { message.warning('至少勾选一个巡检项'); return }
+  try {
+    await api.saveInspect({ ...f })
+    inspectOpen.value = false
+    message.success('巡检任务已保存')
+  } catch (e: any) {
+    message.error(e?.response?.data?.error || '保存失败')
+  }
+}
+const toggleInspect = async (t: InspectTask, enabled: boolean) => {
+  try { await api.saveInspect({ ...t, enabled }) } catch (e: any) {
+    message.error(e?.response?.data?.error || '操作失败')
+  }
+}
+const runNow = async (t: InspectTask) => {
+  runningId.value = t.id
+  try {
+    await api.runInspect(t.id)
+    message.success('巡检已启动，可在顶栏「管理 Agent」查看会话进度')
+  } catch (e: any) {
+    message.error(e?.response?.data?.error || '执行失败')
+  } finally { runningId.value = '' }
+}
+const removeInspect = async (id: string) => {
+  try { await api.deleteInspect(id) } catch (e: any) {
+    message.error(e?.response?.data?.error || '删除失败')
+  }
+}
+const loadHosts = async () => {
+  if (hosts.value.length) return
+  try {
+    const list = await get<any[]>('/api/hosts')
+    hosts.value = (list || []).map(h => ({ id: h.id, name: h.local ? h.name + '（本机）' : h.name }))
+  } catch { /* ignore */ }
+}
+
 const load = async () => {
   try {
     await api.loadSettings()
@@ -115,6 +248,8 @@ const load = async () => {
       allowSSHExec: !!settings.value.agent.allowSSHExec,
     }
     api.loadMemories()
+    api.loadInspects()
+    loadHosts()
   } catch { /* ignore */ }
 }
 const saveLLM = async () => {
@@ -168,4 +303,15 @@ onMounted(load)
 .ai-mem-del { font-size: 12px; color: var(--color-slate); }
 .ai-mem-del:hover { color: #ef4444; }
 .ai-mem-empty { text-align: center; color: var(--color-slate); font-size: 12px; padding: 20px 0; }
+/* 定时巡检 */
+.ai-inspect-bar { margin-bottom: 8px; }
+.ai-inspect-list { max-height: 300px; overflow: auto; border: 1px solid rgba(128,128,128,.2); border-radius: 8px; padding: 2px 12px; }
+.ai-inspect-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid rgba(128,128,128,.12); }
+.ai-inspect-row:last-child { border-bottom: none; }
+.ai-inspect-main { flex: 1; min-width: 0; }
+.ai-inspect-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ai-inspect-name { font-size: 13px; color: var(--color-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ai-inspect-cron { font-size: 12px; font-family: ui-monospace, Consolas, monospace; color: #1677ff; background: rgba(22,119,255,.08); border-radius: 5px; padding: 1px 7px; flex-shrink: 0; }
+.ai-inspect-meta { display: flex; align-items: center; gap: 6px; margin-top: 5px; flex-wrap: wrap; }
+.ai-inspect-next { font-size: 11px; color: var(--color-slate); }
 </style>

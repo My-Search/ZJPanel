@@ -34,6 +34,12 @@ export interface OpsAgentSettings {
 
 export interface OpsMemory { id: number; scope: string; refId: string; key: string; content: string; updatedAt: string }
 
+export interface InspectItem { key: string; title: string; hint: string }
+export interface InspectTask { id: string; name: string; cron: string; items: string[]; hostId: number | null; enabled: boolean }
+export interface InspectTaskView extends InspectTask {
+  next: string // Go time.Time：零值 = "0001-01-01T00:00:00Z"（未排程）
+}
+
 /**
  * AI 运维智能体全局状态（模块级单例，语义等同 pinia store）。
  * 不用 defineStore 的原因：pinia 的 Store 交叉类型（UnwrapRef + PiniaCustomProperties）
@@ -51,6 +57,8 @@ export interface OpsAgentAPI {
   running: number // 运行中/待确认会话数（顶栏角标）
   settings: OpsAgentSettings | null
   memories: OpsMemory[]
+  inspects: InspectTaskView[]
+  inspectCatalog: InspectItem[]
   fetchRunning(): Promise<void>
   fetchSessions(): Promise<void>
   fetchMessages(id: number, afterId?: number): Promise<OpsMessage[]>
@@ -65,6 +73,10 @@ export interface OpsAgentAPI {
   testLLM(): Promise<{ ok: boolean; error?: string }>
   loadMemories(query?: string): Promise<void>
   deleteMemory(id: number): Promise<void>
+  loadInspects(): Promise<void>
+  saveInspect(t: InspectTask): Promise<void>
+  deleteInspect(id: string): Promise<void>
+  runInspect(id: string): Promise<void>
   onWsFrame(frame: any): void
 }
 
@@ -76,6 +88,8 @@ export const api: OpsAgentAPI = reactive({
   running: 0,
   settings: null as OpsAgentSettings | null,
   memories: [] as OpsMemory[],
+  inspects: [] as InspectTaskView[],
+  inspectCatalog: [] as InspectItem[],
 
   async fetchRunning() {
     try { api.running = (await get<any>('/api/opsagent/running-count')).count ?? 0 } catch { /* ignore */ }
@@ -143,6 +157,23 @@ export const api: OpsAgentAPI = reactive({
   async deleteMemory(id: number) {
     await del(`/api/opsagent/memories/${id}`)
     api.memories = api.memories.filter(m => m.id !== id)
+  },
+  async loadInspects() {
+    const r = await get<any>('/api/opsagent/inspects')
+    api.inspects = r.list || []
+    api.inspectCatalog = r.catalog || []
+  },
+  async saveInspect(t: InspectTask) {
+    await post('/api/opsagent/inspects', t)
+    await api.loadInspects()
+  },
+  async deleteInspect(id: string) {
+    await del(`/api/opsagent/inspects/${id}`)
+    api.inspects = api.inspects.filter(t => t.id !== id)
+  },
+  async runInspect(id: string) {
+    await post(`/api/opsagent/inspects/${id}/run`, {})
+    await Promise.all([api.loadInspects(), api.fetchSessions()])
   },
 
   /** WS 帧（后端主题 opsagent）：message / status / session。 */

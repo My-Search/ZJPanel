@@ -49,6 +49,7 @@
               </a-popconfirm>
             </div>
             <div class="om-sess-meta">
+              <span v-if="sourceLabel(s)" class="om-sess-src">{{ sourceLabel(s) }}</span>
               <span class="om-sess-st" :class="'tx-' + s.status">{{ statusLabel(s.status) }}</span>
               <span class="om-sess-time">{{ fmtTime(s.updatedAt) }}</span>
             </div>
@@ -219,6 +220,8 @@ const pendingMsg = computed(() => curMessages.value.find(m => m.role === 'tool' 
 
 const statusLabel = (s: string) =>
   ({ running: '运行中', waiting_confirm: '待确认', idle: '已完成', interrupted: '已中断', error: '出错' }[s] || s)
+const sourceLabel = (s: OpsSession) =>
+  s.source === 'inspect' ? '巡检' : s.source.startsWith('event:') ? '事件' : ''
 const dotClass = (s: OpsSession) =>
   (({ running: 'run', waiting_confirm: 'confirm', error: 'err' }) as Record<string, string>)[s.status] || ''
 
@@ -343,6 +346,7 @@ onUnmounted(() => { stopWs(); window.removeEventListener('resize', onResize) })
 .om-sess-st.tx-waiting_confirm { color: #f59e0b; }
 .om-sess-st.tx-error { color: #ef4444; }
 .om-sess-st.tx-idle, .om-sess-st.tx-interrupted { color: var(--color-slate); }
+.om-sess-src { font-size: 10.5px; color: var(--color-slate); background: rgba(128,128,128,.14); border-radius: 4px; padding: 0 5px; }
 .om-sess-time { font-size: 11px; color: var(--color-slate); }
 .om-empty { text-align: center; color: var(--color-slate); font-size: 12px; padding: 28px 0; }
 

@@ -52,6 +52,11 @@ type Service struct {
 	mu        sync.Mutex
 	runs      map[uint]*sessionRun
 	lastEvent sync.Map // 事件去重 key -> time.Time
+	throttle  sync.Map // 通知节流 key -> time.Time
+
+	sched          CronScheduler  // 共享 cron（定时巡检），boot 注入
+	inspectMu      sync.Mutex
+	inspectEntries map[string]any // 巡检任务 ID -> cron entry
 }
 
 // sessionRun 一个运行中的会话执行器：cancel 用于手动停止，confirmCh 用于确认门控。
@@ -71,6 +76,7 @@ func New(db *gorm.DB, box *pkg.SecretBox, hub *ws.Hub, eventBus *bus.Bus, reg *m
 	return &Service{
 		db: db, box: box, hub: hub, bus: eventBus, reg: reg, notify: notifySvc,
 		llm: llm.NewClient(), runs: map[uint]*sessionRun{},
+		inspectEntries: map[string]any{},
 	}
 }
 

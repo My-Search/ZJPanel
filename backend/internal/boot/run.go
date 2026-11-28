@@ -235,6 +235,7 @@ func Run() {
 	// AI 运维智能体：依赖 MCP 注册表（工具层）与统一通知（事件限流提醒），最后装配并启动
 	opsAgentSvc := opsagent.New(db, box, hub, eventBus, mcpReg, notifySvc)
 	opsAgentSvc.Start()
+	opsAgentSvc.StartInspectScheduler(cronSvc) // 定时巡检挂共享 cron，设置页可改频率并即时重排
 	srv.OpsAgent = opsAgentSvc
 	srv.RegisterStatic(srv.Engine())
 	srv.RegisterRoutes()
