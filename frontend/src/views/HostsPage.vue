@@ -864,13 +864,16 @@ watch(tab, (v) => {
 .dh-sub { font-size: 12px; color: var(--color-slate); margin-top: 2px; }
 .detail-tabs { flex: 1; min-height: 0; padding: 0 16px; display: flex; flex-direction: column; }
 .detail-tabs :deep(.ant-tabs-nav) { margin-bottom: 12px; }
-/* 让 tabs 内容区成为可伸缩容器，终端 tab 才能填满卡片剩余高度（而不是固定 62vh 后留白） */
+/* 让 tabs 内容区成为可伸缩容器，终端 tab 才能填满卡片剩余高度（而不是固定 62vh 后留白）。
+   overflow-x 显式 hidden：只设 overflow-y 时另一轴按规范计算为 auto，gutter 负边距等
+   几像素横向溢出就会顶出一条无意义的水平滚动条。 */
 .detail-tabs :deep(.ant-tabs-content-holder) {
-  overflow-y: auto; display: flex; flex-direction: column; min-height: 0;
+  overflow-x: hidden; overflow-y: auto; display: flex; flex-direction: column; min-height: 0;
 }
 .detail-tabs :deep(.ant-tabs-content) { flex: 1; min-height: 0; }
 .detail-tabs :deep(.ant-tabs-tabpane) { height: 100%; }
-.pane { padding: 4px 2px 16px; }
+/* 水平内边距 ≥ gutter/2：a-row 的负外边距不再超出容器（避免横向溢出） */
+.pane { padding: 4px 8px 16px; }
 .term-pane {
   height: 100%; min-height: clamp(380px, 62vh, 760px); box-sizing: border-box;
   display: flex; padding: 2px 2px 12px;
