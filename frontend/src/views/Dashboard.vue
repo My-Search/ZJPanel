@@ -54,7 +54,7 @@
     <a-row :gutter="24" class="map-row">
       <a-col :span="24">
         <a-card title="请求地图" size="small" class="map-card">
-          <template #extra><router-link to="/map" class="map-link">完整地图 →</router-link></template>
+          <template #extra><router-link to="/map" class="map-link">更多信息 →</router-link></template>
           <RequestMap compact fill :height="360" />
         </a-card>
       </a-col>

@@ -1,7 +1,8 @@
 <template>
   <div class="request-map" :class="{ fill }">
     <a-space class="map-toolbar" wrap>
-      <a-tag :color="geoLoaded ? 'green' : 'orange'">{{ geoLoaded ? 'GeoIP 已加载' : 'GeoIP 未加载' }}</a-tag>
+      <!-- GeoIP 状态：summary 拉回前不渲染（null=未知），避免首屏闪「未加载」 -->
+      <a-tag v-if="geoLoaded !== null" :color="geoLoaded ? 'green' : 'orange'">{{ geoLoaded ? 'GeoIP 已加载' : 'GeoIP 未加载' }}</a-tag>
       <a-tag color="blue">实时 {{ rate }} req/s</a-tag>
       <!-- compact（仪表盘卡片）只保留 GeoIP 状态与实时请求数；完整地图页保留管理工具 -->
       <template v-if="!compact">
@@ -229,7 +230,7 @@ const loadTree = async () => {
 }
 let treeTimer: any = null
 
-const geoLoaded = ref(false)
+const geoLoaded = ref<boolean | null>(null) // null=未探测（不渲染徽标），true/false=已确认加载状态
 const chartReady = ref(false)
 const mapBox = ref<HTMLElement | null>(null)
 const detailsOpen = ref<string[]>([]) // 默认收纳详细信息
