@@ -64,7 +64,7 @@
           v-if="ops.settings && !ops.settings.llm.ready"
           type="warning"
           show-icon
-          message="尚未配置模型：请前往「设置 → 智能助手」填写 LLM 地址、API Key 与模型名后再开始对话。"
+          message="尚未配置模型：请前往「设置 → 运维Agent」填写 LLM 地址、API Key 与模型名后再开始对话。"
           style="margin: 12px 16px 0"
         />
         <div v-if="curError" class="om-error"><CloseCircleOutlined /> {{ curError }}</div>

@@ -7,7 +7,8 @@
             <a-input v-model:value="llm.baseURL" placeholder="https://api.deepseek.com" />
           </a-form-item>
           <a-form-item :label="llm.apiKeySet ? 'API Key（留空沿用）' : 'API Key'">
-            <a-input-password v-model:value="llmApiKey" :placeholder="llm.apiKeySet ? '••••••' : 'sk-…（本地模型如 Ollama 可留空）'" />
+            <!-- autocomplete=new-password：抑制浏览器密码管理器自动回填（保存后重开应保持为空，留空即沿用） -->
+            <a-input-password v-model:value="llmApiKey" autocomplete="new-password" :placeholder="llm.apiKeySet ? '••••••' : 'sk-…（本地模型如 Ollama 可留空）'" />
           </a-form-item>
           <a-form-item label="模型名">
             <a-input v-model:value="llm.model" placeholder="deepseek-chat / qwen-plus / glm-4-flash …" />

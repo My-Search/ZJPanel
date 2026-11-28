@@ -89,7 +89,7 @@
         </a-table>
       </a-tab-pane>
 
-      <a-tab-pane key="ai" tab="智能助手">
+      <a-tab-pane key="ai" tab="运维Agent">
         <SettingsAiTab />
       </a-tab-pane>
 
