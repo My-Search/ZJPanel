@@ -249,6 +249,7 @@
           <a-tab-pane key="terminal" tab="终端">
             <div class="pane term-pane">
               <HostTerminal
+                ref="termRef"
                 :host-id="current.local ? null : current.id"
                 :local="current.local"
                 :name="current.name"
@@ -352,7 +353,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { Empty, message } from 'ant-design-vue'
 import { PlusOutlined, ApiOutlined, CodeSandboxOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import HostTerminal from '../components/HostTerminal.vue'
@@ -761,8 +762,14 @@ const doUnban = async (ip: string) => {
   }
 }
 
-// 详情页的「打开终端」直接切到内嵌终端 Tab；多标签/刷新恢复走 Tab 内的「多标签终端」入口
-const openTerminal = () => { tab.value = 'terminal' }
+// 详情页的「打开终端」= 切到内嵌终端 Tab 并直接建立会话（终端 Tab 默认不打开，这里是显式打开意图）；
+// 多标签/刷新恢复走 Tab 内的「多标签终端」入口
+const termRef = ref<any>(null)
+const openTerminal = async () => {
+  tab.value = 'terminal'
+  await nextTick() // Tab 首次激活时组件才挂载，等一拍再拿 ref
+  termRef.value?.open()
+}
 
 const openAdd = () => {
   Object.assign(form, { name: '', group: '', host: '', port: 22, username: 'root', authType: 'password', password: '', privateKey: '', passphrase: '', panelUrl: '', install: true })

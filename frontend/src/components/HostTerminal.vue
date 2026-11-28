@@ -2,42 +2,64 @@
   HostTerminal：主机页「终端」Tab 的内嵌终端。
   单会话（按当前主机创建），复用后端 /api/ws/terminal 协议；
   自带文件管理/上传入口与底部资源状态栏，避免为了传文件再跳回旧终端页。
+  默认不自动连接：进入 Tab 先显示「未开启」占位，由用户显式打开/关闭，
+  避免浏览主机时悄悄建立常驻 SSH 会话造成资源浪费。
   会话按主机持久化：sessionId + xterm 画面快照存 localStorage，浏览器刷新后
-  attach 原会话并增量回放，shell 进程与滚屏内容都不丢；多标签仍由完整终端页承担。
+  attach 原会话并增量回放（仅恢复用户自己开过且未关闭的会话，点过关闭就保持关闭）；
+  多标签仍由完整终端页承担。
 -->
 <template>
   <div class="host-term">
-    <div class="ht-bar">
-      <a-space size="small" wrap>
-        <a-tag :color="stateColor" class="ht-state">{{ stateText }}</a-tag>
-        <a-button size="small" @click="reconnect">重连</a-button>
-        <a-button
-          v-if="!isLocal" size="small" :type="fileOpen ? 'primary' : 'default'"
-          @click="toggleFile"
-        >
-          <FolderOpenOutlined /> 文件管理
+    <!-- 默认不开启：占位 + 显式打开，避免浏览主机时悄悄建立常驻会话 -->
+    <div v-if="!opened" class="ht-idle">
+      <div class="ht-idle-box">
+        <CodeOutlined class="ht-idle-ic" />
+        <div class="ht-idle-title">终端未开启</div>
+        <div class="ht-idle-sub">按需开启终端会话；会话建立后会常驻后端，可随时在工具栏关闭以释放资源。</div>
+        <a-button type="primary" @click="open">
+          <CodeOutlined /> 打开终端
         </a-button>
-        <a-button v-if="!isLocal" size="small" :disabled="!connected" @click="pickUpload">
-          <UploadOutlined /> 上传文件
-        </a-button>
-        <a-button size="small" type="link" @click="openFull">
-          多标签终端 <ExportOutlined />
-        </a-button>
-        <span class="dim">{{ isLocal ? '面板容器内 Shell' : '文件面板支持拖拽上传 / 在线编辑' }}</span>
-      </a-space>
-    </div>
-
-    <div class="ht-body">
-      <div class="ht-main">
-        <div ref="termEl" class="ht-term" @click="focusTerm" />
-        <StatusStrip :stats="stats" />
       </div>
-      <template v-if="fileOpen && !isLocal">
-        <div class="ht-side">
-          <TermFilePanel ref="filePanel" :host-id="hostId" />
-        </div>
-      </template>
     </div>
+    <template v-else>
+      <div class="ht-bar">
+        <a-space size="small" wrap>
+          <a-tag :color="stateColor" class="ht-state">{{ stateText }}</a-tag>
+          <a-button size="small" @click="reconnect">重连</a-button>
+          <a-popconfirm
+            title="关闭将结束后端终端会话（Shell 进程与连接一并释放），未保存的工作会丢失。"
+            ok-text="关闭" cancel-text="取消" @confirm="closeTerminal"
+          >
+            <a-button size="small" danger><PoweroffOutlined /> 关闭终端</a-button>
+          </a-popconfirm>
+          <a-button
+            v-if="!isLocal" size="small" :type="fileOpen ? 'primary' : 'default'"
+            @click="toggleFile"
+          >
+            <FolderOpenOutlined /> 文件管理
+          </a-button>
+          <a-button v-if="!isLocal" size="small" :disabled="!connected" @click="pickUpload">
+            <UploadOutlined /> 上传文件
+          </a-button>
+          <a-button size="small" type="link" @click="openFull">
+            多标签终端 <ExportOutlined />
+          </a-button>
+          <span class="dim">{{ isLocal ? '面板容器内 Shell' : '文件面板支持拖拽上传 / 在线编辑' }}</span>
+        </a-space>
+      </div>
+
+      <div class="ht-body">
+        <div class="ht-main">
+          <div ref="termEl" class="ht-term" @click="focusTerm" />
+          <StatusStrip :stats="stats" />
+        </div>
+        <template v-if="fileOpen && !isLocal">
+          <div class="ht-side">
+            <TermFilePanel ref="filePanel" :host-id="hostId" />
+          </div>
+        </template>
+      </div>
+    </template>
   </div>
 </template>
 
@@ -45,7 +67,7 @@
 import { computed, markRaw, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { FolderOpenOutlined, UploadOutlined, ExportOutlined } from '@ant-design/icons-vue'
+import { FolderOpenOutlined, UploadOutlined, ExportOutlined, CodeOutlined, PoweroffOutlined } from '@ant-design/icons-vue'
 import StatusStrip from './StatusStrip.vue'
 import TermFilePanel from './TermFilePanel.vue'
 import { useTermTheme } from '../utils/termTheme'
@@ -69,6 +91,8 @@ const fileOpen = ref(false)
 const stats = ref<any>(null)
 const state = ref<'connecting' | 'online' | 'reconnecting' | 'closed' | 'idle'>('idle')
 const connected = computed(() => state.value === 'online')
+// 终端开关：false 时显示「未开启」占位，不加载 xterm 也不建 WS（默认不打开，显式开/关）
+const opened = ref(false)
 
 let term: XtermTerminal | null = null
 let fitAddon: any = null
@@ -203,6 +227,16 @@ const fitSoon = () => {
 
 const clearStatsTimer = () => { if (statsTimer) { clearInterval(statsTimer); statsTimer = null } }
 const clearReconnect = () => { if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null } }
+
+// 彻底释放 xterm：实例与 DOM 元素绑定（t.open），v-if 折叠后元素重建，
+// 旧实例必须丢弃（而非 reset），否则重新打开后画面挂不回新元素（黑屏）
+const disposeTerm = () => {
+  ro?.disconnect()
+  ro = null
+  term?.dispose()
+  term = null
+  serialize = null
+}
 
 const closeWS = () => {
   if (ws) {
@@ -363,6 +397,45 @@ const reset = async (deleteOld: boolean) => {
   state.value = 'idle'
 }
 
+// 打开终端：占位按钮与主机列表「打开终端」共用（列表侧经 defineExpose 调用）。
+// 有本地句柄（自己开过且未关闭的会话）则快照回填 + attach 恢复，否则新建会话。
+const open = async () => {
+  if (disposed) return
+  if (opened.value) {
+    // 已开启：只补连接（若已断）并聚焦，不重复建会话
+    if (!ws && (hostId.value || props.local)) connect(sessionId === '')
+    setTimeout(() => { fitNow(); term?.focus() }, 80)
+    return
+  }
+  opened.value = true
+  await nextTick() // 占位 v-if 切走后 .ht-term 才挂载，ensureTerm 需要真实 DOM
+  await ensureTerm()
+  const key = sessKey()
+  boundKey = key
+  const saved = readSaved(key)
+  if (saved) {
+    sessionId = saved.id
+    const snap = readSnapshot(saved.id)
+    if (snap) {
+      consumed = snap.c
+      termWrite(snap.s)
+    }
+    connect(false)
+  } else {
+    connect(true)
+  }
+  setTimeout(() => { fitNow(); term?.focus() }, 80)
+}
+
+// 显式关闭终端：结束后端会话（PTY/SSH、stats 采集一并停止）并清掉本地句柄与快照，
+// 回到「未开启」占位。这是唯一真正释放资源的入口（重连是换新会话，不是关闭）。
+const closeTerminal = async () => {
+  await reset(true)
+  fileOpen.value = false
+  opened.value = false
+  disposeTerm()
+}
+
 const persistOnLeave = () => persistNow(true)
 const onVisibility = () => { if (document.hidden) persistNow(true) }
 
@@ -385,21 +458,8 @@ const openFull = () => {
   else if (hostId.value) router.push({ path: '/terminal', query: { host: String(hostId.value) } })
 }
 
-onMounted(async () => {
-  await ensureTerm()
-  // 刷新恢复：有本机保存的会话句柄就 attach，有快照先回填画面再按偏移增量续传
-  const key = sessKey()
-  boundKey = key
-  const saved = readSaved(key)
-  if (saved) {
-    sessionId = saved.id
-    const snap = readSnapshot(saved.id)
-    if (snap) {
-      consumed = snap.c
-      termWrite(snap.s)
-    }
-  }
-  connect(false)
+onMounted(() => {
+  // 监听与定时器常驻：persistNow/snapshotTimer 在未开启（无 sessionId）时都是空操作
   window.addEventListener('resize', fitSoon)
   // 刷新/关闭/后台化前立即落快照（序列化同步完成，不依赖异步请求）
   window.addEventListener('beforeunload', persistOnLeave)
@@ -407,6 +467,10 @@ onMounted(async () => {
   document.addEventListener('visibilitychange', onVisibility)
   // 持续输出时定期落快照，浏览器异常退出也能回放到最近 30 秒
   snapshotTimer = setInterval(() => { if (dirty) persistNow(true) }, 30000)
+  // 默认不连接。仅当终端 Tab 已激活且存在自己开过、未关闭的会话时自动恢复；
+  // Tab 未激活时交给 active 监听触发，避免在主机列表浏览时后台悄悄建连。
+  boundKey = sessKey()
+  if (props.active && readSaved(boundKey)) open()
 })
 
 onUnmounted(() => {
@@ -419,26 +483,39 @@ onUnmounted(() => {
   document.removeEventListener('visibilitychange', onVisibility)
   clearInterval(snapshotTimer)
   closeWS()
-  ro?.disconnect()
-  ro = null
-  term?.dispose()
-  term = null
-  serialize = null
+  disposeTerm()
 })
 
-// 切换主机：显式换目标才销毁旧会话（每台主机最多保留一个内嵌会话）。
-// 单纯离开主机页/刷新不销毁，由后端会话常驻承接恢复。
+// 切换主机：旧主机会话「分离」而非销毁——快照落盘、断开 WS、句柄保留，回到该主机可恢复；
+// xterm 实例随占位折叠一并释放（重新打开时重建）。真正的销毁只由显式的「关闭终端」/「重连」触发。
+// 新主机有未关闭会话则恢复，否则回未开启占位。
 watch(hostId, async () => {
-  await reset(true)
-  term?.reset()
-  if (termEl.value) { fitNow() }
-  if (props.active) connect(true)
+  persistNow(true)
+  closeWS()
+  sessionId = ''
+  consumed = 0
+  skipReplay = 0
+  stats.value = null
+  state.value = 'idle'
+  disposeTerm()
+  boundKey = sessKey()
+  if (!readSaved(boundKey)) {
+    opened.value = false
+    return
+  }
+  if (props.active) await open()
+  else opened.value = false // 不在终端 Tab：先折叠占位，切回来时由 active 监听恢复
 })
 
-// 从其它 Tab 切回来：容器此前隐藏导致尺寸为 0，需要重新 fit 并聚焦；会话已断则补建
+// 从其它 Tab 切回来：容器此前隐藏导致尺寸为 0，需要重新 fit 并聚焦；
+// 未开启但有历史会话（自己开过且未关闭）则恢复；已开启但连接断了则补建
 watch(() => props.active, async (v) => {
   if (!v) return
   await nextTick()
+  if (!opened.value) {
+    if (readSaved(sessKey())) await open()
+    return
+  }
   if (!ws && (hostId.value || props.local)) connect(sessionId === '')
   setTimeout(() => { fitNow(); term?.focus() }, 80)
 })
@@ -447,10 +524,18 @@ watch(() => ui.isDark, () => {
   if (term) term.options.theme = termTheme()
   fitSoon()
 })
+
+// 主机列表「打开终端」按钮 = 切 Tab + 直接建连（表达明确打开意图），经模板 ref 调用
+defineExpose({ open })
 </script>
 
 <style scoped>
 .host-term { display: flex; flex-direction: column; height: 100%; min-height: 0; min-width: 0; }
+.ht-idle { flex: 1; min-height: 0; display: flex; }
+.ht-idle-box { margin: auto; display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: 440px; padding: 24px; text-align: center; }
+.ht-idle-ic { font-size: 34px; color: var(--color-slate); opacity: .8; }
+.ht-idle-title { font-size: 16px; font-weight: 600; color: var(--color-ink); }
+.ht-idle-sub { font-size: 12.5px; line-height: 1.7; color: var(--color-slate); margin-bottom: 6px; }
 .ht-bar { flex: none; padding: 2px 0 8px; }
 .ht-state { margin-inline-end: 0; }
 .dim { color: var(--color-slate); font-size: 12px; }
