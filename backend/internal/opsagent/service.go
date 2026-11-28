@@ -3,6 +3,7 @@ package opsagent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -34,9 +35,10 @@ const (
 	wsTopic          = "opsagent"
 	settingLLMKey    = "opsagent.llm"
 	settingAgentKey  = "opsagent.config"
-	maxRounds        = 15  // 单次任务最大 LLM 轮数
-	maxConcurrent    = 5   // 并发 runner 上限
-	maxCtxMessages   = 80  // 送入模型的最大消息条数（超出截断最旧的）
+	maxRounds        = 15     // 单次任务最大 LLM 轮数
+	maxConcurrent    = 5      // 并发 runner 上限
+	maxCtxMessages   = 400    // 送入模型的最大消息条数（安全兜底；常规控制靠上下文压缩）
+	defaultContextTokens = 300000 // 模型上下文窗口默认值（设置页可改）
 	eventDedupeEvery = 10 * time.Minute
 )
 
@@ -101,6 +103,8 @@ type llmSetting struct {
 	BaseURL string `json:"baseURL"`
 	APIKey  string `json:"apiKey"` // SecretBox 密文，明文不落盘
 	Model   string `json:"model"`
+	// ContextTokens 模型上下文窗口（tokens）：用于估算上下文占用与压缩触发，默认 300k。
+	ContextTokens int `json:"contextTokens"`
 }
 
 // AgentConfig 三级防御 + 事件订阅 + SSH 执行开关。
@@ -116,6 +120,9 @@ func (s *Service) loadLLMSetting() llmSetting {
 	var rec model.Setting
 	if err := s.db.Where("key = ?", settingLLMKey).First(&rec).Error; err == nil {
 		_ = json.Unmarshal([]byte(rec.Value), &st)
+	}
+	if st.ContextTokens <= 0 {
+		st.ContextTokens = defaultContextTokens
 	}
 	return st
 }
@@ -142,6 +149,7 @@ func (s *Service) LLMView() map[string]any {
 	_, err := s.LLMDetail()
 	return map[string]any{
 		"baseURL": st.BaseURL, "model": st.Model, "apiKeySet": st.APIKey != "",
+		"contextTokens": st.ContextTokens,
 		"ready": err == nil, "hint": readyHint(err),
 	}
 }
@@ -154,13 +162,19 @@ func readyHint(err error) string {
 }
 
 // SaveLLM 保存模型配置；apiKey 明文为空 = 沿用旧密文（前端密码框不回显明文的惯例）。
-func (s *Service) SaveLLM(baseURL, apiKeyPlain, modelName string) error {
+func (s *Service) SaveLLM(baseURL, apiKeyPlain, modelName string, contextTokens int) error {
 	baseURL, modelName = strings.TrimSpace(baseURL), strings.TrimSpace(modelName)
 	if baseURL == "" || modelName == "" {
 		return fmt.Errorf("BaseURL 与模型名必填")
 	}
 	st := s.loadLLMSetting()
 	st.BaseURL, st.Model = baseURL, modelName
+	if contextTokens > 0 {
+		if contextTokens < 4096 {
+			contextTokens = 4096
+		}
+		st.ContextTokens = contextTokens
+	}
 	if apiKeyPlain != "" {
 		sealed, err := s.box.SealECtx(pkg.CtxLLMApiKey, apiKeyPlain)
 		if err != nil {
@@ -343,6 +357,18 @@ func (s *Service) RunningCount() int64 {
 	return n
 }
 
+// SessionContext 会话上下文用量估算（工作台显示）。
+// 口径与实际请求一致：按 buildContext 输出（压缩摘要已替代对应原始段）估算，limit 为窗口配置。
+func (s *Service) SessionContext(id uint) (int, int) {
+	limit := s.contextLimit()
+	sess, err := s.GetSession(id)
+	if err != nil {
+		return 0, limit
+	}
+	hosts, domains, _ := s.panelContext()
+	return estimateMessagesTokens(s.buildContext(sess, hosts, domains)), limit
+}
+
 // ===================== 执行循环 =====================
 
 // runLoop agentic 主循环：模型 ↔ 工具，逐轮落库推送；confirm 模式下处置调用挂起等待确认。
@@ -372,9 +398,28 @@ func (s *Service) runLoop(id uint, ctx context.Context, run *sessionRun) {
 		}
 		hosts, siteDomains, _ := s.panelContext()
 		messages := s.buildContext(sess, hosts, siteDomains)
+		limit := s.contextLimit()
+
+		// 阈值压缩：估算占用超过窗口 75% 时先把早期上下文压成摘要（失败安全，不丢数据）
+		if est := estimateMessagesTokens(messages); limit > 0 && est*100 > limit*compactionTriggerPct {
+			if ok, cerr := s.compactContext(sess, ctx, cfg, s.sessionRows(id)); ok {
+				messages = s.buildContext(sess, hosts, siteDomains)
+			} else if cerr != nil {
+				slog.Warn("上下文压缩失败，保持原上下文继续", "session", id, "err", cerr)
+			}
+		}
 		tools := toLLMTools(s.buildToolset(sess.DefenseMode, s.AgentConfig().AllowSSHExec))
 
 		resp, err := s.llm.Chat(ctx, cfg, messages, tools)
+		if errors.Is(err, llm.ErrContextLength) {
+			// 模型报上下文超限：强制压缩（更激进的压缩目标）后重试一次；仍超限才真正失败
+			if ok, cerr := s.compactContext(sess, ctx, cfg, s.sessionRows(id)); ok {
+				messages = s.buildContext(sess, hosts, siteDomains)
+				resp, err = s.llm.Chat(ctx, cfg, messages, tools)
+			} else if cerr != nil {
+				err = fmt.Errorf("上下文超限且自动压缩失败（%v），请手动精简会话或调大模型上下文窗口", cerr)
+			}
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				s.finish(id, "interrupted", "已手动停止")
@@ -383,6 +428,10 @@ func (s *Service) runLoop(id uint, ctx context.Context, run *sessionRun) {
 			s.fail(id, err)
 			return
 		}
+		// 广播当前上下文用量（composer 实时显示）
+		s.broadcast(map[string]any{"type": "context", "sessionId": id,
+			"tokens": estimateMessagesTokens(messages), "limit": limit})
+
 		// 助手消息（可能带工具调用请求）落库推送
 		meta := ""
 		if len(resp.ToolCalls) > 0 {
@@ -404,6 +453,25 @@ func (s *Service) runLoop(id uint, ctx context.Context, run *sessionRun) {
 	s.addMessage(id, "assistant",
 		fmt.Sprintf("已达单次任务最大工具调用轮数（%d）。以上是目前的进展与结果，请继续提问或拆分任务。", maxRounds), "", "", "")
 	s.finish(id, "idle", "")
+}
+
+// sessionRows 会话的消息行（时间正序，尾部安全截断；压缩与估算共用）。
+func (s *Service) sessionRows(id uint) []model.OpsAgentMessage {
+	var rows []model.OpsAgentMessage
+	s.db.Where("session_id = ?", id).Order("id desc").Limit(maxCtxMessages).Find(&rows)
+	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
+		rows[i], rows[j] = rows[j], rows[i]
+	}
+	return rows
+}
+
+// contextLimit 模型上下文窗口（tokens），未配置时默认 300k。
+func (s *Service) contextLimit() int {
+	limit := s.loadLLMSetting().ContextTokens
+	if limit <= 0 {
+		return defaultContextTokens
+	}
+	return limit
 }
 
 // execCall 执行一次工具调用（含 confirm 门控）。返回 true 表示会话已终止（停止/异常）。
@@ -504,6 +572,30 @@ func metaToolCallsJSON(calls []llm.ToolCall) string {
 	return string(b)
 }
 
+// metaToolCalls 解析 assistant 行 Meta 里的工具调用列表。
+func metaToolCalls(meta string) []llm.ToolCall {
+	var m struct {
+		ToolCalls []llm.ToolCall `json:"toolCalls"`
+	}
+	if json.Unmarshal([]byte(meta), &m) != nil {
+		return nil
+	}
+	return m.ToolCalls
+}
+
+// metaInt 读 Meta 里的数值字段（json 数字 → float64）。
+func metaInt(meta, key string) uint {
+	var m map[string]any
+	if json.Unmarshal([]byte(meta), &m) != nil {
+		return 0
+	}
+	switch v := m[key].(type) {
+	case float64:
+		return uint(v)
+	}
+	return 0
+}
+
 func metaToolJSON(callID string) string  { m, _ := json.Marshal(map[string]any{"callId": callID}); return string(m) }
 func metaPendingJSON(callID string) string {
 	m, _ := json.Marshal(map[string]any{"callId": callID, "pending": true})
@@ -519,20 +611,37 @@ func metaString(meta, key string) string {
 	return s
 }
 
-// buildContext 从 DB 行重建模型对话上下文（pending 工具行补「未执行」答案保证协议完整）。
+// buildContext 从 DB 行重建模型对话上下文。
+// 压缩是前缀语义：最新一条 summary 行覆盖其之前的全部消息（含更早的摘要），
+// 原始行保留在库中不删除，仅不进上下文；pending 工具行补「未执行」答案保证协议完整。
 func (s *Service) buildContext(sess *model.OpsAgentSession, hosts []model.SshHost, siteDomains []string) []llm.Message {
 	var rows []model.OpsAgentMessage
 	s.db.Where("session_id = ?", sess.ID).Order("id desc").Limit(maxCtxMessages).Find(&rows)
 	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 { // 反转为时间正序
 		rows[i], rows[j] = rows[j], rows[i]
 	}
+	// 预扫描：最新摘要的覆盖上界（prefix 压缩 ⇒ 覆盖其之前的全部行）
+	lastSummaryIdx, maxToId := -1, uint(0)
+	for i := range rows {
+		if rows[i].Role == "summary" {
+			if to := metaInt(rows[i].Meta, "toId"); to > maxToId {
+				maxToId = to
+			}
+			lastSummaryIdx = i
+		}
+	}
 	memories := s.relatedMemories(sess)
 	out := []llm.Message{{Role: "system", Content: buildSystemPrompt(sess, hosts, siteDomains, memories)}}
-	for _, r := range rows {
+	for i := range rows {
+		r := &rows[i]
+		if r.ID <= maxToId && i != lastSummaryIdx {
+			continue // 被最新摘要覆盖的原始行（含被吸收的更早摘要）
+		}
 		switch r.Role {
-		case "user":
-			out = append(out, llm.Message{Role: "user", Content: r.Content})
-		case "event":
+		case "summary":
+			out = append(out, llm.Message{Role: "system", Content:
+				fmt.Sprintf("【早期上下文摘要】以下摘自本会话更早的 %d 条消息（原始记录已归档）：\n%s", metaInt(r.Meta, "count"), r.Content)})
+		case "user", "event":
 			out = append(out, llm.Message{Role: "user", Content: r.Content})
 		case "assistant":
 			m := llm.Message{Role: "assistant", Content: r.Content}

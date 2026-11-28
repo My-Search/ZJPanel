@@ -4,30 +4,32 @@ import { get, post, put, del } from '../api'
 export interface OpsSession {
   id: number
   title: string
-  source: string // manual | event:<topic>
+  source: string // manual | event:<topic> | inspect
   status: 'running' | 'waiting_confirm' | 'idle' | 'interrupted' | 'error'
   defenseMode: 'observe' | 'confirm' | 'auto'
   hostId: number | null
   error: string
   createdAt: string
   updatedAt: string
+  contextTokens?: number // 上下文用量估算（WS context 帧 / 会话详情回填）
+  contextLimit?: number  // 模型上下文窗口配置
 }
 
 export interface OpsMessage {
   id: number
   sessionId: number
-  role: 'user' | 'assistant' | 'tool' | 'event'
+  role: 'user' | 'assistant' | 'tool' | 'event' | 'summary'
   content: string
   toolName?: string
   toolArgs?: string
-  meta?: string | null // JSON：assistant→{toolCalls:[…]}；tool→{callId,pending?}
+  meta?: string | null // JSON：assistant→{toolCalls:[…]}；tool→{callId,pending?}；summary→{toId,count}
   createdAt: string
 }
 
 export interface OpsEventDesc { topic: string; desc: string }
 
 export interface OpsAgentSettings {
-  llm: { baseURL: string; model: string; apiKeySet: boolean; ready: boolean; hint: string }
+  llm: { baseURL: string; model: string; apiKeySet: boolean; ready: boolean; hint: string; contextTokens: number }
   agent: { defenseMode: string; eventEnabled: boolean; events: Record<string, boolean>; allowSSHExec: boolean }
   events: OpsEventDesc[]
 }
@@ -63,6 +65,7 @@ export interface OpsAgentAPI {
   fetchSessions(): Promise<void>
   fetchMessages(id: number, afterId?: number): Promise<OpsMessage[]>
   selectSession(id: number | null): void
+  fetchSessionDetail(id: number): Promise<void>
   newSession(message: string, hostId?: number): Promise<any>
   sendMessage(id: number, message: string): Promise<void>
   confirm(id: number, approve: boolean): Promise<void>
@@ -115,7 +118,19 @@ export const api: OpsAgentAPI = reactive({
   },
   selectSession(id: number | null) {
     api.currentId = id
-    if (id != null && !api.messages[id]) void api.fetchMessages(id)
+    if (id == null) return
+    if (!api.messages[id]) void api.fetchMessages(id)
+    void api.fetchSessionDetail(id) // 回填上下文用量等详情字段
+  },
+  async fetchSessionDetail(id: number) {
+    try {
+      const d = await get<any>(`/api/opsagent/sessions/${id}`)
+      const s = api.sessions.find(x => x.id === id)
+      if (s && d) {
+        s.contextTokens = d.contextTokens
+        s.contextLimit = d.contextLimit
+      }
+    } catch { /* ignore */ }
   },
   async newSession(message: string, hostId?: number) {
     const r = await post<any>('/api/opsagent/sessions', { message, hostId: hostId || 0 })
@@ -176,7 +191,7 @@ export const api: OpsAgentAPI = reactive({
     await Promise.all([api.loadInspects(), api.fetchSessions()])
   },
 
-  /** WS 帧（后端主题 opsagent）：message / status / session。 */
+  /** WS 帧（后端主题 opsagent）：message / status / session / context。 */
   onWsFrame(frame: any) {
     if (!frame || !frame.type) return
     if (frame.type === 'message' && frame.sessionId != null && frame.message) {
@@ -189,6 +204,10 @@ export const api: OpsAgentAPI = reactive({
       const s = api.sessions.find(x => x.id === frame.sessionId)
       if (s) { s.status = frame.status; s.error = frame.error || '' }
       void api.fetchRunning()
+    } else if (frame.type === 'context' && frame.sessionId != null) {
+      // 每轮 LLM 调用后的上下文用量（估算 tokens / 配置窗口）
+      const s = api.sessions.find(x => x.id === frame.sessionId)
+      if (s) { s.contextTokens = frame.tokens; s.contextLimit = frame.limit }
     } else if (frame.type === 'session' && frame.session) {
       if (!api.sessions.some(x => x.id === frame.session.id)) {
         api.sessions = [frame.session, ...api.sessions]

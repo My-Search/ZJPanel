@@ -3,8 +3,10 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -94,5 +96,44 @@ func TestRetryOn429(t *testing.T) {
 		[]Message{{Role: "user", Content: "hi"}}, nil)
 	if err != nil || out.Content != "OK" || n != 2 {
 		t.Fatalf("429 重试失败: n=%d out=%+v err=%v", n, out, err)
+	}
+}
+
+// 400 + 上下文超限关键词 → ErrContextLength 且不盲目重试（仅 1 次请求）。
+func TestContextLengthErrorNoRetry(t *testing.T) {
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"This model's maximum context length is 8192 tokens"}}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient()
+	_, err := c.Chat(context.Background(), Config{BaseURL: srv.URL, Model: "m"},
+		[]Message{{Role: "user", Content: "hi"}}, nil)
+	if !errors.Is(err, ErrContextLength) {
+		t.Fatalf("应归类为 ErrContextLength: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("上下文超限不应重试，实际请求 %d 次", n)
+	}
+}
+
+// 401 非重试错误：只请求一次。
+func TestAuthErrorNoRetry(t *testing.T) {
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n++
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"error":{"message":"invalid api key"}}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient()
+	_, err := c.Chat(context.Background(), Config{BaseURL: srv.URL, Model: "m"},
+		[]Message{{Role: "user", Content: "hi"}}, nil)
+	if err == nil || strings.Contains(err.Error(), "1") && n != 1 {
+		t.Fatalf("401 应只请求一次: n=%d err=%v", n, err)
 	}
 }

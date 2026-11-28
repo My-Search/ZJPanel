@@ -55,7 +55,13 @@ func (s *Server) registerOpsAgentRoutes() {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, sess)
+		tokens, limit := s.OpsAgent.SessionContext(idParam(c))
+		c.JSON(http.StatusOK, gin.H{
+			"id": sess.ID, "title": sess.Title, "source": sess.Source, "status": sess.Status,
+			"defenseMode": sess.DefenseMode, "hostId": sess.HostID, "error": sess.Error,
+			"createdAt": sess.CreatedAt, "updatedAt": sess.UpdatedAt,
+			"contextTokens": tokens, "contextLimit": limit,
+		})
 	})
 	g.GET("/sessions/:id/messages", func(c *gin.Context) {
 		after, _ := strconv.Atoi(c.Query("afterId"))
@@ -117,9 +123,10 @@ func (s *Server) registerOpsAgentRoutes() {
 	g.PUT("/config", func(c *gin.Context) {
 		var req struct {
 			LLM struct {
-				BaseURL string `json:"baseURL"`
-				APIKey  string `json:"apiKey"` // 明文；空 = 沿用旧密文
-				Model   string `json:"model"`
+				BaseURL       string `json:"baseURL"`
+				APIKey        string `json:"apiKey"` // 明文；空 = 沿用旧密文
+				Model         string `json:"model"`
+				ContextTokens int    `json:"contextTokens"` // 模型上下文窗口，默认 300k
 			} `json:"llm"`
 			Agent opsagent.AgentConfig `json:"agent"`
 		}
@@ -127,8 +134,8 @@ func (s *Server) registerOpsAgentRoutes() {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "参数错误"})
 			return
 		}
-		if req.LLM.BaseURL != "" || req.LLM.Model != "" || req.LLM.APIKey != "" {
-			if err := s.OpsAgent.SaveLLM(req.LLM.BaseURL, req.LLM.APIKey, req.LLM.Model); err != nil {
+		if req.LLM.BaseURL != "" || req.LLM.Model != "" || req.LLM.APIKey != "" || req.LLM.ContextTokens > 0 {
+			if err := s.OpsAgent.SaveLLM(req.LLM.BaseURL, req.LLM.APIKey, req.LLM.Model, req.LLM.ContextTokens); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return
 			}

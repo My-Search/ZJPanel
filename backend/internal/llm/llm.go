@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"regexp"
 	"strings"
@@ -116,6 +118,24 @@ func NewClient() *Client {
 	return &Client{http: &http.Client{Timeout: 120 * time.Second}}
 }
 
+// ErrContextLength 上下文超限：调用方应压缩上下文后重试（可用 errors.Is 判定）。
+var ErrContextLength = errors.New("上下文超限")
+
+// isContextLengthError 按各厂商报错关键词识别上下文超限（OpenAI/DeepSeek/Qwen/GLM/Ollama 等）。
+func isContextLengthError(msg string) bool {
+	m := strings.ToLower(msg)
+	for _, kw := range []string{
+		"context length", "context_length", "maximum context", "context window",
+		"too many tokens", "token limit", "exceeds the model", "reduce the length",
+		"上下文长度", "超上下文", "上下文超限", "输入超限", "长度超出",
+	} {
+		if strings.Contains(m, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 // endpoint 归一：已带版本段（/v1、/v4 等，如 GLM 的 /api/paas/v4）或以 /api 结尾时
 // 原样追加 /chat/completions；否则补 /v1（DeepSeek/Qwen 等官方地址的常规写法）。
 var versionSuffix = regexp.MustCompile(`(/v[0-9]+[a-z]*|/api)$`)
@@ -135,6 +155,10 @@ func endpoint(base string) string {
 }
 
 // Chat 单轮对话调用：发送全部消息与工具表，返回助手的下一条消息（可能带工具调用）。
+//
+// 重试策略：最多重试 MaxRetries 次（429/5xx/网络错误），指数退避（2s 起、30s 封顶，
+// 带抖动——不连续轰炸）；401/404 等客户端错误直接失败不浪费重试。
+// 上下文超限错误（ErrContextLength）原样返回给调用方，由其压缩后重试，不在本层盲目重试。
 func (c *Client) Chat(ctx context.Context, cfg Config, msgs []Message, tools []Tool) (Message, error) {
 	if err := cfg.Check(); err != nil {
 		return Message{}, err
@@ -155,13 +179,20 @@ func (c *Client) Chat(ctx context.Context, cfg Config, msgs []Message, tools []T
 		}})
 	}
 
+	const maxRetries = 10
+	backoff := 2 * time.Second
 	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ { // 429/5xx 一次重试
+	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
+			// 指数退避 + 抖动：不连续重试，且随时响应停止/取消
+			delay := backoff + time.Duration(rand.Int63n(int64(backoff/4+time.Second)))
+			if backoff < 30*time.Second {
+				backoff *= 2
+			}
 			select {
 			case <-ctx.Done():
 				return Message{}, ctx.Err()
-			case <-time.After(2 * time.Second):
+			case <-time.After(delay):
 			}
 		}
 		msg, retryable, err := c.callOnce(ctx, cfg, req)
@@ -209,6 +240,13 @@ func (c *Client) callOnce(ctx context.Context, cfg Config, req chatRequest) (Mes
 			msg = strings.TrimSpace(string(data))
 			if len(msg) > 300 {
 				msg = msg[:300]
+			}
+		}
+		// 上下文超限：不同厂商报错措辞不一，按关键词识别（400/413）。
+		// 不做普通重试——调用方应压缩上下文后重试。
+		if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusRequestEntityTooLarge {
+			if isContextLengthError(msg) {
+				return Message{}, false, fmt.Errorf("%w: %s", ErrContextLength, msg)
 			}
 		}
 		retryable := resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500

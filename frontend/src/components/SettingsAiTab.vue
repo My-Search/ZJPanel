@@ -13,6 +13,10 @@
           <a-form-item label="模型名">
             <a-input v-model:value="llm.model" placeholder="deepseek-chat / qwen-plus / glm-4-flash …" />
           </a-form-item>
+          <a-form-item label="上下文窗口（tokens）">
+            <a-input-number v-model:value="llm.contextTokens" :min="4096" :step="10000" style="width: 100%" />
+            <p class="ai-hint">用于估算上下文占用与自动压缩时机（超过 75% 触发压缩；超限时强制压缩后重试）。默认 300000</p>
+          </a-form-item>
           <a-space>
             <a-button :loading="testing" @click="doTest">测试连通</a-button>
             <a-button type="primary" :loading="savingLLM" @click="saveLLM">保存模型配置</a-button>
@@ -164,7 +168,7 @@ const { memories, settings, inspects, inspectCatalog } = toRefs(api)
 const loadMemories = (q?: string) => api.loadMemories(q)
 const deleteMemory = (id: number) => api.deleteMemory(id)
 
-const llm = ref<{ baseURL: string; model: string; apiKeySet: boolean }>({ baseURL: '', model: '', apiKeySet: false })
+const llm = ref<{ baseURL: string; model: string; apiKeySet: boolean; contextTokens: number }>({ baseURL: '', model: '', apiKeySet: false, contextTokens: 300000 })
 const llmApiKey = ref('')
 const agent = ref<{ defenseMode: string; eventEnabled: boolean; events: Record<string, boolean>; allowSSHExec: boolean }>({
   defenseMode: 'observe', eventEnabled: false, events: {}, allowSSHExec: false,
@@ -241,7 +245,7 @@ const load = async () => {
   try {
     await api.loadSettings()
     if (!settings.value) return
-    llm.value = { baseURL: settings.value.llm.baseURL, model: settings.value.llm.model, apiKeySet: settings.value.llm.apiKeySet }
+    llm.value = { baseURL: settings.value.llm.baseURL, model: settings.value.llm.model, apiKeySet: settings.value.llm.apiKeySet, contextTokens: settings.value.llm.contextTokens || 300000 }
     agent.value = {
       defenseMode: settings.value.agent.defenseMode || 'observe',
       eventEnabled: !!settings.value.agent.eventEnabled,
@@ -259,7 +263,7 @@ const saveLLM = async () => {
   }
   savingLLM.value = true
   try {
-    await api.saveSettings({ llm: { baseURL: llm.value.baseURL, apiKey: llmApiKey.value, model: llm.value.model } })
+    await api.saveSettings({ llm: { baseURL: llm.value.baseURL, apiKey: llmApiKey.value, model: llm.value.model, contextTokens: llm.value.contextTokens || 300000 } })
     llmApiKey.value = ''
     message.success('模型配置已保存')
   } catch (e: any) {

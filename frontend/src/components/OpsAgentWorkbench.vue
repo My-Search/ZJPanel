@@ -93,8 +93,12 @@
 
           <template v-else>
             <template v-for="m in curMessages" :key="m.id">
+              <!-- 压缩分隔条：早期上下文已压成摘要（原始记录保留在库） -->
+              <div v-if="m.role === 'summary'" class="om-compact">
+                <CompressOutlined /> 早期上下文已压缩（{{ summaryCount(m) }} 条）· 摘要已注入模型上下文
+              </div>
               <!-- 事件横幅 -->
-              <div v-if="m.role === 'event'" class="om-ev">
+              <div v-else-if="m.role === 'event'" class="om-ev">
                 <ThunderboltOutlined class="om-ev-icon" />
                 <pre class="om-ev-text">{{ m.content }}</pre>
               </div>
@@ -169,6 +173,9 @@
             >
               <a-select-option v-for="h in hosts" :key="h.id" :value="h.id">{{ h.name }}</a-select-option>
             </a-select>
+            <span class="om-kbd om-ctx" :class="{ warn: ctxRatio > 0.75 }" v-if="curSession?.contextLimit" :title="'估算值，超过窗口 75% 时自动压缩上下文'">
+              ≈ {{ fmtTokens(curSession.contextTokens) }} / {{ fmtTokens(curSession.contextLimit) }}
+            </span>
             <span class="om-kbd">Ctrl + Enter 发送</span>
             <a-button
               v-if="curSession && curSession.status === 'running'"
@@ -192,7 +199,7 @@ import {
   RobotOutlined, PlusOutlined, DeleteOutlined, SendOutlined, PoweroffOutlined,
   LoadingOutlined, ExclamationCircleOutlined, ThunderboltOutlined, ApiOutlined,
   UserOutlined, ToolOutlined, CloseCircleOutlined, DashboardOutlined,
-  SafetyOutlined, CloudServerOutlined,
+  SafetyOutlined, CloudServerOutlined, CompressOutlined,
 } from '@ant-design/icons-vue'
 import { message } from 'ant-design-vue'
 import { useOpsAgent, type OpsMessage, type OpsSession } from '../store/opsagent'
@@ -233,6 +240,18 @@ const toolCallsOf = (m: OpsMessage): { id: string; name: string; arguments?: str
 }
 const isPending = (m: OpsMessage) => !!m.meta && m.meta.includes('"pending":true')
 const isErrText = (m: OpsMessage) => !!m.meta && m.meta.includes('"error":true') || m.content.startsWith('⚠')
+const summaryCount = (m: OpsMessage) => {
+  try { return JSON.parse(m.meta || '{}')?.count ?? '?' } catch { return '?' }
+}
+const ctxRatio = computed(() => {
+  const s = curSession.value
+  if (!s?.contextLimit || !s.contextTokens) return 0
+  return s.contextTokens / s.contextLimit
+})
+const fmtTokens = (n?: number) => {
+  if (!n || n <= 0) return '0'
+  return n >= 1000 ? (n / 1000).toFixed(n >= 100000 ? 0 : 1) + 'k' : String(n)
+}
 const fmtArgs = (a?: string) => {
   if (!a) return ''
   const s = a.replace(/\s+/g, ' ')
@@ -477,6 +496,16 @@ html[data-theme='dark'] .om-confirm-title { color: #fbbf24; }
 .om-composer-bar { display: flex; align-items: center; gap: 8px; padding: 4px 8px 8px 4px; }
 .om-host { min-width: 170px; flex-shrink: 0; }
 .om-kbd { margin-left: auto; font-size: 11px; color: var(--color-slate); }
+.om-ctx { margin-left: auto; font-family: ui-monospace, Consolas, monospace; }
+.om-ctx + .om-kbd { margin-left: 0; }
+.om-ctx.warn { color: #f59e0b; font-weight: 600; }
+.om-compact {
+  text-align: center; font-size: 11px; color: var(--color-slate); margin: 8px 0;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+.om-compact::before, .om-compact::after {
+  content: ''; height: 1px; flex: 1; background: rgba(128,128,128,.2);
+}
 .om-send { border-radius: 8px; font-weight: 600; }
 
 @media (max-width: 768px) {
