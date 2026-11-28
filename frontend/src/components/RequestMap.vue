@@ -34,6 +34,9 @@
 
     <div class="map-wrap" @mouseleave="onMapLeave">
       <div ref="mapBox" class="map-box" :style="{ '--map-height': height + 'px' }"></div>
+      <!-- 底图未就绪提示：只兜底 echarts/底图数据本身的加载窗口（摘要数据未到底图也会先画出来） -->
+      <div v-if="!mapReady && !geoFailed" class="map-hint"><a-spin size="small" /><span>地图加载中…</span></div>
+      <div v-else-if="geoFailed" class="map-hint"><span>地图底图加载失败，稍后自动重试</span></div>
 
       <!-- 悬停流向 → 冻结画面 + 实时请求树。数据只来自本页 SSE 内存缓冲，不落库 -->
       <div v-if="inspectRoute" class="flow-inspect">
@@ -232,6 +235,9 @@ let treeTimer: any = null
 
 const geoLoaded = ref<boolean | null>(null) // null=未探测（不渲染徽标），true/false=已确认加载状态
 const chartReady = ref(false)
+const mapReady = ref(false) // 底图（世界地图）已画出：摘要数据未到也先显示底图，不等数据
+const geoFailed = ref(false) // world.json 拉取失败：地图区提示，后续渲染时自动重试
+let geoReady = false // 底图数据是否已注册进 echarts（未注册就 setOption geo.map 会报错）
 const mapBox = ref<HTMLElement | null>(null)
 const detailsOpen = ref<string[]>([]) // 默认收纳详细信息
 let chart: any = null
@@ -632,12 +638,28 @@ const isGeoRoamed = () => {
 }
 
 const ensureChart = async () => {
-  if (chart) return
+  if (chart) {
+    // 图表已存在但底图数据缺失（world.json 此前拉取失败）：重拉并补注册
+    if (!geoReady) {
+      if (!preloadGeo) preload()
+      const geo = preloadGeo ? await preloadGeo : null
+      if (geo) {
+        const echarts = await preloadEcharts
+        echarts.registerMap('world', geo as any)
+        geoReady = true
+        geoFailed.value = false
+      } else {
+        geoFailed.value = true
+      }
+    }
+    return
+  }
   if (initPromise) return initPromise
   initPromise = (async () => {
     const [echarts, geo] = await Promise.all([preloadEcharts, preloadGeo])
     if (!mapBox.value || !active) return // 初始化期间页面已被切走
-    if (geo) echarts.registerMap('world', geo as any)
+    if (geo) { echarts.registerMap('world', geo as any); geoReady = true }
+    geoFailed.value = !geo
     // 限制 devicePixelRatio≤2：4K/Retina 屏默认 DPR=3 会让 canvas 像素量翻 9 倍，
     // 流星粒子动画填充率压力大；2 倍在地图线条/圆点上清晰度与性能更平衡。
     chart = echarts.init(mapBox.value, null, { renderer: 'canvas', devicePixelRatio: Math.min(window.devicePixelRatio || 1, 2) })
@@ -652,6 +674,7 @@ const renderMap = async (force = false, reset = false) => {
   if (inspectRoute.value && !force) return // 冻结期间其余刷新（摘要/定时 load/主题）一律不重绘，悬停目标不丢
   await ensureChart()
   if (!chart || !active) return
+  if (!geoReady) return // 底图数据不可用：暂不渲染（模板已提示，后续渲染时自动重试）
   const countries = (summary.value.countries || []).filter((c: any) => c.country !== 'unknown')
   const maxCount = Math.max(1, ...countries.map((c: any) => c.count))
   const shades = ['#dbe9ff', '#9dbdff', '#5c8dff', '#2f5fe0', '#1c3fd6']
@@ -775,6 +798,7 @@ const renderMap = async (force = false, reset = false) => {
   }
   lastPaused = paused
   lastGeoKey = geoKey
+  if (!mapReady.value) mapReady.value = true // 底图已出，撤掉加载中提示
 }
 
 // 鼠标移出地图后自动回到全球视角；没有偏移时不重绘，避免无谓闪烁
@@ -930,6 +954,7 @@ watch(minutes, () => { if (active) { stopStream?.(); stopStream = connectStream(
 const start = () => {
   if (active) return
   active = true
+  renderMap() // 底图先行：不等摘要数据先把世界地图画出来，摘要/SSE 到达后再叠加数据
   load()
   stopStream = connectStream()
   timer = setInterval(load, 15000)
@@ -965,7 +990,7 @@ const stop = () => {
 onMounted(start)
 onActivated(start)
 onDeactivated(stop)
-onUnmounted(() => { stop(); resizeObserver?.disconnect(); resizeObserver = null; chart?.dispose(); chart = null; chartReady.value = false })
+onUnmounted(() => { stop(); resizeObserver?.disconnect(); resizeObserver = null; chart?.dispose(); chart = null; chartReady.value = false; mapReady.value = false; geoReady = false })
 </script>
 
 <style scoped>
@@ -976,6 +1001,12 @@ onUnmounted(() => { stop(); resizeObserver?.disconnect(); resizeObserver = null;
 .stats-range { display: flex; align-items: center; gap: 10px; margin: 8px 0 4px; }
 .map-wrap { position: relative; width: 100%; }
 .map-box { width: 100%; height: var(--map-height); }
+/* 底图加载中/失败提示：覆盖地图区居中展示，底图画出后消失 */
+.map-hint {
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  color: var(--color-slate); font-size: 12px; pointer-events: none;
+}
 /* fill 模式：组件撑满父容器（如仪表盘地图卡），地图区弹性伸缩，溢出交给父容器内部滚动 */
 .request-map.fill { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .request-map.fill .map-wrap { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }

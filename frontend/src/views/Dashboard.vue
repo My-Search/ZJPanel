@@ -2,7 +2,7 @@
   <div class="dash">
     <a-row :gutter="24">
       <a-col :span="6">
-        <a-card size="small" class="stat-card">
+        <a-card size="small" class="stat-card" :loading="!metricsLoaded">
           <div class="stat-top" :title="`CPU ${(snap.cpu ?? 0).toFixed(1)}%`">
             <div class="vbar" role="meter" :aria-valuenow="Math.round(snap.cpu ?? 0)" aria-valuemin="0" aria-valuemax="100" :aria-label="`CPU 占用 ${Math.round(snap.cpu ?? 0)}%`"><div class="vfill" :class="level(snap.cpu)" :style="{ height: (snap.cpu ?? 0) + '%' }"></div></div>
             <div>
@@ -14,7 +14,7 @@
         </a-card>
       </a-col>
       <a-col :span="6">
-        <a-card size="small" class="stat-card">
+        <a-card size="small" class="stat-card" :loading="!metricsLoaded">
           <div class="stat-top" :title="`内存 ${(snap.memPct ?? 0).toFixed(1)}% ${snap.memTxt || ''}`">
             <div class="vbar" role="meter" :aria-valuenow="Math.round(snap.memPct ?? 0)" aria-valuemin="0" aria-valuemax="100" :aria-label="`内存占用 ${Math.round(snap.memPct ?? 0)}%`"><div class="vfill" :class="level(snap.memPct)" :style="{ height: (snap.memPct ?? 0) + '%' }"></div></div>
             <div>
@@ -26,7 +26,7 @@
         </a-card>
       </a-col>
       <a-col :span="6">
-        <a-card size="small" class="stat-card">
+        <a-card size="small" class="stat-card" :loading="!metricsLoaded">
           <div class="stat-top">
             <div class="vbar"><div class="vfill net"></div></div>
             <div>
@@ -38,7 +38,7 @@
         </a-card>
       </a-col>
       <a-col :span="6">
-        <a-card size="small" class="stat-card">
+        <a-card size="small" class="stat-card" :loading="!metricsLoaded">
           <div class="stat-top" :title="disksSummary">
             <div class="vbar" role="meter" :aria-valuenow="Math.round(mainDiskPct)" aria-valuemin="0" aria-valuemax="100" :aria-label="`磁盘占用 ${Math.round(mainDiskPct)}%`"><div class="vfill" :class="level(mainDiskPct)" :style="{ height: mainDiskPct + '%' }"></div></div>
             <div>
@@ -62,8 +62,8 @@
 
     <a-row :gutter="24" class="bottom-row">
       <a-col :span="14">
-        <a-card title="站点状态" size="small">
-          <template #extra><a-tag :color="nginxRunning ? 'green' : 'red'">Nginx {{ nginxRunning ? '运行中' : '未运行' }}</a-tag></template>
+        <a-card title="站点状态" size="small" :loading="sitesLoading">
+          <template #extra><a-tag :color="nginxRunning ? 'green' : nginxKnown ? 'red' : 'orange'">Nginx {{ nginxRunning ? '运行中' : nginxKnown ? '未运行' : '检测中' }}</a-tag></template>
           <a-alert v-if="sitesErr" type="error" :message="sitesErr" show-icon banner style="margin-bottom: 8px" />
           <a-table :data-source="sortedSites" :columns="siteCols" size="small" :pagination="false" row-key="domain">
             <template #bodyCell="{ column, record }">
@@ -88,7 +88,7 @@
         </a-card>
       </a-col>
       <a-col :span="10">
-        <a-card title="系统信息" size="small" class="sys-card">
+        <a-card title="系统信息" size="small" class="sys-card" :loading="!metricsLoaded">
           <a-descriptions :column="1" size="small">
             <a-descriptions-item label="主机名">{{ snap.hostname || '-' }}</a-descriptions-item>
             <a-descriptions-item label="系统">{{ snap.os || '-' }}</a-descriptions-item>
@@ -119,9 +119,12 @@ import RequestMap from '../components/RequestMap.vue'
 import { ClusterOutlined, SafetyCertificateOutlined, GlobalOutlined } from '@ant-design/icons-vue'
 
 const snap = ref<any>({})
+const metricsLoaded = ref(false) // 首次指标未到前统计卡/系统信息显示骨架，避免闪误导性的 0
 const sites = ref<any[]>([])
+const sitesLoading = ref(true) // 站点列表首次加载前显示局部 loading，后续轮询静默刷新不再闪
 const sitesErr = ref('')
 const nginxRunning = ref(false)
+const nginxKnown = ref(false) // nginx 状态未确认前 extra 显示「检测中」，避免闪「未运行」
 // 版本号由 MainLayout 加载后 provide（此前与布局各拉一次 /api/update/current，纯重复请求）
 const version = inject('panelVersion', ref(''))
 
@@ -182,7 +185,12 @@ const loadAll = async () => {
     const e: any = sitesRes.reason
     sitesErr.value = '站点列表加载失败：' + (e?.response?.data?.error || e?.message || '未知错误')
   }
-  if (nginxRes.status === 'fulfilled') nginxRunning.value = nginxRes.value.running
+  if (nginxRes.status === 'fulfilled') {
+    nginxRunning.value = nginxRes.value.running
+    nginxKnown.value = true
+  }
+  // 首次加载完成（成功/失败都算）：撤掉局部 loading
+  sitesLoading.value = false
 }
 
 // 轮询统一管理：keep-alive 切走暂停，切回/标签恢复时立即补一次加载。
@@ -194,9 +202,13 @@ usePolling(loadAll, 15000, { immediate: false })
 // 不做「标签页隐藏断开」——可见性时序不可控（冻结/丢弃/恢复），影响实时数据可靠性。
 let stopWs: (() => void) | null = null
 onActivated(() => {
-  stopWs = wsTopic('metrics', (m) => { snap.value = m })
+  stopWs = wsTopic('metrics', (m) => { snap.value = m; metricsLoaded.value = true })
   // 首帧兜底：WS 3s 一帧且无人订阅时不采集，统计卡最长空白 3s——先拉一次快照立即渲染
-  getQuiet('/api/metrics/current').then((m) => { if (m && !snap.value?.time) snap.value = m }).catch(() => {})
+  getQuiet('/api/metrics/current').then((m) => {
+    if (!m) return
+    if (!snap.value?.time) snap.value = m
+    metricsLoaded.value = true
+  }).catch(() => { metricsLoaded.value = true }) // 快照与 WS 都失败时撤掉骨架，回退 0 占位
 })
 onDeactivated(() => { stopWs?.(); stopWs = null })
 onUnmounted(() => { stopWs?.() })
