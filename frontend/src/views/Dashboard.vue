@@ -2,51 +2,76 @@
   <div class="dash">
     <a-row :gutter="24">
       <a-col :span="6">
-        <a-card size="small" class="stat-card" :loading="!metricsLoaded">
-          <div class="stat-top" :title="`CPU ${(snap.cpu ?? 0).toFixed(1)}%`">
-            <div class="vbar" role="meter" :aria-valuenow="Math.round(snap.cpu ?? 0)" aria-valuemin="0" aria-valuemax="100" :aria-label="`CPU 占用 ${Math.round(snap.cpu ?? 0)}%`"><div class="vfill" :class="level(snap.cpu)" :style="{ height: (snap.cpu ?? 0) + '%' }"></div></div>
-            <div>
-              <div class="stat-label">CPU占用</div>
-              <div class="stat-value" :class="level(snap.cpu)">{{ Math.round(snap.cpu ?? 0) }}<span class="unit">%</span></div>
-            </div>
+        <a-card size="small" class="stat-card">
+          <!-- 骨架按真实排版占位：竖条 + 标签条 + 大数值条 + 副行条（通用骨架与实际内容形状差太远） -->
+          <div v-if="!metricsLoaded" class="stat-sk">
+            <div class="stat-top"><div class="vbar"></div><div><div class="sk sk-label"></div><div class="sk sk-val"></div></div></div>
+            <div class="sk sk-sub"></div>
           </div>
-          <div class="stat-sub">负载 {{ snap.load1?.toFixed(2) || '0.00' }}</div>
+          <template v-else>
+            <div class="stat-top" :title="`CPU ${(snap.cpu ?? 0).toFixed(1)}%`">
+              <div class="vbar" role="meter" :aria-valuenow="Math.round(snap.cpu ?? 0)" aria-valuemin="0" aria-valuemax="100" :aria-label="`CPU 占用 ${Math.round(snap.cpu ?? 0)}%`"><div class="vfill" :class="level(snap.cpu)" :style="{ height: (snap.cpu ?? 0) + '%' }"></div></div>
+              <div>
+                <div class="stat-label">CPU占用</div>
+                <div class="stat-value" :class="level(snap.cpu)">{{ Math.round(snap.cpu ?? 0) }}<span class="unit">%</span></div>
+              </div>
+            </div>
+            <div class="stat-sub">负载 {{ snap.load1?.toFixed(2) || '0.00' }}</div>
+          </template>
         </a-card>
       </a-col>
       <a-col :span="6">
-        <a-card size="small" class="stat-card" :loading="!metricsLoaded">
-          <div class="stat-top" :title="`内存 ${(snap.memPct ?? 0).toFixed(1)}% ${snap.memTxt || ''}`">
-            <div class="vbar" role="meter" :aria-valuenow="Math.round(snap.memPct ?? 0)" aria-valuemin="0" aria-valuemax="100" :aria-label="`内存占用 ${Math.round(snap.memPct ?? 0)}%`"><div class="vfill" :class="level(snap.memPct)" :style="{ height: (snap.memPct ?? 0) + '%' }"></div></div>
-            <div>
-              <div class="stat-label">系统内存占用</div>
-              <div class="stat-value" :class="level(snap.memPct)">{{ Math.round(snap.memPct ?? 0) }}<span class="unit">%</span></div>
-            </div>
+        <a-card size="small" class="stat-card">
+          <div v-if="!metricsLoaded" class="stat-sk">
+            <div class="stat-top"><div class="vbar"></div><div><div class="sk sk-label"></div><div class="sk sk-val"></div></div></div>
+            <div class="sk sk-sub"></div>
           </div>
-          <div class="stat-sub">{{ fmtBytes(snap.memUsed) }} / {{ fmtBytes(snap.memTotal) }}</div>
+          <template v-else>
+            <div class="stat-top" :title="`内存 ${(snap.memPct ?? 0).toFixed(1)}% ${snap.memTxt || ''}`">
+              <div class="vbar" role="meter" :aria-valuenow="Math.round(snap.memPct ?? 0)" aria-valuemin="0" aria-valuemax="100" :aria-label="`内存占用 ${Math.round(snap.memPct ?? 0)}%`"><div class="vfill" :class="level(snap.memPct)" :style="{ height: (snap.memPct ?? 0) + '%' }"></div></div>
+              <div>
+                <div class="stat-label">系统内存占用</div>
+                <div class="stat-value" :class="level(snap.memPct)">{{ Math.round(snap.memPct ?? 0) }}<span class="unit">%</span></div>
+              </div>
+            </div>
+            <div class="stat-sub">{{ fmtBytes(snap.memUsed) }} / {{ fmtBytes(snap.memTotal) }}</div>
+          </template>
         </a-card>
       </a-col>
       <a-col :span="6">
-        <a-card size="small" class="stat-card" :loading="!metricsLoaded">
-          <div class="stat-top">
-            <div class="vbar"><div class="vfill net"></div></div>
-            <div>
-              <div class="stat-label">网络速率</div>
-              <div class="stat-value">{{ netRate.v }}<span class="unit">{{ netRate.u }}</span></div>
-            </div>
+        <a-card size="small" class="stat-card">
+          <div v-if="!metricsLoaded" class="stat-sk">
+            <div class="stat-top"><div class="vbar"></div><div><div class="sk sk-label"></div><div class="sk sk-val"></div></div></div>
+            <div class="sk sk-sub"></div>
           </div>
-          <div class="stat-sub">↑ {{ fmtBytes(snap.netRateOut ?? 0) }} ↓ {{ fmtBytes(snap.netRateIn ?? 0) }}</div>
+          <template v-else>
+            <div class="stat-top">
+              <div class="vbar"><div class="vfill net"></div></div>
+              <div>
+                <div class="stat-label">网络速率</div>
+                <div class="stat-value">{{ netRate.v }}<span class="unit">{{ netRate.u }}</span></div>
+              </div>
+            </div>
+            <div class="stat-sub">↑ {{ fmtBytes(snap.netRateOut ?? 0) }} ↓ {{ fmtBytes(snap.netRateIn ?? 0) }}</div>
+          </template>
         </a-card>
       </a-col>
       <a-col :span="6">
-        <a-card size="small" class="stat-card" :loading="!metricsLoaded">
-          <div class="stat-top" :title="disksSummary">
-            <div class="vbar" role="meter" :aria-valuenow="Math.round(mainDiskPct)" aria-valuemin="0" aria-valuemax="100" :aria-label="`磁盘占用 ${Math.round(mainDiskPct)}%`"><div class="vfill" :class="level(mainDiskPct)" :style="{ height: mainDiskPct + '%' }"></div></div>
-            <div>
-              <div class="stat-label">磁盘占用</div>
-              <div class="stat-value" :class="level(mainDiskPct)">{{ Math.round(mainDiskPct) }}<span class="unit">%</span></div>
-            </div>
+        <a-card size="small" class="stat-card">
+          <div v-if="!metricsLoaded" class="stat-sk">
+            <div class="stat-top"><div class="vbar"></div><div><div class="sk sk-label"></div><div class="sk sk-val"></div></div></div>
+            <div class="sk sk-sub"></div>
           </div>
-          <div class="stat-sub">{{ mainDiskLabel }}</div>
+          <template v-else>
+            <div class="stat-top" :title="disksSummary">
+              <div class="vbar" role="meter" :aria-valuenow="Math.round(mainDiskPct)" aria-valuemin="0" aria-valuemax="100" :aria-label="`磁盘占用 ${Math.round(mainDiskPct)}%`"><div class="vfill" :class="level(mainDiskPct)" :style="{ height: mainDiskPct + '%' }"></div></div>
+              <div>
+                <div class="stat-label">磁盘占用</div>
+                <div class="stat-value" :class="level(mainDiskPct)">{{ Math.round(mainDiskPct) }}<span class="unit">%</span></div>
+              </div>
+            </div>
+            <div class="stat-sub">{{ mainDiskLabel }}</div>
+          </template>
         </a-card>
       </a-col>
     </a-row>
@@ -62,34 +87,60 @@
 
     <a-row :gutter="24" class="bottom-row">
       <a-col :span="14">
-        <a-card title="站点状态" size="small" :loading="sitesLoading">
+        <a-card title="站点状态" size="small">
           <template #extra><a-tag :color="nginxRunning ? 'green' : nginxKnown ? 'red' : 'orange'">Nginx {{ nginxRunning ? '运行中' : nginxKnown ? '未运行' : '检测中' }}</a-tag></template>
-          <a-alert v-if="sitesErr" type="error" :message="sitesErr" show-icon banner style="margin-bottom: 8px" />
-          <a-table :data-source="sortedSites" :columns="siteCols" size="small" :pagination="false" row-key="domain">
-            <template #bodyCell="{ column, record }">
-              <template v-if="column.key === 'status'">
-                <a-tag v-if="record.disabled" color="default" title="所属应用已标记停用：掉线不告警">停用</a-tag>
-                <a-tag v-else :color="record.check?.status === 'online' ? 'green' : record.check?.status === 'offline' ? 'red' : 'orange'">
-                  {{ record.check?.status || '检测中' }}
-                </a-tag>
+          <!-- 骨架按真实表格排版占位：表头行 + 数据行，列宽对齐实际列 -->
+          <div v-if="sitesLoading" class="tbl-sk">
+            <div class="tbl-sk-row head">
+              <div class="sk" style="width: 44px"></div>
+              <div class="sk" style="width: 36px"></div>
+              <div class="sk" style="width: 36px"></div>
+              <div class="sk" style="width: 36px"></div>
+              <div class="sk" style="width: 56px"></div>
+            </div>
+            <div v-for="(w, i) in ['46%', '34%', '40%', '30%']" :key="i" class="tbl-sk-row">
+              <div class="sk grow" :style="{ width: w }"></div>
+              <div class="sk" style="width: 46px"></div>
+              <div class="sk" style="width: 46px"></div>
+              <div class="sk" style="width: 52px"></div>
+              <div class="sk" style="width: 52px"></div>
+            </div>
+          </div>
+          <template v-else>
+            <a-alert v-if="sitesErr" type="error" :message="sitesErr" show-icon banner style="margin-bottom: 8px" />
+            <a-table :data-source="sortedSites" :columns="siteCols" size="small" :pagination="false" row-key="domain">
+              <template #bodyCell="{ column, record }">
+                <template v-if="column.key === 'status'">
+                  <a-tag v-if="record.disabled" color="default" title="所属应用已标记停用：掉线不告警">停用</a-tag>
+                  <a-tag v-else :color="record.check?.status === 'online' ? 'green' : record.check?.status === 'offline' ? 'red' : 'orange'">
+                    {{ record.check?.status || '检测中' }}
+                  </a-tag>
+                </template>
+                <template v-else-if="column.key === 'latency'">
+                  {{ !record.disabled && record.check?.latencyMs != null ? record.check.latencyMs + ' ms' : '-' }}
+                </template>
+                <template v-else-if="column.key === 'cert'">
+                  {{ record.check?.certDaysLeft ? '剩 ' + record.check.certDaysLeft + ' 天' : '-' }}
+                </template>
+                <template v-else-if="column.key === 'maint'">
+                  <a-tag v-if="record.maintenance" color="orange">维护中</a-tag>
+                  <a-tag v-else :color="record.enabled === false ? 'default' : 'blue'">{{ record.enabled === false ? '已停用' : '运行' }}</a-tag>
+                </template>
               </template>
-              <template v-else-if="column.key === 'latency'">
-                {{ !record.disabled && record.check?.latencyMs != null ? record.check.latencyMs + ' ms' : '-' }}
-              </template>
-              <template v-else-if="column.key === 'cert'">
-                {{ record.check?.certDaysLeft ? '剩 ' + record.check.certDaysLeft + ' 天' : '-' }}
-              </template>
-              <template v-else-if="column.key === 'maint'">
-                <a-tag v-if="record.maintenance" color="orange">维护中</a-tag>
-                <a-tag v-else :color="record.enabled === false ? 'default' : 'blue'">{{ record.enabled === false ? '已停用' : '运行' }}</a-tag>
-              </template>
-            </template>
-          </a-table>
+            </a-table>
+          </template>
         </a-card>
       </a-col>
       <a-col :span="10">
-        <a-card title="系统信息" size="small" class="sys-card" :loading="!metricsLoaded">
-          <a-descriptions :column="1" size="small">
+        <a-card title="系统信息" size="small" class="sys-card">
+          <!-- 骨架按真实描述列表占位：标签条 + 值条 -->
+          <div v-if="!metricsLoaded" class="desc-sk">
+            <div v-for="(w, i) in ['52%', '38%', '64%', '58%', '46%', '34%']" :key="i" class="desc-sk-row">
+              <div class="sk" style="width: 58px"></div>
+              <div class="sk" :style="{ width: w }"></div>
+            </div>
+          </div>
+          <a-descriptions v-else :column="1" size="small">
             <a-descriptions-item label="主机名">{{ snap.hostname || '-' }}</a-descriptions-item>
             <a-descriptions-item label="系统">{{ snap.os || '-' }}</a-descriptions-item>
             <a-descriptions-item label="负载">{{ snap.load1?.toFixed(2) }} / {{ snap.load5?.toFixed(2) }} / {{ snap.load15?.toFixed(2) }}</a-descriptions-item>
@@ -251,4 +302,23 @@ onUnmounted(() => { stopWs?.() })
 html[data-theme='dark'] .stat-label { color: #9ca3af; }
 html[data-theme='dark'] .stat-value { color: #f3f4f6; }
 html[data-theme='dark'] .stat-sub { color: #9ca3af; }
+
+/* 骨架条：半透明 Slate 底 + 微光扫过，明暗主题通用 */
+.sk {
+  height: 14px; border-radius: 4px;
+  background: linear-gradient(90deg, rgba(148,163,184,.16) 25%, rgba(148,163,184,.32) 37%, rgba(148,163,184,.16) 63%);
+  background-size: 400% 100%;
+  animation: sk-shimmer 1.4s ease infinite;
+}
+@keyframes sk-shimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+/* 统计卡骨架：几何对齐真实内容（标签 19px / 大数值 31px / 副行缩进 16px） */
+.stat-sk .sk-label { width: 78px; height: 19px; }
+.stat-sk .sk-val { width: 64px; height: 31px; margin-top: 2px; border-radius: 6px; }
+.stat-sk .sk-sub { width: 132px; margin-top: 8px; margin-left: 16px; }
+/* 站点状态骨架：表头行（下边框）+ 数据行，列间距对齐实际表格 */
+.tbl-sk-row { display: flex; align-items: center; gap: 16px; padding: 9px 8px; }
+.tbl-sk-row.head { border-bottom: 1px solid var(--border-card); }
+.tbl-sk-row .grow { flex: 0 1 auto; min-width: 72px; }
+/* 系统信息骨架：标签条 + 值条，行距对齐描述列表 */
+.desc-sk-row { display: flex; align-items: center; gap: 12px; padding: 6px 0; }
 </style>
