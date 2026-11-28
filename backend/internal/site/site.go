@@ -46,6 +46,14 @@ func (s *Service) SSLDir(domain string) string {
 func (s *Service) SSLCertPath(domain string) string  { return filepath.Join(s.SSLDir(domain), "fullchain.pem") }
 func (s *Service) SSLKeyPath(domain string) string   { return filepath.Join(s.SSLDir(domain), "privkey.pem") }
 
+// resolveSSLPaths 站点 SSL 证书路径解析：手动指定（成对填写）优先，否则回退约定目录。
+func (s *Service) resolveSSLPaths(domain, certPath, keyPath string) (string, string) {
+	if certPath != "" && keyPath != "" {
+		return certPath, keyPath
+	}
+	return s.SSLCertPath(domain), s.SSLKeyPath(domain)
+}
+
 // ---- conf 生成 ----
 
 func (s *Service) challengeBlock() string {
@@ -68,7 +76,8 @@ func (s *Service) headersBlock() string {
 }
 
 // GenerateProxyConf 生成反代站点 conf；ssl=true 时生成 443 server（80 跳转）。
-func (s *Service) GenerateProxyConf(domain, upstream string, ssl bool) string {
+// certPath/keyPath 为站点手动指定的证书路径，空则用约定目录。
+func (s *Service) GenerateProxyConf(domain, upstream string, ssl bool, certPath, keyPath string) string {
 	var b strings.Builder
 	if !ssl {
 		b.WriteString(fmt.Sprintf(`server {
@@ -88,7 +97,7 @@ func (s *Service) GenerateProxyConf(domain, upstream string, ssl bool) string {
 `, domain, s.cfg.NginxLogsDir, domain, s.cfg.NginxLogsDir, domain, s.challengeBlock(), upstream, s.headersBlock()))
 		return b.String()
 	}
-	cert, key := s.SSLCertPath(domain), s.SSLKeyPath(domain)
+	cert, key := s.resolveSSLPaths(domain, certPath, keyPath)
 	fmt.Fprintf(&b, `server {
     listen 80;
     listen [::]:80;
@@ -125,8 +134,9 @@ server {
 	return b.String()
 }
 
-// GenerateStaticConf 静态站点 conf（error_page 指向自定义默认页）
-func (s *Service) GenerateStaticConf(domain, root string, ssl bool) string {
+// GenerateStaticConf 静态站点 conf（error_page 指向自定义默认页）。
+// certPath/keyPath 为站点手动指定的证书路径，空则用约定目录。
+func (s *Service) GenerateStaticConf(domain, root string, ssl bool, certPath, keyPath string) string {
 	var b strings.Builder
 	if !ssl {
 		fmt.Fprintf(&b, `server {
@@ -153,7 +163,7 @@ func (s *Service) GenerateStaticConf(domain, root string, ssl bool) string {
 `, domain, s.cfg.NginxLogsDir, domain, s.cfg.NginxLogsDir, domain, s.challengeBlock(), root, s.cfg.NginxHTMLDir, s.cfg.NginxHTMLDir)
 		return b.String()
 	}
-	cert, key := s.SSLCertPath(domain), s.SSLKeyPath(domain)
+	cert, key := s.resolveSSLPaths(domain, certPath, keyPath)
 	fmt.Fprintf(&b, `server {
     listen 80;
     listen [::]:80;
@@ -198,7 +208,8 @@ server {
 }
 
 // GenerateMaintenanceConf 维护态专用 conf：全部请求代理到面板维护页渲染器。
-func (s *Service) GenerateMaintenanceConf(domain string, ssl bool) string {
+// certPath/keyPath 为站点手动指定的证书路径，空则用约定目录。
+func (s *Service) GenerateMaintenanceConf(domain string, ssl bool, certPath, keyPath string) string {
 	serverBlock := func(listenLine, extra string) string {
 		return fmt.Sprintf(`    listen %s;
     server_name %s;
@@ -217,7 +228,7 @@ func (s *Service) GenerateMaintenanceConf(domain string, ssl bool) string {
 		// serverBlock 自带闭合 "}"，此处补 "server {" 开头（原实现多补了一个 "}" 导致 nginx -t 失败）
 		return "server {\n" + serverBlock("80;\n    listen [::]:80", "")
 	}
-	cert, key := s.SSLCertPath(domain), s.SSLKeyPath(domain)
+	cert, key := s.resolveSSLPaths(domain, certPath, keyPath)
 	sslExtra := fmt.Sprintf(`    ssl_certificate     %s;
     ssl_certificate_key %s;
     ssl_protocols TLSv1.2 TLSv1.3;`, cert, key)
@@ -248,6 +259,9 @@ type SaveReq struct {
 	Upstream        string  `json:"upstream"`
 	Root            string  `json:"root"`
 	SSL             bool    `json:"ssl"`
+	SSLCertPath     string  `json:"sslCertPath"`   // 手动指定证书文件路径（与 SSLKeyPath 成对填写才生效）
+	SSLKeyPath      string  `json:"sslKeyPath"`    // 手动指定私钥文件路径
+	SSLCertInfoID   *uint   `json:"sslCertInfoId"` // 从证书仓库选择：保存时一次性复制到站点约定 SSL 目录，不落库
 	MaintenanceHTML string  `json:"maintenanceHtml"`
 	Remark          string  `json:"remark"`
 	ComposeProjectID *uint  `json:"composeProjectId"`
@@ -290,6 +304,66 @@ func ValidateRoot(r string) error {
 
 func validateDomain(d string) error { return ValidateDomain(d) }
 
+// applySSLSource 处理站点证书来源（Create/Update 共用），按 SaveReq 更新 site 的 SSL 证书字段：
+//   - SSLCertInfoID 非空（从证书仓库选择）：复制该证书到站点约定 SSL 目录并清空手动路径。
+//     同域名证书续期时部署目标会覆盖同一目录，续期自动更新；跨域名为一次性复制。
+//   - 手动路径非空：成对校验并检查文件存在，避免 nginx -t 失败后难以排查。
+//   - 两者都空或 SSL 关闭：清空手动路径，走约定目录。
+func (s *Service) applySSLSource(site *model.Site, req SaveReq) error {
+	if !site.SSL {
+		site.SSLCertPath, site.SSLKeyPath = "", ""
+		return nil
+	}
+	if req.SSLCertInfoID != nil {
+		if err := s.deployRepoCert(*req.SSLCertInfoID, site.Domain); err != nil {
+			return err
+		}
+		site.SSLCertPath, site.SSLKeyPath = "", ""
+		return nil
+	}
+	certPath, keyPath := strings.TrimSpace(req.SSLCertPath), strings.TrimSpace(req.SSLKeyPath)
+	if certPath == "" && keyPath == "" {
+		site.SSLCertPath, site.SSLKeyPath = "", ""
+		return nil
+	}
+	if certPath == "" || keyPath == "" {
+		return fmt.Errorf("手动指定证书时，证书与私钥路径必须成对填写")
+	}
+	for _, p := range []string{certPath, keyPath} {
+		if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("证书文件不存在或不可读: %s", p)
+		}
+	}
+	site.SSLCertPath, site.SSLKeyPath = certPath, keyPath
+	return nil
+}
+
+// deployRepoCert 把证书仓库里的一份证书复制到站点约定 SSL 目录。
+func (s *Service) deployRepoCert(certInfoID uint, domain string) error {
+	var info model.CertInfo
+	if err := s.db.First(&info, certInfoID).Error; err != nil {
+		return fmt.Errorf("证书仓库中不存在该证书 #%d", certInfoID)
+	}
+	certData, err := os.ReadFile(info.CertPath)
+	if err != nil {
+		return fmt.Errorf("证书文件读取失败: %w", err)
+	}
+	keyData, err := os.ReadFile(info.KeyPath)
+	if err != nil {
+		return fmt.Errorf("私钥文件读取失败: %w", err)
+	}
+	if err := os.MkdirAll(s.SSLDir(domain), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(s.SSLCertPath(domain), certData, 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(s.SSLKeyPath(domain), keyData, 0o600); err != nil {
+		return err
+	}
+	return nil
+}
+
 // Create 新建站点：写 conf → 启用 → nginx -t → reload，失败整体回退。
 func (s *Service) Create(req SaveReq) (*model.Site, error) {
 	if err := ValidateDomain(req.Domain); err != nil {
@@ -328,8 +402,16 @@ func (s *Service) Create(req SaveReq) (*model.Site, error) {
 		SSL: req.SSL, MaintenanceHTML: req.MaintenanceHTML, Remark: req.Remark,
 		ComposeProjectID: req.ComposeProjectID,
 	}
+	// 证书来源（仓库复制 / 手动路径）在入库前处理，失败直接返回不残留半成品
+	if err := s.applySSLSource(site, req); err != nil {
+		return nil, err
+	}
 	if err := s.db.Create(site).Error; err != nil {
 		return nil, err
+	}
+	// 开启 SSL 且走约定目录时，尝试从匹配的泛域名证书目录回退复制
+	if site.SSL && site.SSLCertPath == "" {
+		s.ensureSiteSSL(site)
 	}
 	if err := s.writeSiteConf(site); err != nil {
 		s.db.Delete(site)
@@ -405,9 +487,9 @@ func (s *Service) ensureSiteSSL(site *model.Site) {
 func (s *Service) generateForSite(site *model.Site) string {
 	var content string
 	if site.Type == "static" {
-		content = s.GenerateStaticConf(site.Domain, site.Root, site.SSL)
+		content = s.GenerateStaticConf(site.Domain, site.Root, site.SSL, site.SSLCertPath, site.SSLKeyPath)
 	} else {
-		content = s.GenerateProxyConf(site.Domain, site.Upstream, site.SSL)
+		content = s.GenerateProxyConf(site.Domain, site.Upstream, site.SSL, site.SSLCertPath, site.SSLKeyPath)
 	}
 	// 注入安全策略 include（国家/IP 封禁 + CC 限速由安全中心统一渲染，站点只引用）
 	return nginx.EnsureSecurityInclude(content, s.cfg.NginxPrefix)
@@ -443,8 +525,12 @@ func (s *Service) Update(id uint, req SaveReq) (*model.Site, error) {
 	site.SSL = req.SSL
 	site.MaintenanceHTML = req.MaintenanceHTML
 	site.Remark = req.Remark
-	// 开启 SSL 时若站点证书目录缺失，尝试从匹配的泛域名证书目录回退复制
-	if site.SSL && !site.Advanced {
+	// 证书来源（仓库复制 / 手动路径）
+	if err := s.applySSLSource(&site, req); err != nil {
+		return nil, err
+	}
+	// 开启 SSL 时若站点证书目录缺失，尝试从匹配的泛域名证书目录回退复制（手动指定路径时不适用）
+	if site.SSL && site.SSLCertPath == "" && !site.Advanced {
 		s.ensureSiteSSL(&site)
 	}
 	if req.ComposeProjectID != nil {
@@ -529,7 +615,7 @@ func (s *Service) SetState(id uint, state string) error {
 
 // WriteMaintenanceConf 渲染维护 conf 并落盘。
 func (s *Service) WriteMaintenanceConf(site *model.Site) error {
-	content := s.GenerateMaintenanceConf(site.Domain, site.SSL)
+	content := s.GenerateMaintenanceConf(site.Domain, site.SSL, site.SSLCertPath, site.SSLKeyPath)
 	return os.WriteFile(s.ng.MaintenancePath(site.Domain), []byte(content), 0o644)
 }
 

@@ -102,6 +102,10 @@ type Site struct {
 	Root             string `gorm:"size:255" json:"root"`     // 静态目录（static）
 	SSL              bool   `json:"ssl"`
 	CertTaskID       *uint  `json:"certTaskId"`
+	// 手动指定证书路径（成对填写才生效）；空 = 自动约定 <NginxPrefix>/ssl/<域名>/。
+	// 「从证书仓库选择」不落库：保存时一次性复制到约定目录，续期由部署目标覆盖同目录。
+	SSLCertPath string `gorm:"size:255" json:"sslCertPath"`
+	SSLKeyPath  string `gorm:"size:255" json:"sslKeyPath"`
 	Advanced         bool   `json:"advanced"` // 高级模式：整文件 raw 编辑
 	Maintenance      bool   `json:"maintenance"`
 	MaintenanceHTML  string `json:"maintenanceHtml"` // 站点级覆盖；空则用全局模板

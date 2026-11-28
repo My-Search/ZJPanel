@@ -141,6 +141,7 @@ func (s *Server) registerSiteRoutes() {
 			m := map[string]any{
 				"id": it.ID, "domain": it.Domain, "type": it.Type, "upstream": it.Upstream,
 				"root": it.Root, "ssl": it.SSL, "advanced": it.Advanced,
+				"sslCertPath": it.SSLCertPath, "sslKeyPath": it.SSLKeyPath,
 				"maintenance": it.Maintenance, "remark": it.Remark,
 				"composeProjectId": it.ComposeProjectID, "certTaskId": it.CertTaskID,
 				"disabled": isDisabled, "createdAt": it.CreatedAt,

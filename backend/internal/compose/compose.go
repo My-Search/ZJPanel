@@ -602,7 +602,7 @@ func (s *Service) Refresh(id uint) (string, error) {
 	if err := s.db.Save(&siteRec).Error; err != nil {
 		return "", err
 	}
-	content := s.site.GenerateProxyConf(siteRec.Domain, siteRec.Upstream, siteRec.SSL)
+	content := s.site.GenerateProxyConf(siteRec.Domain, siteRec.Upstream, siteRec.SSL, siteRec.SSLCertPath, siteRec.SSLKeyPath)
 	if err := os.WriteFile(s.cfg.NginxPrefix+"/sites-available/"+siteRec.Domain+".conf", []byte(content), 0o644); err != nil {
 		return "", err
 	}

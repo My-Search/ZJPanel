@@ -19,7 +19,8 @@ import (
 )
 
 // DeployTargetRegistry 部署目标注册表（certd 的 deployTo 插件思路）。
-// 内置：nginx_site（本地 nginx 证书写入+reload）、ssh_upload（SFTP 上传+前后置脚本）、local_script。
+// 内置：nginx_site（本地 nginx 证书写入+reload）、ssh_upload（SFTP 上传+前后置脚本）、
+// local_script（本机/SSH 执行脚本）、local_path（复制到本机指定路径）。
 // 插件可经 SDK 注册扩展目标。
 
 type DeployArgs struct {
@@ -221,6 +222,35 @@ func RegisterBuiltins(r *TargetRegistry, cfg *pkg.Config, reloadFn func() (strin
 				return "", fmt.Errorf("脚本失败: %s", out)
 			}
 			return "脚本执行成功: " + strings.TrimSpace(string(out)), nil
+		},
+	})
+	r.Register(&TargetDef{
+		Type: "local_path", Title: "复制到本机指定路径",
+		Fields: []certdns.FieldDef{
+			{Key: "certPath", Title: "证书（fullchain）目标路径", Type: "path", Default: cfg.DataDir + "/deploy/{domain}/fullchain.pem", Help: "证书文件写入的完整路径，{domain} 自动替换为证书主域名，上级目录不存在会自动创建。容器部署时 /data 映射到宿主机 /opt/zjpanel/data，外部应用引用宿主机路径即可"},
+			{Key: "keyPath", Title: "私钥目标路径", Type: "path", Default: cfg.DataDir + "/deploy/{domain}/privkey.pem", Help: "私钥文件写入的完整路径，写入后权限为 600"},
+		},
+		Owner: "builtin",
+		Runner: func(args DeployArgs) (string, error) {
+			certPath := strings.TrimSpace(str2str(args.Config["certPath"]))
+			keyPath := strings.TrimSpace(str2str(args.Config["keyPath"]))
+			if certPath == "" || keyPath == "" {
+				return "", fmt.Errorf("证书与私钥目标路径均必填")
+			}
+			certPath = applyDomainPlaceholder(certPath, args.Domains)
+			keyPath = applyDomainPlaceholder(keyPath, args.Domains)
+			for _, p := range []string{certPath, keyPath} {
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					return "", err
+				}
+			}
+			if err := os.WriteFile(certPath, args.CertPEM, 0o644); err != nil {
+				return "", err
+			}
+			if err := os.WriteFile(keyPath, args.KeyPEM, 0o600); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("证书已复制到 %s / %s", certPath, keyPath), nil
 		},
 	})
 }

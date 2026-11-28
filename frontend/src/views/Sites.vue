@@ -53,6 +53,7 @@
           <a-switch v-model:checked="form.ssl" />
           <span class="dim" style="margin-left: 8px">证书可在「证书」页申请后自动部署</span>
         </a-form-item>
+        <SiteSSLSource :form="form" />
         <a-form-item label="备注"><a-input v-model:value="form.remark" /></a-form-item>
       </a-form>
     </a-modal>
@@ -64,7 +65,9 @@ import { onActivated, onMounted, computed, ref } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post } from '../api'
 import { sortSites } from '../utils/siteOrder'
+import { buildSiteSavePayload } from '../utils/siteSSL'
 import SiteActions from '../components/SiteActions.vue'
+import SiteSSLSource from '../components/SiteSSLSource.vue'
 
 const sites = ref<any[]>([])
 const editOpen = ref(false)
@@ -86,16 +89,19 @@ const load = async () => { sites.value = await get('/api/sites') }
 const sortedSites = computed(() => sortSites(sites.value))
 
 const openCreate = () => {
-  form.value = { domain: '', type: 'proxy', upstream: '', root: '', ssl: false, remark: '' }
+  form.value = { domain: '', type: 'proxy', upstream: '', root: '', ssl: false, sslCertPath: '', sslKeyPath: '', sslCertInfoId: null, remark: '' }
   editOpen.value = true
 }
 const saveSite = async () => {
+  const built = buildSiteSavePayload(form.value)
+  if (built.error) { message.warning(built.error); return }
   try {
-    await post('/api/sites', form.value)
+    await post('/api/sites', built.payload)
     message.success('已保存（nginx 已重载）')
     editOpen.value = false
     load()
-  } catch { /* 失败提示已由 axios 拦截器输出 */ }
+  } catch { /* 失败提示已由 axios 拦截器输出 */
+  }
 }
 
 onMounted(load)

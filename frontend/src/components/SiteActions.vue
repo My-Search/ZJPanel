@@ -33,6 +33,7 @@
         <a-switch v-model:checked="form.ssl" />
         <span class="dim" style="margin-left: 8px">证书可在「证书」页申请后自动部署</span>
       </a-form-item>
+      <SiteSSLSource :form="form" />
       <a-form-item label="备注"><a-input v-model:value="form.remark" /></a-form-item>
       <a-form-item label="站点维护页 HTML（留空使用全局模板）">
         <a-textarea v-model:value="form.maintenanceHtml" :rows="4" placeholder="自定义维护页（支持 {{domain}} {{time}} {{message}} 变量）" />
@@ -56,6 +57,8 @@ import { computed, ref, watch } from 'vue'
 import { message } from 'ant-design-vue'
 import { get, post, put, del } from '../api'
 import AceEditor from './AceEditor.vue'
+import SiteSSLSource from './SiteSSLSource.vue'
+import { buildSiteSavePayload } from '../utils/siteSSL'
 
 const props = defineProps<{ site: any; deleteTitle?: string }>()
 const emit = defineEmits<{ (e: 'changed'): void }>()
@@ -83,17 +86,21 @@ const setState = async (state: string) => {
 const openEdit = () => {
   const s = props.site || {}
   // 回填完整字段：后端 Update 会覆盖 Type/Upstream/Root/SSL/MaintenanceHTML/Remark，
-  // 未回填的字段会被清空；composeProjectId 不传，后端保留原关联
+  // 未回填的字段会被清空；composeProjectId 不传，后端保留原关联。
+  // sslCertPath/sslKeyPath 供「手动指定路径」回显；仓库选择是一次性动作不回填。
   form.value = {
     id: s.id, domain: s.domain, type: s.type, upstream: s.upstream, root: s.root,
-    ssl: !!s.ssl, remark: s.remark || '', maintenanceHtml: s.maintenanceHtml || '',
+    ssl: !!s.ssl, sslCertPath: s.sslCertPath || '', sslKeyPath: s.sslKeyPath || '', sslCertInfoId: null,
+    remark: s.remark || '', maintenanceHtml: s.maintenanceHtml || '',
   }
   editOpen.value = true
 }
 
 const saveSite = async () => {
+  const built = buildSiteSavePayload(form.value)
+  if (built.error) { message.warning(built.error); return }
   try {
-    await put(`/api/sites/${form.value.id}`, form.value)
+    await put(`/api/sites/${form.value.id}`, built.payload)
     message.success('已保存（nginx 已重载）')
     editOpen.value = false
     emit('changed')

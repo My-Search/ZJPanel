@@ -66,6 +66,15 @@
             <template v-else-if="column.key === 'status'">
               <a-tag :color="record.status === 'active' ? 'green' : 'default'">{{ record.status }}</a-tag>
             </template>
+            <template v-else-if="column.key === 'certPath'">
+              <a-tooltip placement="topLeft">
+                <template #title>
+                  <div>证书：{{ record.certPath }}</div>
+                  <div style="margin-top: 4px">私钥：{{ record.keyPath }}</div>
+                </template>
+                <span class="path-cell" @click="copyPath(record.certPath)">{{ record.certPath || '-' }}</span>
+              </a-tooltip>
+            </template>
             <template v-else-if="column.key === 'action'">
               <a-space>
                 <a-button size="small" @click="viewCert(record, 'cert')">证书</a-button>
@@ -189,8 +198,11 @@
 
         <!-- Step 3 部署配置 -->
         <div v-show="step === 2">
-          <a-alert type="info" show-icon style="margin-bottom: 12px"
-            message="签发成功后并行执行以下部署目标（可多个）；不添加则证书仅保存到仓库。" />
+          <a-alert type="info" show-icon style="margin-bottom: 12px">
+            <template #message>
+              签发成功后并行执行以下部署目标（可多个）；不添加则证书仅保存到仓库（<code>{{ dataDir }}/certs/&lt;任务ID&gt;/&lt;运行ID&gt;/fullchain.pem、privkey.pem</code>）。
+            </template>
+          </a-alert>
           <div v-for="(dt, i) in wiz.deployTargets" :key="i" class="target-card">
             <div class="target-head">
               <a-select v-model:value="dt.type" style="width: 280px" :options="targetOpts" @change="dt.config = defaultTargetConfig(dt.type)" />
@@ -211,6 +223,10 @@
                   allow-clear
                   style="width: 100%"
                 />
+                <a-input-group v-else-if="f.type === 'path'" compact class="path-input-group">
+                  <a-input v-model:value="dt.config[f.key]" :placeholder="f.default" />
+                  <a-button @click="openPicker(dt, f.key)">浏览</a-button>
+                </a-input-group>
                 <a-input v-else v-model:value="dt.config[f.key]" :placeholder="f.default" />
                 <div v-if="f.optionsSource === 'hosts' && !sshHosts.length" class="host-empty">
                   <span>{{ hostsError || '暂无可用的 SSH 主机：请先到「主机」页添加主机，且必须已配置 SSH 密码或私钥。内置「本机」不在此列，本机部署请选择上方「部署到本机 Nginx 站点」。' }}</span>
@@ -219,6 +235,12 @@
                 </div>
               </a-form-item>
             </a-form>
+            <!-- 本机 Nginx 站点：显示签发后的实际落地路径，方便在应用/站点配置里直接引用 -->
+            <div v-if="dt.type === 'nginx_site'" class="ssl-paths">
+              <div class="ssl-paths-title">签发后写入本机路径（应用/站点配置可直接引用）：</div>
+              <div><code>{{ nginxPrefix }}/ssl/{{ targetDomain(dt) }}/fullchain.pem</code>（证书，对应 ssl_certificate）</div>
+              <div><code>{{ nginxPrefix }}/ssl/{{ targetDomain(dt) }}/privkey.pem</code>（私钥，对应 ssl_certificate_key）</div>
+            </div>
           </div>
           <a-dropdown>
             <a-button style="width: 100%; border-style: dashed">
@@ -291,6 +313,9 @@
       <pre class="code-block" style="max-height: 420px">{{ certViewText }}</pre>
     </a-modal>
 
+    <!-- 部署目标路径选择（本机文件浏览） -->
+    <FileBrowserModal v-model:open="pickerOpen" mode="file" title="选择证书 / 私钥文件" @picked="onPickedPath" />
+
     <!-- 任务运行日志（certd 式抽屉：历史 + 节点日志） -->
     <a-drawer v-model:open="runsOpen" :title="'执行记录 · ' + (runsTask?.name || '')" :width="760">
       <a-table :data-source="taskRuns" :columns="drawerRunCols" size="small" row-key="id" :pagination="false">
@@ -318,6 +343,7 @@ import { useRouter } from 'vue-router'
 import { get, getQuiet, post, del, wsTopic, fmtTime } from '../api'
 import { PlusOutlined } from '@ant-design/icons-vue'
 import DomainInput from '../components/DomainInput.vue'
+import FileBrowserModal from '../components/FileBrowserModal.vue'
 
 const router = useRouter()
 
@@ -338,6 +364,11 @@ const targets = ref<any[]>([])
 const sshHosts = ref<any[]>([])
 const hostsLoading = ref(false)
 const hostsError = ref('')
+
+// 面板路径配置（/api/settings）：向导第 3 步显示证书真实落地路径用，加载失败回退默认值
+const settings = ref<any>({})
+const nginxPrefix = computed(() => settings.value?.nginxPrefix || '/etc/nginx')
+const dataDir = computed(() => settings.value?.dataDir || '/data')
 
 const quickAcctOpen = ref(false)
 const quickAcct = ref<any>({})
@@ -370,6 +401,7 @@ const infoCols = [
   { title: '到期', dataIndex: 'notAfter', key: 'notAfter', width: 110, customRender: (o: any) => String(o.value).slice(0, 10) },
   { title: '剩余', key: 'daysLeft', width: 100 },
   { title: '状态', key: 'status', width: 80 },
+  { title: '存储路径（点击复制）', key: 'certPath', width: 280 },
   { title: '签发时间', dataIndex: 'issuedAt', key: 'issuedAt', width: 160, customRender: (o: any) => fmtTime(o.value) },
   { title: '操作', key: 'action', width: 140 },
 ]
@@ -431,6 +463,27 @@ const defaultTargetConfig = (type: string) => {
   return cfg
 }
 const newTarget = (type: string) => ({ type, config: defaultTargetConfig(type) })
+
+// nginx_site 目标卡片显示的落地路径域名：优先目标卡里填的域名，默认取证书主域名
+const targetDomain = (dt: any) => dt.config?.domain || primaryDomain.value || '证书主域名'
+
+// ---- 部署目标路径选择器（本机文件浏览） ----
+const pickerOpen = ref(false)
+const pickerCtx = ref<{ dt: any; key: string } | null>(null)
+const openPicker = (dt: any, key: string) => {
+  pickerCtx.value = { dt, key }
+  pickerOpen.value = true
+}
+const onPickedPath = (path: string) => {
+  if (pickerCtx.value) pickerCtx.value.dt.config[pickerCtx.value.key] = path
+}
+const copyPath = async (p: string) => {
+  if (!p) return
+  try {
+    await navigator.clipboard.writeText(p)
+    message.success('路径已复制')
+  } catch { message.error('复制失败，请手动选择复制') }
+}
 
 // 修改申请域名后，同步仍停留在旧域名默认值上的远程证书路径（手动改过的不动）
 watch(primaryDomain, (newDomain, oldDomain) => {
@@ -554,6 +607,8 @@ const openWizard = (t?: any) => {
   wizOpen.value = true
   // 每次打开都刷新主机清单：用户可能刚在「主机」页加完机器，不能依赖上次加载的旧列表
   refreshHosts().then(ensureHostSelection)
+  // 第 3 步显示证书落地路径需要真实 dataDir/nginxPrefix，失败静默（前端有回退默认值）
+  getQuiet<any>('/api/settings').then(s => { settings.value = s || {} }).catch(() => {})
 }
 
 const nextStep = async () => {
@@ -714,6 +769,15 @@ onUnmounted(() => { stopRunWs?.(); stopRunPoll() })
 .provider-name { font-size: 11px; color: var(--color-slate); }
 .target-card { border: 1px dashed var(--border-input); border-radius: 8px; padding: 12px; margin-bottom: 10px; }
 .target-head { display: flex; justify-content: space-between; margin-bottom: 10px; }
+/* nginx_site 目标的落地路径提示：用户据此在应用/站点配置里填证书位置 */
+.ssl-paths { margin-top: 4px; padding: 8px 10px; background: var(--surface-canvas); border: 1px solid var(--border-card); border-radius: 6px; font-size: 12px; line-height: 1.9; color: var(--color-slate); word-break: break-all; }
+.ssl-paths-title { font-weight: 600; }
+.ssl-paths code { padding: 1px 4px; border-radius: 4px; background: var(--bg-selected); color: var(--color-corporate-blue); }
+/* path 类型字段：输入框 + 浏览按钮贴合为一组 */
+.path-input-group { display: flex; width: 100%; }
+.path-input-group .ant-input { flex: 1; }
+/* 证书仓库存储路径列：单行省略，点击复制 */
+.path-cell { display: inline-block; max-width: 250px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; cursor: copy; }
 /* 主机下拉的空状态：说明为什么为空，并给出刷新 / 去主机页的出口 */
 .host-empty { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; margin-top: 4px; font-size: 12px; line-height: 1.6; color: var(--color-slate); }
 .host-empty span { flex: 1 1 100%; }
