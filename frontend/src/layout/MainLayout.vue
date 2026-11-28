@@ -75,7 +75,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, provide, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { get } from '../api'
 import { useAuth } from '../store/auth'
@@ -94,6 +94,8 @@ const menus = usePluginMenu()
 const collapsed = ref(false)
 const drawerOpen = ref(false)
 const version = ref('')
+// 仪表盘等页面共享同一份版本号（避免各页面重复请求 /api/update/current）
+provide('panelVersion', version)
 const pluginMenus = computed(() => menus.items)
 const isMobile = ref(false)
 

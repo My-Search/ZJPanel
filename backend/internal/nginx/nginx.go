@@ -19,6 +19,12 @@ import (
 type Service struct {
 	cfg *pkg.Config
 	mu  sync.Mutex // 序列化 nginx -t / reload
+
+	// Running 结果短缓存：仪表盘每 15s 轮询 + 站点操作频繁调用，
+	// pidof/pgrep 每次起子进程纯属浪费；变更操作后主动失效。
+	runMu sync.Mutex
+	runOK bool
+	runAt time.Time
 }
 
 func New(cfg *pkg.Config) *Service { return &Service{cfg: cfg} }
@@ -86,7 +92,9 @@ func (s *Service) Reload() (string, error) {
 	if out, err := runCmd(s.cfg.NginxBin, "-t"); err != nil {
 		return out, fmt.Errorf("配置测试失败: %s", out)
 	}
-	return runCmd(s.cfg.NginxBin, "-s", "reload")
+	out, err := runCmd(s.cfg.NginxBin, "-s", "reload")
+	s.invalidateRunning()
+	return out, err
 }
 
 func (s *Service) Restart() (string, error) {
@@ -95,13 +103,29 @@ func (s *Service) Restart() (string, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return runCmd(s.cfg.NginxBin, "-s", "reopen") // 容器内 nginx 由 entrypoint 常驻；reopen 重开日志
+	out, err := runCmd(s.cfg.NginxBin, "-s", "reopen") // 容器内 nginx 由 entrypoint 常驻；reopen 重开日志
+	s.invalidateRunning()
+	return out, err
 }
 
-// Running 检查 nginx 进程是否存活
+// Running 检查 nginx 进程是否存活（3s 缓存；Reload/Restart 后主动失效）。
 func (s *Service) Running() bool {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	if time.Since(s.runAt) < 3*time.Second {
+		return s.runOK
+	}
 	out, err := runCmd("sh", "-c", "pidof nginx || pgrep -x nginx")
-	return err == nil && strings.TrimSpace(out) != ""
+	s.runOK = err == nil && strings.TrimSpace(out) != ""
+	s.runAt = time.Now()
+	return s.runOK
+}
+
+// invalidateRunning 清掉进程存活缓存（reload/restart 等变更后调用）。
+func (s *Service) invalidateRunning() {
+	s.runMu.Lock()
+	s.runAt = time.Time{}
+	s.runMu.Unlock()
 }
 
 // ---- 站点 conf 文件操作 ----

@@ -2,10 +2,12 @@ package httpapi
 
 import (
 	"bytes"
+	"compress/gzip"
 	"embed"
 	"io/fs"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -33,11 +35,23 @@ func (s *Server) RegisterStatic(r *gin.Engine) {
 		// index.html 是 SPA 壳（根路径与前端路由回退都落到它），必须走下方入口校验与 base 注入，不能在此提前返回。
 		if name != "index.html" {
 			if b, err := fs.ReadFile(sub, name); err == nil {
-				// 带 hash 的静态资源（vite 产物）与地图数据可长期缓存：
-				// 内容变更时文件名/hash 必变，长缓存安全。地图此前每次访问都重下 ~1MB，
-				// 手机网络下「地图迟迟不出来」的根因之一。
-				if strings.HasPrefix(name, "assets/") || strings.HasPrefix(name, "map/") {
+				longCache := strings.HasPrefix(name, "assets/") || strings.HasPrefix(name, "map/")
+				if longCache {
+					// 带 hash 的静态资源（vite 产物）与地图数据可长期缓存：
+					// 内容变更时文件名/hash 必变，长缓存安全。地图此前每次访问都重下 ~1MB，
+					// 手机网络下「地图迟迟不出来」的根因之一。
 					c.Header("Cache-Control", "public, max-age=31536000, immutable")
+					// 大体积文本资源（JS/CSS/world.json）懒 gzip：内容随二进制固定，
+					// 每文件只压一次并缓存；world.json ~1MB 压后 ~200KB，首访加载显著变快。
+					if acceptsGzip(c.Request.Header.Get("Accept-Encoding")) {
+						if gz, ok := gzipCached(sub, name); ok {
+							c.Header("Content-Encoding", "gzip")
+							c.Header("Vary", "Accept-Encoding")
+							// 传原始文件名让 ServeContent 给出正确的 Content-Type
+							http.ServeContent(c.Writer, c.Request, name, time.Now(), bytes.NewReader(gz))
+							return
+						}
+					}
 				} else {
 					c.Header("Cache-Control", "no-cache")
 				}
@@ -68,6 +82,40 @@ func (s *Server) RegisterStatic(r *gin.Engine) {
 // underEntry 判断请求路径是否位于安全入口前缀下（入口本身或其子路径）。
 func underEntry(p, entry string) bool {
 	return p == entry || strings.HasPrefix(p, entry+"/")
+}
+
+// gzCache 嵌入式静态资源的 gzip 结果缓存（name → 压缩字节；nil = 压不小或失败，回退明文）。
+var gzCache sync.Map
+
+// gzipCached 返回 name 的 gzip 压缩内容；首次请求时压缩一次，之后直接命中缓存。
+func gzipCached(sub fs.FS, name string) ([]byte, bool) {
+	if v, ok := gzCache.Load(name); ok {
+		b, _ := v.([]byte)
+		return b, len(b) > 0
+	}
+	b, err := fs.ReadFile(sub, name)
+	if err != nil {
+		gzCache.Store(name, []byte(nil))
+		return nil, false
+	}
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	if _, err := w.Write(b); err != nil || w.Close() != nil {
+		gzCache.Store(name, []byte(nil))
+		return nil, false
+	}
+	out := buf.Bytes()
+	if len(out) >= len(b) { // 已压缩内容（图片/字体等）压不小，回退明文
+		gzCache.Store(name, []byte(nil))
+		return nil, false
+	}
+	gzCache.Store(name, out)
+	return out, true
+}
+
+// acceptsGzip 宽松判断客户端是否接受 gzip（主流浏览器与 HTTP 客户端均会携带）。
+func acceptsGzip(header string) bool {
+	return strings.Contains(header, "gzip")
 }
 
 // injectEntryBase 在 index.html 的 <head> 后注入运行时 base，供前端 router/401 跳转使用。

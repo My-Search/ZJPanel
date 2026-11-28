@@ -395,6 +395,11 @@ func (s *Service) Summary(minutes, recent int, withPaths bool) *Summary {
 	s.mu.Lock()
 	s.lastQuery = time.Now() // 标记有活跃查询：扫描循环据此保持 5s 快速档
 	var entries []Entry
+	// ring 按 push 顺序（≈时间升序）环形存放，倒序遍历即时间倒序；但多站点日志文件
+	// 交错 push 时时间可能轻微乱序，不能见旧就 break——连续一大段旧条目（远超任何
+	// 交错误差）才判定其后全是窗口外，提前终止。否则每次 Summary 恒定 O(ringN)
+	// 持锁扫描（2 万条 × 15s 轮询 + SSE 10s 帧），期间阻塞日志 ingest。
+	staleRun := 0
 	for i := 0; i < s.ringN; i++ {
 		idx := (s.head - 1 - i + 2*s.ringN) % s.ringN
 		e := s.ring[idx]
@@ -402,8 +407,13 @@ func (s *Service) Summary(minutes, recent int, withPaths bool) *Summary {
 			break
 		}
 		if e.Time.Before(cut) {
+			staleRun++
+			if staleRun >= 64 {
+				break
+			}
 			continue
 		}
+		staleRun = 0
 		entries = append(entries, e)
 	}
 	s.mu.Unlock()

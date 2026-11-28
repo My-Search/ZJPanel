@@ -111,7 +111,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onDeactivated, onUnmounted, ref } from 'vue'
+import { computed, inject, onActivated, onDeactivated, onUnmounted, ref } from 'vue'
 import { getQuiet, wsTopic, fmtBytes } from '../api'
 import { sortSites } from '../utils/siteOrder'
 import { usePolling } from '../composables/usePolling'
@@ -122,7 +122,8 @@ const snap = ref<any>({})
 const sites = ref<any[]>([])
 const sitesErr = ref('')
 const nginxRunning = ref(false)
-const version = ref('')
+// 版本号由 MainLayout 加载后 provide（此前与布局各拉一次 /api/update/current，纯重复请求）
+const version = inject('panelVersion', ref(''))
 
 const uptimeText = computed(() => {
   const s = snap.value?.uptime || 0
@@ -168,12 +169,11 @@ const siteCols = [
 const sortedSites = computed(() => sortSites(sites.value))
 
 const loadAll = async () => {
-  // 三个接口互不阻塞：站点列表失败（例如历史库脏值）时仍要拿到版本与 Nginx 状态，
-  // 否则用户看不到当前面板版本，排查部署是否生效会被连带卡住。
-  const [sitesRes, nginxRes, verRes] = await Promise.allSettled([
+  // 站点列表失败（例如历史库脏值）时仍要拿到 Nginx 状态，否则用户排查部署是否生效会被连带卡住。
+  // 面板版本由 MainLayout 加载并 provide，这里不再重复请求。
+  const [sitesRes, nginxRes] = await Promise.allSettled([
     getQuiet('/api/sites'),
     getQuiet<any>('/api/nginx/status'),
-    getQuiet<any>('/api/update/current'),
   ])
   if (sitesRes.status === 'fulfilled') {
     sites.value = sitesRes.value
@@ -183,7 +183,6 @@ const loadAll = async () => {
     sitesErr.value = '站点列表加载失败：' + (e?.response?.data?.error || e?.message || '未知错误')
   }
   if (nginxRes.status === 'fulfilled') nginxRunning.value = nginxRes.value.running
-  if (verRes.status === 'fulfilled') version.value = verRes.value.version
 }
 
 // 轮询统一管理：keep-alive 切走暂停，切回/标签恢复时立即补一次加载。
@@ -194,7 +193,11 @@ usePolling(loadAll, 15000, { immediate: false })
 // 实时指标流：挂载/激活即连，切走断开（v1.0.6 语义）。
 // 不做「标签页隐藏断开」——可见性时序不可控（冻结/丢弃/恢复），影响实时数据可靠性。
 let stopWs: (() => void) | null = null
-onActivated(() => { stopWs = wsTopic('metrics', (m) => { snap.value = m }) })
+onActivated(() => {
+  stopWs = wsTopic('metrics', (m) => { snap.value = m })
+  // 首帧兜底：WS 3s 一帧且无人订阅时不采集，统计卡最长空白 3s——先拉一次快照立即渲染
+  getQuiet('/api/metrics/current').then((m) => { if (m && !snap.value?.time) snap.value = m }).catch(() => {})
+})
 onDeactivated(() => { stopWs?.(); stopWs = null })
 onUnmounted(() => { stopWs?.() })
 </script>

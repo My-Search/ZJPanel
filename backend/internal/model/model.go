@@ -259,6 +259,6 @@ type Notification struct {
 	Title     string     `gorm:"size:255" json:"title"`
 	Body      string     `gorm:"type:text" json:"body"`
 	Source    string     `gorm:"size:64" json:"source"` // core 或插件 ID
-	CreatedAt time.Time  `json:"createdAt"`
-	ReadAt    *time.Time `json:"readAt"`
+	CreatedAt time.Time  `json:"createdAt" gorm:"index"` // 30 天清理的 DELETE 条件
+	ReadAt    *time.Time `json:"readAt" gorm:"index"`    // 未读 COUNT 轮询的过滤列（无索引时全表扫）
 }

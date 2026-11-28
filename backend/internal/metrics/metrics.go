@@ -57,6 +57,7 @@ type Service struct {
 	hub     *ws.Hub
 	mu      sync.RWMutex
 	last    *Snapshot
+	lastAt  time.Time
 	lastNet struct {
 		in, out uint64
 		t       time.Time
@@ -91,7 +92,7 @@ func (s *Service) Start() {
 				snap := s.Snapshot()
 				s.mu.Lock()
 				prev := s.last
-				s.last = snap
+				s.last, s.lastAt = snap, time.Now()
 				s.mu.Unlock()
 				// 网络速率：间隔超过数个周期（空闲后恢复/调度停顿）时差分无意义，置零等下一帧
 				if prev != nil {
@@ -158,6 +159,23 @@ func (s *Service) snapshotRaw() *Snapshot {
 		snap.OS = hostInfo.OS
 		snap.Hostname = hostInfo.Hostname
 	}
+	return snap
+}
+
+// Current 当前快照（HTTP 拉取用）：复用 ≤3s 的已有采样，避免每次请求都同步跑
+// gopsutil + 全分区磁盘枚举（仪表盘首帧兜底与监控页轮询的重复开销）。
+// WS 循环每 3s 也会刷新 last，两者共享同一份缓存。
+func (s *Service) Current() *Snapshot {
+	s.mu.RLock()
+	last, at := s.last, s.lastAt
+	s.mu.RUnlock()
+	if last != nil && time.Since(at) < 3*time.Second {
+		return last
+	}
+	snap := s.Snapshot()
+	s.mu.Lock()
+	s.last, s.lastAt = snap, time.Now()
+	s.mu.Unlock()
 	return snap
 }
 

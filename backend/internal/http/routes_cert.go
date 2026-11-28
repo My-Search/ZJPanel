@@ -20,7 +20,8 @@ import (
 func (s *Server) registerMetricsRoutes() {
 	g := s.r.Group("/api/metrics", s.auth.Require())
 	g.GET("/current", func(c *gin.Context) {
-		c.JSON(http.StatusOK, s.Metrics.Snapshot())
+		// Current 复用 ≤3s 的快照缓存：仪表盘首帧兜底与监控页轮询不再各自跑全量 gopsutil
+		c.JSON(http.StatusOK, s.Metrics.Current())
 	})
 	g.GET("/history", func(c *gin.Context) {
 		c.JSON(http.StatusOK, s.Metrics.History(intParam(c.DefaultQuery("hours", "24"))))
